@@ -1,0 +1,19 @@
+{
+  "name": "zotero-provenance",
+  "description": "Records every source Claude cites — and every link you share — into a Zotero collection, tagged with project, context, and date.",
+  "version": "0.1.0",
+  "author": {
+    "name": "musharna"
+  },
+  "homepage": "https://github.com/musharna/zotero-provenance",
+  "repository": "https://github.com/musharna/zotero-provenance",
+  "license": "MIT",
+  "keywords": [
+    "zotero",
+    "citations",
+    "provenance",
+    "research",
+    "bibliography",
+    "hooks"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "name": "zotero-provenance",
+  "owner": {
+    "name": "musharna"
+  },
+  "metadata": {
+    "description": "Marketplace for the zotero-provenance plugin"
+  },
+  "plugins": [
+    {
+      "name": "zotero-provenance",
+      "source": "./",
+      "description": "Records every source Claude cites — and every link you share — into a Zotero collection, tagged with project, context, and date."
+    }
+  ]
+}
