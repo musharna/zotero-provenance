@@ -74,6 +74,7 @@ Sources get bucketed by their `seen:` history:
 | `ZOTERO_CAPTURE_STATE_DIR` | Where the dedup database and log live. |
 | `ZOTERO_SECRETS_FILE` | Alternate credentials file. |
 | `ZOTERO_PROVENANCE_PYTHON` | Interpreter to use, if the default `python3` lacks the deps. |
+| `ZOTERO_API_BASE` | Alternate API root, for tests or an API-compatible server. |
 
 Hooks do not inherit MCP-scoped environment from `~/.claude.json`, which is why
 credentials come from the secrets file.
@@ -112,9 +113,10 @@ dashboards and local dev servers never reach your library. Tracking parameters
 python3 -m pytest -q
 ```
 
-101 tests, no network required. The hook tests execute the real shell scripts as
-subprocesses with a stubbed interpreter. Live API tests are skipped unless
-`RUN_LIVE_ZOTERO=1` and credentials are present.
+105 tests, no network required. The hook tests execute the real shell scripts as
+subprocesses; the end-to-end tests run the real hook and CLI against a local HTTP
+server standing in for the Zotero API, so only the remote service is stubbed. Live
+API tests are skipped unless `RUN_LIVE_ZOTERO=1` and credentials are present.
 
 ## License
 
