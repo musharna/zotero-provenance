@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -10,7 +11,12 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-ZOTERO_API_BASE = "https://api.zotero.org"
+DEFAULT_API_BASE = "https://api.zotero.org"
+
+
+def api_base() -> str:
+    """The Zotero API root. Overridable for tests and API-compatible servers."""
+    return os.environ.get("ZOTERO_API_BASE", DEFAULT_API_BASE).rstrip("/")
 
 
 class ZoteroError(Exception):
@@ -32,7 +38,7 @@ class ZoteroClient:
         self.library_type = library_type
         self.collection_key = web_sources_collection_key
         self._client = httpx.Client(
-            base_url=f"{ZOTERO_API_BASE}/{library_type}s/{library_id}",
+            base_url=f"{api_base()}/{library_type}s/{library_id}",
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Zotero-API-Version": "3",

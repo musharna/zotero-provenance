@@ -21,7 +21,7 @@ import httpx  # noqa: E402
 from zotero_capture.config import DEFAULT_SECRETS_FILE  # noqa: E402
 from zotero_capture.zotero_client import ZoteroClient  # noqa: E402
 
-API_BASE = "https://api.zotero.org"
+API_BASE = os.environ.get("ZOTERO_API_BASE", "https://api.zotero.org").rstrip("/")
 DEFAULT_COLLECTION_NAME = "web-sources"
 
 
