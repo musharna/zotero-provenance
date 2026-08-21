@@ -17,7 +17,7 @@ def test_fetch_title_extracts_title_tag():
         )
     )
     with httpx.Client(transport=transport) as client:
-        assert fetch_title("https://example.com/foo", client=client) == "Hello World"
+        assert fetch_title("https://fixturehost.org/foo", client=client) == "Hello World"
 
 
 def test_fetch_title_falls_back_to_url_on_no_title():
@@ -30,8 +30,8 @@ def test_fetch_title_falls_back_to_url_on_no_title():
     )
     with httpx.Client(transport=transport) as client:
         assert (
-            fetch_title("https://example.com/foo", client=client)
-            == "https://example.com/foo"
+            fetch_title("https://fixturehost.org/foo", client=client)
+            == "https://fixturehost.org/foo"
         )
 
 
@@ -42,8 +42,8 @@ def test_fetch_title_falls_back_to_url_on_timeout():
     transport = httpx.MockTransport(boom)
     with httpx.Client(transport=transport) as client:
         assert (
-            fetch_title("https://example.com/foo", client=client)
-            == "https://example.com/foo"
+            fetch_title("https://fixturehost.org/foo", client=client)
+            == "https://fixturehost.org/foo"
         )
 
 
@@ -57,14 +57,19 @@ def test_fetch_title_falls_back_on_non_html():
     )
     with httpx.Client(transport=transport) as client:
         assert (
-            fetch_title("https://example.com/foo.pdf", client=client)
-            == "https://example.com/foo.pdf"
+            fetch_title("https://fixturehost.org/foo.pdf", client=client)
+            == "https://fixturehost.org/foo.pdf"
         )
 
 
 @pytest.mark.live
 def test_fetch_title_real_well_known_url():
-    """Real-execution check at the HTTP-fetch boundary (per global rule)."""
+    """Real-execution check at the HTTP-fetch boundary (per global rule).
+
+    Deliberately uses example.com even though capture excludes it: this probes
+    fetch_title, which never consults is_excluded, and the page is the one URL
+    on the web whose title is guaranteed stable by standard.
+    """
     title = fetch_title("https://example.com/")
     assert title == "Example Domain"
 
@@ -79,7 +84,7 @@ def test_fetch_title_handles_nested_tags_in_title():
         )
     )
     with httpx.Client(transport=transport) as client:
-        assert fetch_title("https://example.com/", client=client) == "foo bar"
+        assert fetch_title("https://fixturehost.org/", client=client) == "foo bar"
 
 
 def test_fetch_title_truncates_large_body():
@@ -99,7 +104,7 @@ def test_fetch_title_truncates_large_body():
     )
     with httpx.Client(transport=transport) as client:
         assert (
-            fetch_title("https://example.com/", client=client) == "https://example.com/"
+            fetch_title("https://fixturehost.org/", client=client) == "https://fixturehost.org/"
         )
 
 
@@ -111,8 +116,8 @@ def test_fetch_title_returns_url_on_4xx():
     )
     with httpx.Client(transport=transport) as client:
         assert (
-            fetch_title("https://example.com/missing", client=client)
-            == "https://example.com/missing"
+            fetch_title("https://fixturehost.org/missing", client=client)
+            == "https://fixturehost.org/missing"
         )
 
 
@@ -169,7 +174,7 @@ def test_non_doi_url_is_not_content_negotiated():
         return httpx.Response(200, html="<html><title>Ordinary Page</title></html>")
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-        assert fetch_title("https://example.com/page", client=client) == "Ordinary Page"
+        assert fetch_title("https://fixturehost.org/page", client=client) == "Ordinary Page"
     assert not any(CSL_ACCEPT in a for a in seen), "only DOIs should negotiate"
 
 

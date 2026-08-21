@@ -71,7 +71,7 @@ def test_entry_exits_zero_when_disabled(tmp_path: Path) -> None:
     env = _clean_env(tmp_path)
     env["ZOTERO_CAPTURE_DISABLE"] = "1"
     proc = subprocess.run(
-        ["python3", str(ENTRY), "--message", "see https://example.com/foo",
+        ["python3", str(ENTRY), "--message", "see https://fixturehost.org/foo",
          "--db-path", str(db)],
         env=env, capture_output=True, text=True, timeout=15,
     )
@@ -83,7 +83,7 @@ def test_entry_exits_zero_when_disabled(tmp_path: Path) -> None:
 def test_entry_exits_zero_without_credentials(tmp_path: Path) -> None:
     """A misconfigured plugin must not break the user's session."""
     proc = subprocess.run(
-        ["python3", str(ENTRY), "--message", "see https://example.com/foo",
+        ["python3", str(ENTRY), "--message", "see https://fixturehost.org/foo",
          "--db-path", str(tmp_path / "capture.db")],
         env=_clean_env(tmp_path), capture_output=True, text=True, timeout=20,
     )
@@ -95,7 +95,7 @@ def test_entry_exits_zero_without_credentials(tmp_path: Path) -> None:
 def test_missing_credentials_are_reported_not_swallowed(tmp_path: Path) -> None:
     """Exiting 0 must not mean staying silent — the reason belongs on stderr."""
     proc = subprocess.run(
-        ["python3", str(ENTRY), "--message", "see https://example.com/foo",
+        ["python3", str(ENTRY), "--message", "see https://fixturehost.org/foo",
          "--db-path", str(tmp_path / "capture.db")],
         env=_clean_env(tmp_path), capture_output=True, text=True, timeout=20,
     )
@@ -110,7 +110,7 @@ def test_missing_credentials_are_reported_not_swallowed(tmp_path: Path) -> None:
 @requires_jq
 def test_stop_hook_passes_cwd_through_to_python(tmp_path: Path) -> None:
     argv_out = _fake_python(tmp_path)
-    transcript = _transcript(tmp_path, _assistant_line("see https://example.com/foo"))
+    transcript = _transcript(tmp_path, _assistant_line("see https://fixturehost.org/foo"))
     env = _clean_env(tmp_path)
     env["PATH"] = f"{tmp_path}:{env['PATH']}"
 
@@ -138,7 +138,7 @@ def test_stop_hook_survives_a_malformed_transcript_line(tmp_path: Path) -> None:
     transcript = _transcript(
         tmp_path,
         "{this is not json at all",
-        _assistant_line("see https://example.com/after-the-bad-line"),
+        _assistant_line("see https://fixturehost.org/after-the-bad-line"),
     )
     env = _clean_env(tmp_path)
     env["PATH"] = f"{tmp_path}:{env['PATH']}"
@@ -161,7 +161,7 @@ def test_stop_hook_reads_the_context_marker(tmp_path: Path) -> None:
     argv_out = _fake_python(tmp_path)
     transcript = _transcript(
         tmp_path,
-        _assistant_line("[SOURCE-CONTEXT: lit-review] see https://example.com/foo"),
+        _assistant_line("[SOURCE-CONTEXT: lit-review] see https://fixturehost.org/foo"),
     )
     env = _clean_env(tmp_path)
     env["PATH"] = f"{tmp_path}:{env['PATH']}"
@@ -209,7 +209,7 @@ def test_prompt_hook_never_writes_to_stdout(tmp_path: Path) -> None:
     proc = subprocess.run(
         ["bash", str(PROMPT_HOOK)],
         input=json.dumps(
-            {"prompt": "look at https://example.com/foo", "session_id": "s1",
+            {"prompt": "look at https://fixturehost.org/foo", "session_id": "s1",
              "cwd": "/home/someone/agrigen"}
         ),
         env=env, capture_output=True, text=True, timeout=20,

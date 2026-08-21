@@ -40,14 +40,14 @@ def test_post_webpage_item_returns_key():
         transport=httpx.MockTransport(handler),
     )
     key = client.post_webpage_item(
-        url_canonical="https://example.com/foo",
+        url_canonical="https://fixturehost.org/foo",
         title="Foo",
         access_date="2026-05-05",
-        tags=["context:general", "seen:2026-05-05", "domain:example.com"],
+        tags=["context:general", "seen:2026-05-05", "domain:fixturehost.org"],
     )
     assert key == "ITEM123"
     assert "items" in captured["url"]
-    assert captured["body"][0]["url"] == "https://example.com/foo"
+    assert captured["body"][0]["url"] == "https://fixturehost.org/foo"
     assert captured["body"][0]["collections"] == ["COLL123"]
     assert {"tag": "context:general"} in captured["body"][0]["tags"]
 
@@ -211,7 +211,7 @@ def test_post_webpage_item_raises_on_failed_entries():
     )
     with pytest.raises(ZoteroError, match="failed entries"):
         client.post_webpage_item(
-            url_canonical="https://example.com/x",
+            url_canonical="https://fixturehost.org/x",
             title="X",
             access_date="2026-05-05",
             tags=[],
@@ -233,7 +233,7 @@ def test_post_webpage_item_raises_on_empty_successful():
     )
     with pytest.raises(ZoteroError, match="no successful entries"):
         client.post_webpage_item(
-            url_canonical="https://example.com/x",
+            url_canonical="https://fixturehost.org/x",
             title="X",
             access_date="2026-05-05",
             tags=[],
@@ -255,7 +255,7 @@ def test_live_post_then_query_then_delete(live_zotero_creds: dict[str, str]):
         web_sources_collection_key=coll_key,
     )
     key = client.post_webpage_item(
-        url_canonical="https://example.com/test-client-post",
+        url_canonical="https://fixturehost.org/test-client-post",
         title="Test client post",
         access_date="2026-05-05",
         tags=["context:test-poc", "seen:2026-05-05"],
@@ -309,8 +309,8 @@ def test_add_tags_reenriches_an_unresolved_title():
     """A stored URL-as-title is a failure marker; a later resolve must correct it."""
     state = {
         "version": 5,
-        "title": "https://example.com/foo",  # == url, i.e. the fallback sentinel
-        "url": "https://example.com/foo",
+        "title": "https://fixturehost.org/foo",  # == url, i.e. the fallback sentinel
+        "url": "https://fixturehost.org/foo",
         "tags": ["context:general", "title:unresolved"],
     }
     client = _stateful_item_client(state, [])
@@ -325,7 +325,7 @@ def test_add_tags_does_not_refetch_an_already_resolved_title():
     state = {
         "version": 5,
         "title": "Real Title",
-        "url": "https://example.com/foo",
+        "url": "https://fixturehost.org/foo",
         "tags": ["context:general"],
     }
     client = _stateful_item_client(state, [])
@@ -344,17 +344,17 @@ def test_add_tags_does_not_refetch_an_already_resolved_title():
 def test_add_tags_keeps_unresolved_tag_when_resolution_fails_again():
     state = {
         "version": 5,
-        "title": "https://example.com/foo",
-        "url": "https://example.com/foo",
+        "title": "https://fixturehost.org/foo",
+        "url": "https://fixturehost.org/foo",
         "tags": ["context:general", "title:unresolved"],
     }
     client = _stateful_item_client(state, [])
     # Resolver returns the URL again -> still unfetchable.
     client.add_tags(
-        "ITEM1", ["seen:2026-05-05"], title_resolver=lambda: "https://example.com/foo"
+        "ITEM1", ["seen:2026-05-05"], title_resolver=lambda: "https://fixturehost.org/foo"
     )
 
-    assert state["title"] == "https://example.com/foo"
+    assert state["title"] == "https://fixturehost.org/foo"
     assert "title:unresolved" in state["tags"]
 
 
@@ -362,8 +362,8 @@ def test_add_tags_patches_title_even_when_no_tags_are_new():
     """The no-new-tags early return must not skip a pending title correction."""
     state = {
         "version": 5,
-        "title": "https://example.com/foo",
-        "url": "https://example.com/foo",
+        "title": "https://fixturehost.org/foo",
+        "url": "https://fixturehost.org/foo",
         "tags": ["context:general", "seen:2026-05-05", "title:unresolved"],
     }
     requests_made: list = []
@@ -388,7 +388,7 @@ def test_live_unresolved_title_is_reenriched(live_zotero_creds: dict[str, str]):
     if not coll_key:
         pytest.skip("ZOTERO_WEBSOURCES_COLLECTION_KEY_TEST not set")
 
-    url = "https://example.com/"
+    url = "https://fixturehost.org/"
     probe_tag = "context:test-reenrich"
     client = ZoteroClient(
         api_key=live_zotero_creds["api_key"],

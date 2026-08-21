@@ -13,19 +13,19 @@ from zotero_capture.url_processing import canonicalize, extract_urls, is_exclude
 @pytest.mark.parametrize(
     "raw, expected",
     [
-        ("https://example.com/foo#bar", "https://example.com/foo"),
-        ("https://example.com/foo/", "https://example.com/foo"),
-        ("https://EXAMPLE.com/Foo", "https://example.com/Foo"),
+        ("https://fixturehost.org/foo#bar", "https://fixturehost.org/foo"),
+        ("https://fixturehost.org/foo/", "https://fixturehost.org/foo"),
+        ("https://FIXTUREHOST.org/Foo", "https://fixturehost.org/Foo"),
         (
-            "https://example.com/foo?utm_source=x&q=keep",
-            "https://example.com/foo?q=keep",
+            "https://fixturehost.org/foo?utm_source=x&q=keep",
+            "https://fixturehost.org/foo?q=keep",
         ),
-        ("https://example.com/foo?fbclid=abc&gclid=def", "https://example.com/foo"),
+        ("https://fixturehost.org/foo?fbclid=abc&gclid=def", "https://fixturehost.org/foo"),
         (
-            "https://EXAMPLE.com/foo/?utm_campaign=x&id=42#frag",
-            "https://example.com/foo?id=42",
+            "https://FIXTUREHOST.org/foo/?utm_campaign=x&id=42#frag",
+            "https://fixturehost.org/foo?id=42",
         ),
-        ("https://example.com/", "https://example.com"),
+        ("https://fixturehost.org/", "https://fixturehost.org"),
     ],
 )
 def test_canonicalize(raw: str, expected: str):
@@ -36,28 +36,28 @@ def test_canonicalize(raw: str, expected: str):
 
 
 def test_extract_basic_url():
-    text = "See https://example.com/foo for details."
-    assert extract_urls(text) == ["https://example.com/foo"]
+    text = "See https://fixturehost.org/foo for details."
+    assert extract_urls(text) == ["https://fixturehost.org/foo"]
 
 
 def test_extract_strips_trailing_punctuation():
-    text = "Check (https://example.com/foo), and [https://example.com/bar]."
-    assert extract_urls(text) == ["https://example.com/foo", "https://example.com/bar"]
+    text = "Check (https://fixturehost.org/foo), and [https://fixturehost.org/bar]."
+    assert extract_urls(text) == ["https://fixturehost.org/foo", "https://fixturehost.org/bar"]
 
 
 def test_extract_markdown_link():
-    text = "See [the docs](https://example.com/docs)."
-    assert extract_urls(text) == ["https://example.com/docs"]
+    text = "See [the docs](https://fixturehost.org/docs)."
+    assert extract_urls(text) == ["https://fixturehost.org/docs"]
 
 
 def test_extract_source_line():
-    text = "Source: https://example.com/article"
-    assert extract_urls(text) == ["https://example.com/article"]
+    text = "Source: https://fixturehost.org/article"
+    assert extract_urls(text) == ["https://fixturehost.org/article"]
 
 
 def test_extract_dedups_within_message():
-    text = "https://example.com/x and again https://example.com/x"
-    assert extract_urls(text) == ["https://example.com/x"]
+    text = "https://fixturehost.org/x and again https://fixturehost.org/x"
+    assert extract_urls(text) == ["https://fixturehost.org/x"]
 
 
 def test_extract_no_urls():
@@ -65,8 +65,8 @@ def test_extract_no_urls():
 
 
 def test_extract_strips_backtick_fence():
-    text = "See `https://example.com/foo` for details."
-    assert extract_urls(text) == ["https://example.com/foo"]
+    text = "See `https://fixturehost.org/foo` for details."
+    assert extract_urls(text) == ["https://fixturehost.org/foo"]
 
 
 # --- parenthesised URLs ---
@@ -93,8 +93,8 @@ def test_extract_keeps_parens_inside_a_doi():
 
 
 def test_extract_strips_a_paren_that_wraps_the_url():
-    text = "Ref (https://example.com/foo) and more"
-    assert extract_urls(text) == ["https://example.com/foo"]
+    text = "Ref (https://fixturehost.org/foo) and more"
+    assert extract_urls(text) == ["https://fixturehost.org/foo"]
 
 
 def test_extract_strips_only_the_wrapping_paren_from_a_parenthesised_url():
@@ -116,7 +116,7 @@ def test_extract_strips_sentence_punctuation_after_a_balanced_paren():
 @pytest.mark.parametrize(
     "url, excluded",
     [
-        ("https://example.com/foo", False),
+        ("https://fixturehost.org/foo", False),
         ("https://localhost:3000/x", True),
         ("http://127.0.0.1/x", True),
         ("http://0.0.0.0:8080/x", True),
@@ -134,17 +134,17 @@ def test_extract_strips_sentence_punctuation_after_a_balanced_paren():
         # never sources — they are machinery a page loaded, captured incidentally.
         ("https://fonts.googleapis.com/css2?family=Inter", True),
         ("https://fonts.gstatic.com/s/inter/v12/x.woff2", True),
-        ("https://cloudflare-dns.com/dns-query?name=example.com", True),
+        ("https://cloudflare-dns.com/dns-query?name=fixturehost.org", True),
         ("https://mozilla.cloudflare-dns.com/dns-query", True),
-        ("https://dns.google/resolve?name=example.com", True),
+        ("https://dns.google/resolve?name=fixturehost.org", True),
         ("https://static.cloudflareinsights.com/beacon.min.js", True),
         # Asset paths: the bytes a page references, not the page itself.
         ("https://inaturalist-open-data.s3.amazonaws.com/photos/28969484/medium.jpg", True),
         ("https://upload.wikimedia.org/wikipedia/commons/3/3e/A_rose_bush.jpg", True),
         ("https://raw.githubusercontent.com/musharna/stackhealth/main/stackhealth.py", False),
-        ("https://example.com/theme.css", True),
-        ("https://example.com/bundle.min.js", True),
-        ("https://example.com/logo.SVG", True),
+        ("https://fixturehost.org/theme.css", True),
+        ("https://fixturehost.org/bundle.min.js", True),
+        ("https://fixturehost.org/logo.SVG", True),
         # Negative controls: HTML pages whose path merely ends in an asset
         # extension. Both resolved to real titles in production, so a naive
         # extension match would silently drop genuine sources.
@@ -152,7 +152,7 @@ def test_extract_strips_sentence_punctuation_after_a_balanced_paren():
         ("https://github.com/musharna/stackhealth/actions/workflows/smoke.yml/badge.svg", False),
         ("https://commons.wikimedia.org/wiki/File:Glycine_max_kz01.jpg", False),
         # A query string must not smuggle an asset extension past the check.
-        ("https://example.com/article?ref=x.css", False),
+        ("https://fixturehost.org/article?ref=x.css", False),
     ],
 )
 def test_is_excluded(url: str, excluded: bool):

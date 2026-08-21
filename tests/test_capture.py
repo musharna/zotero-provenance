@@ -40,7 +40,7 @@ def fake_title_fetcher():
 
 def test_capture_new_url_posts_to_zotero(empty_cache, fake_zotero, fake_title_fetcher):
     result = capture_message(
-        message="See https://example.com/foo for details.",
+        message="See https://fixturehost.org/foo for details.",
         project_slug="home",
         context=None,
         today=date(2026, 5, 5),
@@ -50,12 +50,12 @@ def test_capture_new_url_posts_to_zotero(empty_cache, fake_zotero, fake_title_fe
     )
     fake_zotero.post_webpage_item.assert_called_once()
     call = fake_zotero.post_webpage_item.call_args.kwargs
-    assert call["url_canonical"] == "https://example.com/foo"
+    assert call["url_canonical"] == "https://fixturehost.org/foo"
     assert call["access_date"] == "2026-05-05"
     assert "context:general" in call["tags"]
     assert "project:home" in call["tags"]
     assert "seen:2026-05-05" in call["tags"]
-    assert "domain:example.com" in call["tags"]
+    assert "domain:fixturehost.org" in call["tags"]
     assert result.urls_new == 1
 
 
@@ -63,11 +63,11 @@ def test_capture_known_url_same_day_same_context_is_noop(
     empty_cache, fake_zotero, fake_title_fetcher
 ):
     insert_url(
-        empty_cache, "https://example.com/foo", "EXISTKEY", first_seen=date(2026, 5, 5)
+        empty_cache, "https://fixturehost.org/foo", "EXISTKEY", first_seen=date(2026, 5, 5)
     )
     fake_zotero.add_tags.return_value = False
     result = capture_message(
-        message="https://example.com/foo",
+        message="https://fixturehost.org/foo",
         project_slug="home",
         context=None,
         today=date(2026, 5, 5),
@@ -84,10 +84,10 @@ def test_capture_known_url_new_context_adds_tag(
     empty_cache, fake_zotero, fake_title_fetcher
 ):
     insert_url(
-        empty_cache, "https://example.com/foo", "EXISTKEY", first_seen=date(2026, 5, 1)
+        empty_cache, "https://fixturehost.org/foo", "EXISTKEY", first_seen=date(2026, 5, 1)
     )
     result = capture_message(
-        message="Source: https://example.com/foo",
+        message="Source: https://fixturehost.org/foo",
         project_slug="home",
         context="lit-review",
         today=date(2026, 5, 5),
@@ -104,7 +104,7 @@ def test_capture_known_url_new_context_adds_tag(
 
 def test_capture_excludes_localhost(empty_cache, fake_zotero, fake_title_fetcher):
     result = capture_message(
-        message="See http://localhost:3000/foo and https://example.com/bar",
+        message="See http://localhost:3000/foo and https://fixturehost.org/bar",
         project_slug="home",
         context=None,
         today=date(2026, 5, 5),
@@ -140,7 +140,7 @@ def test_capture_dedups_canonical_collisions(
 ):
     """Two raw URLs that canonicalize to the same string → one POST, urls_seen==1."""
     result = capture_message(
-        message="See https://example.com/ and https://example.com for details",
+        message="See https://fixturehost.org/ and https://fixturehost.org for details",
         project_slug="home",
         context=None,
         today=date(2026, 5, 5),
@@ -162,7 +162,7 @@ def test_capture_zotero_error_on_post_records_error_no_insert(
 
     fake_zotero.post_webpage_item.side_effect = ZoteroError("simulated 500")
     result = capture_message(
-        message="See https://example.com/foo",
+        message="See https://fixturehost.org/foo",
         project_slug="home",
         context=None,
         today=date(2026, 5, 5),
@@ -172,9 +172,9 @@ def test_capture_zotero_error_on_post_records_error_no_insert(
     )
     assert result.urls_new == 0
     assert len(result.errors) == 1
-    assert result.errors[0].url == "https://example.com/foo"
+    assert result.errors[0].url == "https://fixturehost.org/foo"
     assert result.errors[0].code == "zotero_error"
-    assert lookup_url(empty_cache, "https://example.com/foo") is None
+    assert lookup_url(empty_cache, "https://fixturehost.org/foo") is None
 
 
 def test_capture_zotero_error_on_add_tags_records_error_no_last_seen_update(
@@ -185,11 +185,11 @@ def test_capture_zotero_error_on_add_tags_records_error_no_last_seen_update(
     from zotero_capture.zotero_client import ZoteroError
 
     insert_url(
-        empty_cache, "https://example.com/foo", "EXISTKEY", first_seen=date(2026, 5, 1)
+        empty_cache, "https://fixturehost.org/foo", "EXISTKEY", first_seen=date(2026, 5, 1)
     )
     fake_zotero.add_tags.side_effect = ZoteroError("simulated 503")
     result = capture_message(
-        message="https://example.com/foo",
+        message="https://fixturehost.org/foo",
         project_slug="home",
         context="lit-review",
         today=date(2026, 5, 5),
@@ -199,7 +199,7 @@ def test_capture_zotero_error_on_add_tags_records_error_no_last_seen_update(
     )
     assert result.urls_recurring == 0
     assert len(result.errors) == 1
-    row = lookup_url(empty_cache, "https://example.com/foo")
+    row = lookup_url(empty_cache, "https://fixturehost.org/foo")
     assert row is not None
     assert row["last_seen"] == "2026-05-01"  # unchanged
 
@@ -207,7 +207,7 @@ def test_capture_zotero_error_on_add_tags_records_error_no_last_seen_update(
 def test_new_url_with_unfetchable_title_is_tagged_unresolved(empty_cache, fake_zotero):
     """A failed title fetch must be MARKED, not silently stored as if it were a title."""
     capture_message(
-        message="https://example.com/foo",
+        message="https://fixturehost.org/foo",
         project_slug="home",
         context=None,
         today=date(2026, 5, 5),
@@ -223,7 +223,7 @@ def test_new_url_with_real_title_is_not_tagged_unresolved(
     empty_cache, fake_zotero, fake_title_fetcher
 ):
     capture_message(
-        message="https://example.com/foo",
+        message="https://fixturehost.org/foo",
         project_slug="home",
         context=None,
         today=date(2026, 5, 5),
@@ -240,10 +240,10 @@ def test_recurring_url_is_offered_a_title_resolver(
 ):
     """Recurrence is the retry opportunity: the client must be handed a way to resolve."""
     insert_url(
-        empty_cache, "https://example.com/foo", "EXISTKEY", first_seen=date(2026, 5, 1)
+        empty_cache, "https://fixturehost.org/foo", "EXISTKEY", first_seen=date(2026, 5, 1)
     )
     capture_message(
-        message="https://example.com/foo",
+        message="https://fixturehost.org/foo",
         project_slug="home",
         context=None,
         today=date(2026, 5, 5),
@@ -253,7 +253,7 @@ def test_recurring_url_is_offered_a_title_resolver(
     )
     resolver = fake_zotero.add_tags.call_args.kwargs["title_resolver"]
     assert resolver is not None
-    assert resolver() == "Title-of-https://example.com/foo"
+    assert resolver() == "Title-of-https://fixturehost.org/foo"
 
 
 def test_reenrichment_is_capped_per_run(empty_cache, fake_zotero):
@@ -272,7 +272,7 @@ def test_reenrichment_is_capped_per_run(empty_cache, fake_zotero):
 
     fake_zotero.add_tags.side_effect = add_tags
 
-    urls = [f"https://example.com/{i}" for i in range(MAX_REENRICH_PER_RUN + 2)]
+    urls = [f"https://fixturehost.org/{i}" for i in range(MAX_REENRICH_PER_RUN + 2)]
     for i, u in enumerate(urls):
         insert_url(empty_cache, u, f"KEY{i}", first_seen=date(2026, 5, 1))
 
