@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import time
+from collections.abc import Callable
 from urllib.parse import urlsplit
+from xml.etree import ElementTree
 
 import httpx
 from bs4 import BeautifulSoup
@@ -19,10 +22,10 @@ _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 
 _USER_AGENT = "zotero-provenance/0.1"
 
-# A DOI is an identifier with an authoritative metadata API, not a web page. The
-# publisher HTML behind it is slower (3-4 redirects) and frequently bot-walled,
-# so ask the resolver for metadata directly instead of scraping what it lands on.
-_DOI_HOSTS = frozenset({"doi.org", "dx.doi.org", "www.doi.org"})
+# Some hosts serve identifiers, not web pages: a DOI, an arXiv id, a PMID, a repo
+# path. Each has an authoritative metadata API, and the HTML behind it is slower
+# and frequently bot-walled — pubmed and arxiv 403 a plain fetch outright. Ask the
+# API instead of scraping whatever the identifier happens to land on.
 _CSL_ACCEPT = "application/vnd.citationstyles.csl+json"
 
 
@@ -48,6 +51,107 @@ def _doi_title(client: httpx.Client, url: str) -> str | None:
     return None
 
 
+def _arxiv_title(client: httpx.Client, url: str) -> str | None:
+    """Resolve an arXiv id through the export API (the abs page 403s a plain fetch)."""
+    m = re.search(r"(\d{4}\.\d{4,5})", urlsplit(url).path)
+    if not m:
+        return None
+    resp = client.get(
+        "http://export.arxiv.org/api/query",
+        params={"id_list": m.group(1)},
+        headers={"User-Agent": _USER_AGENT},
+        follow_redirects=True,
+    )
+    if resp.status_code >= 400:
+        return None
+    ns = {"atom": "http://www.w3.org/2005/Atom"}
+    # Scope to <entry>: the feed carries its own <title> that is not the paper's.
+    entry = ElementTree.fromstring(resp.text).find("atom:entry/atom:title", ns)
+    return entry.text.strip() if entry is not None and entry.text else None
+
+
+def _pubmed_title(client: httpx.Client, url: str) -> str | None:
+    """Resolve a PMID through E-utilities."""
+    m = re.search(r"/(\d+)", urlsplit(url).path)
+    if not m:
+        return None
+    pmid = m.group(1)
+    resp = client.get(
+        "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+        params={"db": "pubmed", "id": pmid, "retmode": "json"},
+        headers={"User-Agent": _USER_AGENT},
+        follow_redirects=True,
+    )
+    if resp.status_code >= 400:
+        return None
+    title = resp.json().get("result", {}).get(pmid, {}).get("title")
+    return title.strip() if isinstance(title, str) and title.strip() else None
+
+
+def _preprint_title(client: httpx.Client, url: str) -> str | None:
+    """bioRxiv/medRxiv carry their DOI in the URL path; resolve that."""
+    m = re.search(r"(10\.1101/[0-9a-zA-Z.]+)", urlsplit(url).path)
+    if not m:
+        return None
+    return _doi_title(client, f"https://doi.org/{m.group(1)}")
+
+
+def _github_title(client: httpx.Client, url: str) -> str | None:
+    """Resolve a repo through the GitHub API.
+
+    Roughly half of captured GitHub URLs are dead or private repos that 404 here;
+    those correctly stay unresolved rather than getting an invented title.
+    `GITHUB_TOKEN` lifts the anonymous 60/hour rate limit when one is available.
+    """
+    m = re.match(r"^/([^/]+)/([^/]+)", urlsplit(url).path)
+    if not m:
+        return None
+    headers = {"User-Agent": _USER_AGENT, "Accept": "application/vnd.github+json"}
+    token = os.environ.get("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    resp = client.get(
+        f"https://api.github.com/repos/{m.group(1)}/{m.group(2).removesuffix('.git')}",
+        headers=headers,
+        follow_redirects=True,
+    )
+    if resp.status_code >= 400:
+        return None
+    data = resp.json()
+    name, desc = data.get("full_name"), data.get("description")
+    if not name:
+        return None
+    return f"{name}: {desc}" if desc else name
+
+
+_RESOLVERS: dict[str, Callable[[httpx.Client, str], str | None]] = {
+    "doi.org": _doi_title,
+    "dx.doi.org": _doi_title,
+    "www.doi.org": _doi_title,
+    "arxiv.org": _arxiv_title,
+    "www.arxiv.org": _arxiv_title,
+    "pubmed.ncbi.nlm.nih.gov": _pubmed_title,
+    "biorxiv.org": _preprint_title,
+    "www.biorxiv.org": _preprint_title,
+    "medrxiv.org": _preprint_title,
+    "www.medrxiv.org": _preprint_title,
+    "github.com": _github_title,
+    "www.github.com": _github_title,
+}
+
+
+def _identifier_title(client: httpx.Client, url: str) -> str | None:
+    """Resolve via an identifier API when the host serves identifiers, else None."""
+    resolver = _RESOLVERS.get((urlsplit(url).hostname or "").lower())
+    if resolver is None:
+        return None
+    try:
+        return resolver(client, url)
+    except Exception as e:  # malformed payload, transport failure, timeout
+        logger.debug("identifier resolution failed for %s: %s", url, e)
+        return None
+
+
 def fetch_title(url: str, *, client: httpx.Client | None = None) -> str:
     """Fetch <title> with 1s wall-clock budget. Return URL on any failure.
 
@@ -62,12 +166,11 @@ def fetch_title(url: str, *, client: httpx.Client | None = None) -> str:
         if client is None:
             client = httpx.Client(timeout=DEFAULT_TIMEOUT_S, follow_redirects=True)
         deadline = time.monotonic() + DEFAULT_TIMEOUT_S
-        if (urlsplit(url).hostname or "").lower() in _DOI_HOSTS:
-            doi_title = _doi_title(client, url)
-            if doi_title:
-                return doi_title
-            # Negotiation is an optimisation, not a new point of failure: fall
-            # through and scrape the landing page as before.
+        identifier_title = _identifier_title(client, url)
+        if identifier_title:
+            return identifier_title
+        # Identifier resolution is an optimisation, not a new point of failure:
+        # fall through and scrape the page as before.
         with client.stream("GET", url, headers={"User-Agent": _USER_AGENT}) as resp:
             if resp.status_code >= 400:
                 return url

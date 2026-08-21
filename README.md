@@ -21,13 +21,26 @@ Tags:   context:lit-review  project:my-thesis  seen:2026-08-20  domain:arxiv.org
 Cite the same URL three weeks later and the item is not duplicated — it gains a second
 `seen:` tag. That history is what `/source-delta` reads.
 
-### DOIs
+### Identifiers are resolved, not scraped
 
-`doi.org` links are not scraped. A DOI is an identifier with an authoritative metadata
-API, so the resolver is asked for citation metadata directly and the article's real title
-is stored. This is both faster than following the DOI to a publisher page and far more
-reliable — publisher sites are the most aggressively bot-walled pages the plugin meets.
-If negotiation fails for any reason, the ordinary scrape still runs as a fallback.
+Some links aren't really web pages — they're identifiers that happen to have a URL. For
+these the authoritative metadata API is asked directly, which is faster than following
+the link and far more reliable, because the pages behind them are among the most
+aggressively bot-walled the plugin meets (`pubmed` and `arxiv` refuse a plain fetch
+outright, and most captured arXiv links are PDFs that have no title to scrape at all).
+
+| host                         | resolved via                       |
+| ---------------------------- | ---------------------------------- |
+| `doi.org`                    | DOI content negotiation (CSL JSON) |
+| `arxiv.org`                  | arXiv export API                   |
+| `pubmed.ncbi.nlm.nih.gov`    | NCBI E-utilities                   |
+| `biorxiv.org`, `medrxiv.org` | the DOI embedded in the URL path   |
+| `github.com`                 | GitHub repo API                    |
+
+Resolution is an optimisation, never a new point of failure: if any of it fails, the
+ordinary scrape still runs as a fallback. Dead or private GitHub repos 404 and stay
+unresolved rather than being given an invented title. Set `GITHUB_TOKEN` to lift
+GitHub's anonymous 60-requests/hour limit if you capture a lot of repos.
 
 ### When the title can't be fetched
 
