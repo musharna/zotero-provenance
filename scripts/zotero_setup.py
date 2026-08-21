@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import httpx  # noqa: E402
 
+from zotero_capture import USER_AGENT  # noqa: E402
 from zotero_capture.config import DEFAULT_SECRETS_FILE  # noqa: E402
 from zotero_capture.zotero_client import ZoteroClient  # noqa: E402
 
@@ -29,7 +30,7 @@ def _headers(api_key: str) -> dict[str, str]:
     return {
         "Authorization": f"Bearer {api_key}",
         "Zotero-API-Version": "3",
-        "User-Agent": "zotero-provenance/0.1",
+        "User-Agent": USER_AGENT,
     }
 
 
