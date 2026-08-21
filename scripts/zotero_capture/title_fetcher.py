@@ -13,6 +13,8 @@ from xml.etree import ElementTree
 import httpx
 from bs4 import BeautifulSoup
 
+from . import USER_AGENT
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_S = 1.0
@@ -22,9 +24,9 @@ _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 
 # Wikimedia (and Crossref/NCBI as a courtesy) reject a User-Agent that carries no
 # way to contact the operator: verified 2026-08-21, both "zotero-provenance/0.1"
-# and a plain "Mozilla/5.0" get 403 from en.wikipedia.org while this string gets
-# 200. The project URL is the contact point — deliberately not a personal email.
-_USER_AGENT = "zotero-provenance/0.4 (+https://github.com/musharna/zotero-provenance)"
+# and a plain "Mozilla/5.0" get 403 from en.wikipedia.org while the shared string
+# gets 200. Defined once in the package so a release bump reaches every caller.
+_USER_AGENT = USER_AGENT
 
 # Some hosts serve identifiers, not web pages: a DOI, an arXiv id, a PMID, a repo
 # path. Each has an authoritative metadata API, and the HTML behind it is slower

@@ -10,6 +10,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from . import USER_AGENT
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_API_BASE = "https://api.zotero.org"
@@ -47,7 +49,7 @@ class ZoteroClient:
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Zotero-API-Version": "3",
-                "User-Agent": "zotero-provenance/0.1",
+                "User-Agent": USER_AGENT,
             },
             timeout=timeout,
             transport=transport,
