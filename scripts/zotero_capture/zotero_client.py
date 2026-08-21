@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -92,6 +92,28 @@ class ZoteroClient:
             raise ZoteroError(f"POST /items returned no successful entries: {body}")
         return next(iter(successful.values()))["key"]
 
+    def iter_collection_items(self, *, limit: int = 100) -> Iterator[dict[str, Any]]:
+        """Yield every top-level item in the target collection, page by page.
+
+        Streams rather than accumulating: a mature collection runs to thousands of
+        items and callers here only ever look at one at a time.
+        """
+        start = 0
+        while True:
+            resp = self._client.get(
+                f"/collections/{self.collection_key}/items/top",
+                params={"format": "json", "limit": limit, "start": start},
+            )
+            if resp.status_code >= 400:
+                raise ZoteroError(
+                    f"GET collection items failed: {resp.status_code} {resp.text}"
+                )
+            page = resp.json()
+            yield from page
+            if len(page) < limit:
+                return
+            start += limit
+
     def query_by_tag(self, tag: str, *, limit: int = 100) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
         start = 0
@@ -135,7 +157,7 @@ class ZoteroClient:
         merged = existing_tags | set(new_tags)
 
         resolved_title: str | None = None
-        if title_resolver is not None and _title_is_unresolved(data, existing_tags):
+        if title_resolver is not None and title_is_unresolved(data, existing_tags):
             candidate = title_resolver()
             # The fetcher returns the URL itself when it fails; only a different,
             # non-empty string counts as a real title.
@@ -181,7 +203,7 @@ class ZoteroClient:
             )
 
 
-def _title_is_unresolved(data: dict[str, Any], tags: set[str]) -> bool:
+def title_is_unresolved(data: dict[str, Any], tags: set[str]) -> bool:
     """True when the stored title is a fallback rather than real metadata."""
     title = (data.get("title") or "").strip()
     return not title or title == (data.get("url") or "") or UNRESOLVED_TITLE_TAG in tags
