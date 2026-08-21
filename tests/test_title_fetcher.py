@@ -315,3 +315,42 @@ def test_live_arxiv_pdf_link_resolves_via_the_api(live_client):
     """122 of 128 arXiv items in the backlog are /pdf/ links, which never scrape."""
     title = fetch_title("https://arxiv.org/pdf/1706.03762", client=live_client)
     assert "Attention Is All You Need" in title, title
+
+
+def test_fetch_title_sends_contactable_user_agent():
+    """Wikimedia 403s any User-Agent without a contact URL — including a browser's.
+
+    Verified live 2026-08-21: 'zotero-provenance/0.1' and 'Mozilla/5.0' both got
+    403 from en.wikipedia.org, while a string carrying the project URL got 200.
+    """
+    seen: list[str] = []
+
+    def record(req: httpx.Request) -> httpx.Response:
+        seen.append(req.headers.get("user-agent", ""))
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            content=b"<html><head><title>Ok</title></head></html>",
+        )
+
+    transport = httpx.MockTransport(record)
+    with httpx.Client(transport=transport) as client:
+        fetch_title("https://en.wikipedia.org/wiki/Thismia_americana", client=client)
+
+    assert seen, "no request was made"
+    ua = seen[0]
+    assert "zotero-provenance" in ua, f"UA must identify the project: {ua!r}"
+    assert "https://" in ua, f"UA must carry a contact URL (Wikimedia policy): {ua!r}"
+
+
+@pytest.mark.live
+def test_live_wikipedia_resolves_to_the_article_title(live_client):
+    """Real-execution check: Wikimedia enforces its UA policy at the network edge.
+
+    The mocked UA test above asserts the header we send; only a live request can
+    catch Wikimedia tightening what it accepts. Pre-fix this returned the URL.
+    """
+    title = fetch_title(
+        "https://en.wikipedia.org/wiki/Thismia_americana", client=live_client
+    )
+    assert "Thismia americana" in title, title

@@ -90,3 +90,29 @@ def test_backfill_respects_a_limit():
 
     assert len(patches) == 2
     assert result.examined == 2
+
+
+def test_backfill_hosts_filter_restricts_the_pass_to_named_hosts():
+    """A targeted repair must not re-fetch the whole backlog.
+
+    Recovering one host's items should cost one host's requests, so the
+    structurally-unfetchable majority is left alone.
+    """
+    items = [
+        _item("A", "https://en.wikipedia.org/wiki/X", "https://en.wikipedia.org/wiki/X"),
+        _item("B", "https://academic.oup.com/y", "https://academic.oup.com/y"),
+    ]
+    patches: list = []
+    fetched: list[str] = []
+
+    def fetcher(url: str) -> str:
+        fetched.append(url)
+        return "Recovered"
+
+    client = _collection_client(items, patches)
+    result = backfill(client, fetcher, sleep_s=0, hosts={"en.wikipedia.org"})
+
+    assert [k for k, _ in patches] == ["A"]
+    assert fetched == ["https://en.wikipedia.org/wiki/X"]
+    assert result.examined == 1
+    assert result.fixed == 1

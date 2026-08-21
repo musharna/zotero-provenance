@@ -7,6 +7,11 @@ earlier would otherwise wait for a recurrence that may never come. Run this once
     python3 scripts/backfill_titles.py --dry-run --limit 100   # measure first
     python3 scripts/backfill_titles.py                         # then repair
 
+Pass --host to target a single host after a fix that only helps that host,
+instead of re-fetching a backlog that is mostly unfetchable:
+
+    python3 scripts/backfill_titles.py --host en.wikipedia.org --host commons.wikimedia.org
+
 Credentials come from the usual secrets file. Set GITHUB_TOKEN to lift GitHub's
 anonymous 60-requests/hour limit before repairing a large repo backlog.
 """
@@ -43,7 +48,15 @@ def main() -> int:
     p.add_argument(
         "--sleep", type=float, default=0.4, help="seconds between items (be polite)"
     )
+    p.add_argument(
+        "--host",
+        action="append",
+        dest="hosts",
+        metavar="HOSTNAME",
+        help="only repair items on this host (repeatable); default is every host",
+    )
     args = p.parse_args()
+    hosts = {h.lower() for h in args.hosts} if args.hosts else None
 
     config = load_config()
     started = time.monotonic()
@@ -71,6 +84,7 @@ def main() -> int:
             dry_run=args.dry_run,
             limit=args.limit,
             sleep_s=args.sleep,
+            hosts=hosts,
             progress=report,
         )
 
