@@ -6,8 +6,16 @@ import ipaddress
 import re
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-URL_RE = re.compile(r"https?://[^\s<>\"'`\)\]]+", re.IGNORECASE)
-TRAILING_PUNCT = ".,;:)]}>"
+# A closing paren is a legal URL character — Cell Press PII links and the DOIs
+# behind them carry one (10.1016/s0092-8674(00)80876-3), as do Wikipedia
+# disambiguation pages. Admit it here and let the balance rule in extract_urls
+# decide whether a trailing one belongs to the URL or to the prose around it;
+# excluding it at the tokenizer truncates the URL before that rule can run.
+URL_RE = re.compile(r"https?://[^\s<>\"'`\]]+", re.IGNORECASE)
+
+# ")" is deliberately absent: it is the balance rule's to judge, and stripping it
+# here unconditionally would pre-empt that and corrupt a legitimate URL.
+TRAILING_PUNCT = ".,;:]}>"
 
 TRACKING_PARAMS = frozenset(
     {

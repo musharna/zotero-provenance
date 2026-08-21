@@ -69,6 +69,47 @@ def test_extract_strips_backtick_fence():
     assert extract_urls(text) == ["https://example.com/foo"]
 
 
+# --- parenthesised URLs ---
+#
+# A closing paren is a legal, load-bearing URL character: Cell Press PII links
+# and the DOIs behind them carry one (10.1016/s0092-8674(00)80876-3), as do
+# Wikipedia disambiguation pages. Truncating it stores a URL that 404s forever
+# and that no title backfill can repair, because the item's own URL is wrong.
+
+
+def test_extract_keeps_a_balanced_trailing_paren():
+    text = "See https://en.wikipedia.org/wiki/Aestivation_(botany) here"
+    assert extract_urls(text) == ["https://en.wikipedia.org/wiki/Aestivation_(botany)"]
+
+
+def test_extract_keeps_parens_inside_a_cell_press_identifier():
+    url = "https://www.cell.com/cell/fulltext/S0092-8674(25)00123-4"
+    assert extract_urls(f"paper: {url}") == [url]
+
+
+def test_extract_keeps_parens_inside_a_doi():
+    url = "https://doi.org/10.1016/s0092-8674(00)80876-3"
+    assert extract_urls(f"cited {url} today") == [url]
+
+
+def test_extract_strips_a_paren_that_wraps_the_url():
+    text = "Ref (https://example.com/foo) and more"
+    assert extract_urls(text) == ["https://example.com/foo"]
+
+
+def test_extract_strips_only_the_wrapping_paren_from_a_parenthesised_url():
+    """Both rules at once: the URL owns one paren, the prose owns the other."""
+    text = "(https://en.wikipedia.org/wiki/Volcano_plot_(statistics))"
+    assert extract_urls(text) == [
+        "https://en.wikipedia.org/wiki/Volcano_plot_(statistics)"
+    ]
+
+
+def test_extract_strips_sentence_punctuation_after_a_balanced_paren():
+    text = "See https://en.wikipedia.org/wiki/Aestivation_(botany)."
+    assert extract_urls(text) == ["https://en.wikipedia.org/wiki/Aestivation_(botany)"]
+
+
 # --- is_excluded ---
 
 
