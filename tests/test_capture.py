@@ -8,7 +8,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from zotero_capture.capture import CaptureResult, capture_message
+from zotero_capture.capture import (
+    MAX_REENRICH_PER_RUN,
+    CaptureResult,
+    capture_message,
+)
 from zotero_capture.sqlite_cache import init_db, insert_url
 
 
@@ -198,3 +202,87 @@ def test_capture_zotero_error_on_add_tags_records_error_no_last_seen_update(
     row = lookup_url(empty_cache, "https://example.com/foo")
     assert row is not None
     assert row["last_seen"] == "2026-05-01"  # unchanged
+
+
+def test_new_url_with_unfetchable_title_is_tagged_unresolved(empty_cache, fake_zotero):
+    """A failed title fetch must be MARKED, not silently stored as if it were a title."""
+    capture_message(
+        message="https://example.com/foo",
+        project_slug="home",
+        context=None,
+        today=date(2026, 5, 5),
+        db_path=empty_cache,
+        zotero=fake_zotero,
+        title_fetcher=lambda url: url,  # fetch failed -> URL-as-fallback sentinel
+    )
+    tags = fake_zotero.post_webpage_item.call_args.kwargs["tags"]
+    assert "title:unresolved" in tags
+
+
+def test_new_url_with_real_title_is_not_tagged_unresolved(
+    empty_cache, fake_zotero, fake_title_fetcher
+):
+    capture_message(
+        message="https://example.com/foo",
+        project_slug="home",
+        context=None,
+        today=date(2026, 5, 5),
+        db_path=empty_cache,
+        zotero=fake_zotero,
+        title_fetcher=fake_title_fetcher,
+    )
+    tags = fake_zotero.post_webpage_item.call_args.kwargs["tags"]
+    assert "title:unresolved" not in tags
+
+
+def test_recurring_url_is_offered_a_title_resolver(
+    empty_cache, fake_zotero, fake_title_fetcher
+):
+    """Recurrence is the retry opportunity: the client must be handed a way to resolve."""
+    insert_url(
+        empty_cache, "https://example.com/foo", "EXISTKEY", first_seen=date(2026, 5, 1)
+    )
+    capture_message(
+        message="https://example.com/foo",
+        project_slug="home",
+        context=None,
+        today=date(2026, 5, 5),
+        db_path=empty_cache,
+        zotero=fake_zotero,
+        title_fetcher=fake_title_fetcher,
+    )
+    resolver = fake_zotero.add_tags.call_args.kwargs["title_resolver"]
+    assert resolver is not None
+    assert resolver() == "Title-of-https://example.com/foo"
+
+
+def test_reenrichment_is_capped_per_run(empty_cache, fake_zotero):
+    """Many recurring unfetchable URLs must not blow the Stop hook's time budget."""
+    fetched: list[str] = []
+
+    def counting_fetcher(url: str) -> str:
+        fetched.append(url)
+        return f"Title-of-{url}"
+
+    # Simulate every recurring item still having an unresolved title.
+    def add_tags(key, tags, *, title_resolver=None):
+        if title_resolver is not None:
+            title_resolver()
+        return True
+
+    fake_zotero.add_tags.side_effect = add_tags
+
+    urls = [f"https://example.com/{i}" for i in range(MAX_REENRICH_PER_RUN + 2)]
+    for i, u in enumerate(urls):
+        insert_url(empty_cache, u, f"KEY{i}", first_seen=date(2026, 5, 1))
+
+    capture_message(
+        message=" ".join(urls),
+        project_slug="home",
+        context=None,
+        today=date(2026, 5, 5),
+        db_path=empty_cache,
+        zotero=fake_zotero,
+        title_fetcher=counting_fetcher,
+    )
+    assert len(fetched) == MAX_REENRICH_PER_RUN

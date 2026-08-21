@@ -11,11 +11,16 @@ from urllib.parse import urlsplit
 
 from .sqlite_cache import init_db, insert_url, lookup_url, update_last_seen
 from .url_processing import canonicalize, extract_urls, is_excluded
-from .zotero_client import ZoteroClient, ZoteroError
+from .zotero_client import UNRESOLVED_TITLE_TAG, ZoteroClient, ZoteroError
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_CONTEXT = "general"
+
+# Most title re-fetches to attempt in a single capture run. Each costs one live
+# HTTP request inside the Stop hook's few-second budget; unspent retries simply
+# happen on a later run, since an unresolved title stays marked until it resolves.
+MAX_REENRICH_PER_RUN = 3
 
 
 @dataclass
@@ -70,6 +75,25 @@ def capture_message(
     context_tag = f"context:{context or DEFAULT_CONTEXT}"
     project_tag = f"project:{project_slug}"
 
+    # Re-enrichment spends a live HTTP fetch, so bound it per run: the Stop hook
+    # has seconds, and a message can cite many permanently-unfetchable URLs.
+    reenrich_budget = [MAX_REENRICH_PER_RUN]
+
+    def make_title_resolver(url: str) -> Callable[[], str]:
+        """Resolve this URL's title, but only while the per-run budget lasts.
+
+        Returning the URL means "still unresolved", so an exhausted budget simply
+        defers the retry to a later run rather than spending hook time now.
+        """
+
+        def resolve() -> str:
+            if reenrich_budget[0] <= 0:
+                return url
+            reenrich_budget[0] -= 1
+            return title_fetcher(url)
+
+        return resolve
+
     # Note: result.errors may include URLs already counted in urls_new/urls_recurring
     # (the Zotero call succeeded but the local SQLite write failed).
     for url in canonicals:
@@ -78,6 +102,8 @@ def capture_message(
             if existing is None:
                 title = title_fetcher(url)
                 tags = [context_tag, project_tag, seen_tag, f"domain:{_domain(url)}"]
+                if title == url:
+                    tags.append(UNRESOLVED_TITLE_TAG)
                 key = zotero.post_webpage_item(
                     url_canonical=url,
                     title=title,
@@ -88,7 +114,11 @@ def capture_message(
                 insert_url(db_path, url, key, today)
             else:
                 key = existing["zotero_key"]
-                zotero.add_tags(key, [seen_tag, context_tag, project_tag])
+                zotero.add_tags(
+                    key,
+                    [seen_tag, context_tag, project_tag],
+                    title_resolver=make_title_resolver(url),
+                )
                 result.urls_recurring += 1
                 update_last_seen(db_path, url, today)
         except ZoteroError as e:
