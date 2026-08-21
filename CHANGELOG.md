@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.0 — 2026-08-21
+
+- **`backfill_titles.py --prune`** sweeps the exclusion rules back over items
+  captured before those rules existed. `is_excluded` stays the single definition
+  of what is not a source, so a rule added later needs no second list.
+  Items are moved to the Zotero **trash**, not deleted — the collection is a
+  provenance record, so a bulk cleanup has to be reversible. Pair with
+  `--dry-run` first; it prints every URL it would remove.
+
 ## 0.5.0 — 2026-08-21
 
 - **Give the version one source of truth.** Four copies disagreed —

@@ -183,6 +183,34 @@ class ZoteroClient:
             )
         return True
 
+    def trash_item(self, item_key: str) -> None:
+        """Move an item to the Zotero trash.
+
+        Deliberately not delete_item: the API's DELETE is permanent, while
+        `deleted: 1` leaves the item recoverable from the trash in any Zotero
+        client. Anything that removes items in bulk should be undoable.
+        """
+        resp = self._client.get(f"/items/{item_key}")
+        if resp.status_code == 404:
+            return  # already gone, idempotent
+        if resp.status_code >= 400:
+            raise ZoteroError(
+                f"GET /items/{item_key} failed: {resp.status_code} {resp.text}"
+            )
+        version = resp.headers.get("Last-Modified-Version") or str(
+            resp.json().get("version", 0)
+        )
+        resp = self._client.patch(
+            f"/items/{item_key}",
+            json={"deleted": 1},
+            headers={"If-Unmodified-Since-Version": version},
+        )
+        if resp.status_code not in (204, 404):
+            raise ZoteroError(
+                f"PATCH /items/{item_key} (trash) failed: "
+                f"{resp.status_code} {resp.text}"
+            )
+
     def delete_item(self, item_key: str) -> None:
         resp = self._client.get(f"/items/{item_key}")
         if resp.status_code == 404:
