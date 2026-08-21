@@ -89,6 +89,29 @@ def test_extract_strips_backtick_fence():
         ("http://[fe80::1]/", True),
         ("http://[fc00::1]/", True),
         ("https://[2606:4700:4700::1111]/", False),
+        # Infrastructure hosts: fonts, DoH endpoints, analytics beacons. These are
+        # never sources — they are machinery a page loaded, captured incidentally.
+        ("https://fonts.googleapis.com/css2?family=Inter", True),
+        ("https://fonts.gstatic.com/s/inter/v12/x.woff2", True),
+        ("https://cloudflare-dns.com/dns-query?name=example.com", True),
+        ("https://mozilla.cloudflare-dns.com/dns-query", True),
+        ("https://dns.google/resolve?name=example.com", True),
+        ("https://static.cloudflareinsights.com/beacon.min.js", True),
+        # Asset paths: the bytes a page references, not the page itself.
+        ("https://inaturalist-open-data.s3.amazonaws.com/photos/28969484/medium.jpg", True),
+        ("https://upload.wikimedia.org/wikipedia/commons/3/3e/A_rose_bush.jpg", True),
+        ("https://raw.githubusercontent.com/musharna/stackhealth/main/stackhealth.py", False),
+        ("https://example.com/theme.css", True),
+        ("https://example.com/bundle.min.js", True),
+        ("https://example.com/logo.SVG", True),
+        # Negative controls: HTML pages whose path merely ends in an asset
+        # extension. Both resolved to real titles in production, so a naive
+        # extension match would silently drop genuine sources.
+        ("https://github.com/mrdoob/three.js/blob/dev/examples/jsm/loaders/GLTFLoader.js", False),
+        ("https://github.com/musharna/stackhealth/actions/workflows/smoke.yml/badge.svg", False),
+        ("https://commons.wikimedia.org/wiki/File:Glycine_max_kz01.jpg", False),
+        # A query string must not smuggle an asset extension past the check.
+        ("https://example.com/article?ref=x.css", False),
     ],
 )
 def test_is_excluded(url: str, excluded: bool):

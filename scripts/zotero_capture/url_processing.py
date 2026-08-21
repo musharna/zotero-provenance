@@ -31,6 +31,44 @@ TRACKING_PARAMS = frozenset(
 EXCLUDE_HOSTS_EXACT = frozenset({"localhost", "127.0.0.1", "0.0.0.0"})
 TS_NET_SUFFIX = ".ts.net"
 
+# Infrastructure a page pulled in, never a source anyone cited: font CDNs,
+# DNS-over-HTTPS endpoints, analytics beacons. These can never resolve to a
+# title, so without this they accumulate in the collection permanently.
+EXCLUDE_INFRA_HOSTS = frozenset(
+    {
+        "fonts.googleapis.com",
+        "fonts.gstatic.com",
+        "cloudflare-dns.com",
+        "mozilla.cloudflare-dns.com",
+        "dns.google",
+        "static.cloudflareinsights.com",
+    }
+)
+
+# The bytes a page references rather than the page itself.
+ASSET_EXTENSIONS = (
+    ".css",
+    ".js",
+    ".mjs",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".eot",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".svg",
+    ".ico",
+    ".webp",
+    ".map",
+)
+
+# Paths that are HTML pages despite ending in an asset extension — a GitHub blob
+# view, a workflow badge, a Wikimedia File: description page. Each of these
+# resolves to a real title, so the extension test must not claim them.
+PAGE_PATH_RE = re.compile(r"/(wiki|blob|tree|releases|actions)/", re.IGNORECASE)
+
 PRIVATE_RANGES = [
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
@@ -77,15 +115,28 @@ def extract_urls(text: str) -> list[str]:
     return seen
 
 
+def _is_asset_path(path: str) -> bool:
+    """True when the path points at an asset rather than a page.
+
+    Tests the path alone, so a query string like `?ref=x.css` cannot smuggle an
+    extension past the check.
+    """
+    if PAGE_PATH_RE.search(path):
+        return False
+    return path.lower().endswith(ASSET_EXTENSIONS)
+
+
 def is_excluded(url: str) -> bool:
-    """Drop localhost, tailnet, private-IP URLs (spec Section 4 step 3)."""
+    """Drop localhost, tailnet, private-IP, infrastructure and asset URLs."""
     parts = urlsplit(url)
     host = (parts.hostname or "").lower()
     if not host:
         return True
-    if host in EXCLUDE_HOSTS_EXACT:
+    if host in EXCLUDE_HOSTS_EXACT or host in EXCLUDE_INFRA_HOSTS:
         return True
     if host.endswith(TS_NET_SUFFIX):
+        return True
+    if _is_asset_path(parts.path or ""):
         return True
     try:
         ip = ipaddress.ip_address(host)
