@@ -39,6 +39,31 @@ TRACKING_PARAMS = frozenset(
 EXCLUDE_HOSTS_EXACT = frozenset({"localhost", "127.0.0.1", "0.0.0.0"})
 TS_NET_SUFFIX = ".ts.net"
 
+# Names the standards guarantee will never resolve to anything real, from the
+# IANA Special-Use Domain Names registry (RFC 6761, RFC 2606, RFC 6762, RFC 7686,
+# RFC 9476) plus .internal, which ICANN reserved for private use in 2024.
+#
+# This is the same class as the localhost and private-IP rules above: an address
+# that cannot be a source. It earns its place because fixture URLs are the
+# ecosystem's default use for these names — another project's security fixtures,
+# echoed into a session, landed in the citation library as real items.
+RESERVED_TLDS = frozenset(
+    {
+        "test",
+        "example",
+        "invalid",
+        "localhost",
+        "local",  # mDNS (RFC 6762)
+        "onion",  # Tor; unreachable without a Tor proxy (RFC 7686)
+        "alt",  # non-DNS namespaces (RFC 9476)
+        "arpa",  # infrastructure only, never a document
+        "internal",  # ICANN private-use delegation, 2024
+    }
+)
+
+# RFC 2606 reserved these second-level names for documentation specifically.
+RESERVED_DOMAINS = frozenset({"example.com", "example.net", "example.org"})
+
 # Infrastructure a page pulled in, never a source anyone cited: font CDNs,
 # DNS-over-HTTPS endpoints, analytics beacons. These can never resolve to a
 # title, so without this they accumulate in the collection permanently.
@@ -123,6 +148,19 @@ def extract_urls(text: str) -> list[str]:
     return seen
 
 
+def _is_reserved_name(host: str) -> bool:
+    """True for a name the standards reserve, so it can never be a real source.
+
+    Matches on label boundaries, never as a substring: "myexample.com" and
+    "example.com.evil.co" are ordinary registrable hosts and must survive.
+    """
+    if host.rpartition(".")[2] in RESERVED_TLDS:
+        return True
+    return any(
+        host == name or host.endswith(f".{name}") for name in RESERVED_DOMAINS
+    )
+
+
 def _is_asset_path(path: str) -> bool:
     """True when the path points at an asset rather than a page.
 
@@ -135,7 +173,7 @@ def _is_asset_path(path: str) -> bool:
 
 
 def is_excluded(url: str) -> bool:
-    """Drop localhost, tailnet, private-IP, infrastructure and asset URLs."""
+    """Drop localhost, tailnet, private-IP, reserved-name, infrastructure and asset URLs."""
     parts = urlsplit(url)
     host = (parts.hostname or "").lower()
     if not host:
@@ -143,6 +181,8 @@ def is_excluded(url: str) -> bool:
     if host in EXCLUDE_HOSTS_EXACT or host in EXCLUDE_INFRA_HOSTS:
         return True
     if host.endswith(TS_NET_SUFFIX):
+        return True
+    if _is_reserved_name(host):
         return True
     if _is_asset_path(parts.path or ""):
         return True

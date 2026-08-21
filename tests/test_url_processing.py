@@ -153,6 +153,36 @@ def test_extract_strips_sentence_punctuation_after_a_balanced_paren():
         ("https://commons.wikimedia.org/wiki/File:Glycine_max_kz01.jpg", False),
         # A query string must not smuggle an asset extension past the check.
         ("https://fixturehost.org/article?ref=x.css", False),
+        # Reserved names (IANA Special-Use Domain Names registry, RFC 6761 /
+        # RFC 2606). Standards guarantee these never resolve to anything real,
+        # so they can never be a source. They matter because test fixtures
+        # across the ecosystem use them: another project's fixture URLs, echoed
+        # into a session, became five real rows in the citation library.
+        ("https://example.com/licenses/by/4.0", True),
+        ("https://example.net/x", True),
+        ("https://example.org/x", True),
+        ("https://evil.example.com", True),
+        ("https://anything.example/x", True),
+        ("https://foo.test/x", True),
+        ("https://foo.invalid/x", True),
+        ("https://api.localhost/x", True),
+        ("https://printer.local/x", True),
+        ("https://home.arpa/x", True),
+        ("https://foo.alt/x", True),
+        ("https://wiki.internal/x", True),
+        ("https://abc123.onion/x", True),
+        # The userinfo-@-host spoof the fixtures were probing: the real host is
+        # after the "@", so a reader skimming the URL sees creativecommons.org
+        # while the request goes to evil.example.com.
+        ("http://creativecommons.org@evil.example.com/licenses/by/4.0", True),
+        ("https://creativecommons.org:8080@evil.example.com/licenses/by/4.0", True),
+        # Negative controls against matching a reserved name as a substring.
+        # Every one of these is a perfectly ordinary registrable host.
+        ("https://example.com.evil.co/x", False),
+        ("https://myexample.com/x", False),
+        ("https://contest.com/x", False),
+        ("https://localhostage.com/x", False),
+        ("https://internal-affairs.gov/x", False),
     ],
 )
 def test_is_excluded(url: str, excluded: bool):

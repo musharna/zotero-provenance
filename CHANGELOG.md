@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.0 — 2026-08-21
+
+- **Give the version one source of truth.** Four copies disagreed —
+  `plugin.json` at 0.4.0, the package `__version__` at 0.1.0, and three
+  User-Agent strings at 0.4, 0.1 and 0.1. Version and UA are now defined once in
+  the package, and a test fails the build when they drift from the manifest.
+- **Drop names the standards reserve.** `example.com`/`.net`/`.org` and the
+  reserved TLDs (`.test`, `.example`, `.invalid`, `.localhost`, `.local`,
+  `.onion`, `.alt`, `.arpa`, `.internal`) can never be a real source, and they
+  are exactly what test fixtures use — five rows in the library came from
+  another project's security fixtures being echoed into a session. Matching is
+  on label boundaries, so `myexample.com` and `example.com.evil.co` survive.
+- Test fixtures moved off `example.com` (and the end-to-end fixture off
+  `.invalid`) so the suite still exercises the capture path it is testing.
+
 ## 0.4.0 — 2026-08-21
 
 Backfilled entry. This release is about what the capture path should *never*
