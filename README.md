@@ -141,6 +141,14 @@ beacons, and URLs whose path ends in an asset extension (`.css`, `.js`, `.png`,
 never resolve to a title. Paths that are genuine pages despite the extension — a
 GitHub `/blob/` view, a Wikimedia `/wiki/File:` page — are kept.
 
+Names the standards reserve are dropped: `example.com`, `example.net`,
+`example.org`, and anything under `.test`, `.example`, `.invalid`, `.localhost`,
+`.local`, `.onion`, `.alt`, `.arpa` or `.internal`. None of them can resolve to a
+real document, and they are what test fixtures use — without this rule another
+project's fixture URLs become citations the moment its test output is echoed
+into a session. Matching is on label boundaries, so ordinary hosts that merely
+contain a reserved name (`myexample.com`, `example.com.evil.co`) are kept.
+
 ## Known limitations
 
 - **Sessions bridged with `/remote-control` do not fire local `Stop` hooks**, so nothing

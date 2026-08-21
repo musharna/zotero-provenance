@@ -34,8 +34,8 @@ def test_parser_capture_mode():
 
 def test_parser_triage_mode():
     parser = build_parser()
-    args = parser.parse_args(["--triage", "https://example.com/foo"])
-    assert args.triage == "https://example.com/foo"
+    args = parser.parse_args(["--triage", "https://fixturehost.org/foo"])
+    assert args.triage == "https://fixturehost.org/foo"
 
 
 def test_parser_derives_project_from_cwd_when_not_given():
@@ -48,7 +48,7 @@ def test_run_triage_when_url_unknown_returns_two(tmp_db: Path):
     init_db(tmp_db)
     fake_zotero = MagicMock()
     rc = run_triage(
-        url="https://example.com/missing",
+        url="https://fixturehost.org/missing",
         db_path=tmp_db,
         zotero=fake_zotero,
     )
@@ -59,12 +59,12 @@ def test_run_triage_when_url_unknown_returns_two(tmp_db: Path):
 def test_run_triage_adds_tag_when_url_known(tmp_db: Path):
     init_db(tmp_db)
     insert_url(
-        tmp_db, "https://example.com/foo", "EXISTKEY", first_seen=date(2026, 5, 1)
+        tmp_db, "https://fixturehost.org/foo", "EXISTKEY", first_seen=date(2026, 5, 1)
     )
     fake_zotero = MagicMock()
     fake_zotero.add_tags.return_value = True
     rc = run_triage(
-        url="https://example.com/foo",
+        url="https://fixturehost.org/foo",
         db_path=tmp_db,
         zotero=fake_zotero,
     )
@@ -76,11 +76,11 @@ def test_run_triage_matches_a_non_canonical_url(tmp_db: Path):
     """The user pastes the URL they saw, which may carry tracking params."""
     init_db(tmp_db)
     insert_url(
-        tmp_db, "https://example.com/foo", "EXISTKEY", first_seen=date(2026, 5, 1)
+        tmp_db, "https://fixturehost.org/foo", "EXISTKEY", first_seen=date(2026, 5, 1)
     )
     fake_zotero = MagicMock()
     rc = run_triage(
-        url="https://Example.com/foo/?utm_source=newsletter#section",
+        url="https://Fixturehost.org/foo/?utm_source=newsletter#section",
         db_path=tmp_db,
         zotero=fake_zotero,
     )
@@ -92,7 +92,7 @@ def test_run_capture_reads_message_from_stdin(tmp_db: Path, monkeypatch):
     init_db(tmp_db)
     fake_zotero = MagicMock()
     fake_zotero.post_webpage_item.return_value = "NEWKEY"
-    monkeypatch.setattr("sys.stdin", io.StringIO("see https://example.com/foo"))
+    monkeypatch.setattr("sys.stdin", io.StringIO("see https://fixturehost.org/foo"))
     result = run_capture(
         message=None,
         project="home",
@@ -131,7 +131,7 @@ def test_run_capture_does_not_enqueue_failures(tmp_db: Path):
     log_path = tmp_db.parent / "log.jsonl"
 
     result = run_capture(
-        message="see https://example.com/foo and https://example.com/bar",
+        message="see https://fixturehost.org/foo and https://fixturehost.org/bar",
         project="home",
         context=None,
         today=date(2026, 5, 5),

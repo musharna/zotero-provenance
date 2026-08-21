@@ -23,10 +23,15 @@ from conftest import PLUGIN_ROOT
 
 STOP_HOOK = PLUGIN_ROOT / "hooks" / "capture-stop.sh"
 
-# .invalid never resolves, so the title fetch fails instantly instead of
-# reaching the network and spending its one-second budget.
-CAPTURED_URL = "https://zp-e2e.invalid/paper?utm_source=news#intro"
-CANONICAL_URL = "https://zp-e2e.invalid/paper"
+# This host must not resolve, so the title fetch fails instantly instead of
+# reaching the network and spending the hook's one-second budget. It used to be
+# .invalid, which the standards guarantee never resolves — but capture now
+# excludes reserved names, so a .invalid URL would be dropped before it reached
+# any of the wiring this test exists to check. fixturehost.org is unregistered
+# and NXDOMAINs in ~0.1s, measured 2026-08-21. If it is ever registered this
+# test slows down rather than breaks, and the fix is to pick another free name.
+CAPTURED_URL = "https://zp-e2e.fixturehost.org/paper?utm_source=news#intro"
+CANONICAL_URL = "https://zp-e2e.fixturehost.org/paper"
 
 requires_jq = pytest.mark.skipif(shutil.which("jq") is None, reason="jq not installed")
 
@@ -150,7 +155,7 @@ def test_cited_url_becomes_a_tagged_zotero_item(tmp_path: Path, fake_zotero):
 
     tags = {t["tag"] for t in item["tags"]}
     assert "project:my-thesis" in tags, f"project tag missing from {tags}"
-    assert "domain:zp-e2e.invalid" in tags
+    assert "domain:zp-e2e.fixturehost.org" in tags
     assert any(t.startswith("seen:") for t in tags)
     assert any(t.startswith("context:") for t in tags)
 
