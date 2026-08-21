@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -12,6 +13,10 @@ import httpx
 logger = logging.getLogger(__name__)
 
 DEFAULT_API_BASE = "https://api.zotero.org"
+
+# Marks an item whose title could not be fetched, so the URL-as-fallback stays
+# recognisable as a failure instead of being mistaken for real metadata.
+UNRESOLVED_TITLE_TAG = "title:unresolved"
 
 
 def api_base() -> str:
@@ -104,21 +109,45 @@ class ZoteroClient:
             start += limit
         return items
 
-    def add_tags(self, item_key: str, new_tags: list[str]) -> bool:
-        """Idempotent: PATCH only if at least one tag is missing. Returns True if PATCH happened."""
+    def add_tags(
+        self,
+        item_key: str,
+        new_tags: list[str],
+        *,
+        title_resolver: Callable[[], str] | None = None,
+    ) -> bool:
+        """Idempotent: PATCH only if a tag is missing or an unresolved title got resolved.
+
+        `title_resolver` is a zero-arg callable invoked ONLY when the stored title is
+        still the URL-as-fallback sentinel. It reuses the GET this method already
+        performs, so re-enrichment costs no extra Zotero round-trip.
+        """
         resp = self._client.get(f"/items/{item_key}")
         if resp.status_code >= 400:
             raise ZoteroError(
                 f"GET /items/{item_key} failed: {resp.status_code} {resp.text}"
             )
         item = resp.json()
+        data = item.get("data", {})
         version = int(resp.headers.get("Last-Modified-Version", item.get("version", 0)))
-        existing_tags = {t["tag"] for t in item["data"].get("tags", [])}
+        existing_tags = {t["tag"] for t in data.get("tags", [])}
         to_add = [t for t in new_tags if t not in existing_tags]
-        if not to_add:
-            return False
         merged = existing_tags | set(new_tags)
-        patch_body = {"tags": [{"tag": t} for t in sorted(merged)]}
+
+        resolved_title: str | None = None
+        if title_resolver is not None and _title_is_unresolved(data, existing_tags):
+            candidate = title_resolver()
+            # The fetcher returns the URL itself when it fails; only a different,
+            # non-empty string counts as a real title.
+            if candidate and candidate != (data.get("url") or ""):
+                resolved_title = candidate
+                merged.discard(UNRESOLVED_TITLE_TAG)
+
+        if not to_add and resolved_title is None:
+            return False
+        patch_body: dict[str, Any] = {"tags": [{"tag": t} for t in sorted(merged)]}
+        if resolved_title is not None:
+            patch_body["title"] = resolved_title
         resp = self._client.patch(
             f"/items/{item_key}",
             json=patch_body,
@@ -150,6 +179,12 @@ class ZoteroClient:
             raise ZoteroError(
                 f"DELETE /items/{item_key} failed: {resp.status_code} {resp.text}"
             )
+
+
+def _title_is_unresolved(data: dict[str, Any], tags: set[str]) -> bool:
+    """True when the stored title is a fallback rather than real metadata."""
+    title = (data.get("title") or "").strip()
+    return not title or title == (data.get("url") or "") or UNRESOLVED_TITLE_TAG in tags
 
 
 def _domain(url: str) -> str:

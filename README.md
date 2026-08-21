@@ -21,6 +21,22 @@ Tags:   context:lit-review  project:my-thesis  seen:2026-08-20  domain:arxiv.org
 Cite the same URL three weeks later and the item is not duplicated — it gains a second
 `seen:` tag. That history is what `/source-delta` reads.
 
+### When the title can't be fetched
+
+Plenty of pages refuse a plain HTTP fetch — bot walls, JS-rendered markup, PDFs, dead
+links. When the title fetch fails, the item is stored with its URL as the title **and
+tagged `title:unresolved`**, so a failure stays recognisable instead of passing for real
+metadata. You can list the backlog by searching that tag in Zotero.
+
+The next time you cite the same URL, the title is fetched again and the item is corrected
+in place — the tag is dropped and the real title replaces the URL. This rides the Zotero
+read the recurrence path already performs, so it costs no extra API call. A transient
+failure therefore heals itself; only genuinely unfetchable pages keep the tag.
+
+At most three re-fetches are attempted per capture run, so a message citing many
+unfetchable URLs cannot blow the Stop hook's time budget. The rest are retried on
+later runs.
+
 ## Install
 
 ```
@@ -43,10 +59,10 @@ Requires `python3` (3.10+) with `httpx` and `beautifulsoup4`, plus `jq`.
 
 ## Commands
 
-| Command | What it does |
-|---|---|
-| `/zotero-setup` | First-run configuration. |
-| `/triage <url>` | Mark a captured URL as dealt with, so it stops being flagged as recurring. |
+| Command                   | What it does                                                                       |
+| ------------------------- | ---------------------------------------------------------------------------------- |
+| `/zotero-setup`           | First-run configuration.                                                           |
+| `/triage <url>`           | Mark a captured URL as dealt with, so it stops being flagged as recurring.         |
 | `/source-delta [context]` | Show which sources are new, persisting, recurring, or dropped since previous runs. |
 
 ## The source delta
@@ -62,19 +78,19 @@ Sources get bucketed by their `seen:` history:
 
 ## Configuration
 
-| Variable | Meaning |
-|---|---|
-| `ZOTERO_API_KEY` | Required. Key with write access. |
-| `ZOTERO_LIBRARY_ID` | Required. **No default** — a default would write into the wrong library. |
-| `ZOTERO_WEBSOURCES_COLLECTION_KEY` | Required. Target collection. |
-| `ZOTERO_LIBRARY_TYPE` | `user` (default) or `group`. |
-| `ZOTERO_CAPTURE_DISABLE=1` | Turn capture off entirely. |
-| `ZOTERO_CAPTURE_PROJECT` | Force the `project:` tag instead of deriving it. |
-| `ZOTERO_CAPTURE_PROJECT_ROOTS` | Extra path roots (`:`-separated) that projects live under. |
-| `ZOTERO_CAPTURE_STATE_DIR` | Where the dedup database and log live. |
-| `ZOTERO_SECRETS_FILE` | Alternate credentials file. |
-| `ZOTERO_PROVENANCE_PYTHON` | Interpreter to use, if the default `python3` lacks the deps. |
-| `ZOTERO_API_BASE` | Alternate API root, for tests or an API-compatible server. |
+| Variable                           | Meaning                                                                  |
+| ---------------------------------- | ------------------------------------------------------------------------ |
+| `ZOTERO_API_KEY`                   | Required. Key with write access.                                         |
+| `ZOTERO_LIBRARY_ID`                | Required. **No default** — a default would write into the wrong library. |
+| `ZOTERO_WEBSOURCES_COLLECTION_KEY` | Required. Target collection.                                             |
+| `ZOTERO_LIBRARY_TYPE`              | `user` (default) or `group`.                                             |
+| `ZOTERO_CAPTURE_DISABLE=1`         | Turn capture off entirely.                                               |
+| `ZOTERO_CAPTURE_PROJECT`           | Force the `project:` tag instead of deriving it.                         |
+| `ZOTERO_CAPTURE_PROJECT_ROOTS`     | Extra path roots (`:`-separated) that projects live under.               |
+| `ZOTERO_CAPTURE_STATE_DIR`         | Where the dedup database and log live.                                   |
+| `ZOTERO_SECRETS_FILE`              | Alternate credentials file.                                              |
+| `ZOTERO_PROVENANCE_PYTHON`         | Interpreter to use, if the default `python3` lacks the deps.             |
+| `ZOTERO_API_BASE`                  | Alternate API root, for tests or an API-compatible server.               |
 
 Hooks do not inherit MCP-scoped environment from `~/.claude.json`, which is why
 credentials come from the secrets file.

@@ -8,7 +8,12 @@ import os
 import httpx
 import pytest
 
-from zotero_capture.zotero_client import ZoteroClient, ZoteroError
+from zotero_capture.title_fetcher import fetch_title
+from zotero_capture.zotero_client import (
+    UNRESOLVED_TITLE_TAG,
+    ZoteroClient,
+    ZoteroError,
+)
 
 
 def test_post_webpage_item_returns_key():
@@ -258,3 +263,156 @@ def test_live_post_then_query_then_delete(live_zotero_creds: dict[str, str]):
     items = client.query_by_tag("context:test-poc")
     assert any(i["key"] == key for i in items)
     client.delete_item(key)
+
+
+def _stateful_item_client(state: dict, requests_made: list) -> ZoteroClient:
+    """A client backed by a single mutable item, recording every request."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        requests_made.append((req.method, str(req.url)))
+        if req.method == "GET":
+            return httpx.Response(
+                200,
+                headers={"Last-Modified-Version": str(state["version"])},
+                json={
+                    "key": "ITEM1",
+                    "version": state["version"],
+                    "data": {
+                        "version": state["version"],
+                        "title": state["title"],
+                        "url": state["url"],
+                        "tags": [{"tag": t} for t in state["tags"]],
+                    },
+                },
+            )
+        if req.method == "PATCH":
+            body = json.loads(req.content)
+            state["patch"] = body
+            if "tags" in body:
+                state["tags"] = [t["tag"] for t in body["tags"]]
+            if "title" in body:
+                state["title"] = body["title"]
+            state["version"] += 1
+            return httpx.Response(204)
+        return httpx.Response(405)
+
+    return ZoteroClient(
+        api_key="fake",
+        library_id="0000",
+        library_type="group",
+        web_sources_collection_key="COLL123",
+        transport=httpx.MockTransport(handler),
+    )
+
+
+def test_add_tags_reenriches_an_unresolved_title():
+    """A stored URL-as-title is a failure marker; a later resolve must correct it."""
+    state = {
+        "version": 5,
+        "title": "https://example.com/foo",  # == url, i.e. the fallback sentinel
+        "url": "https://example.com/foo",
+        "tags": ["context:general", "title:unresolved"],
+    }
+    client = _stateful_item_client(state, [])
+    client.add_tags("ITEM1", ["seen:2026-05-05"], title_resolver=lambda: "Real Title")
+
+    assert state["title"] == "Real Title"
+    assert "title:unresolved" not in state["tags"]
+
+
+def test_add_tags_does_not_refetch_an_already_resolved_title():
+    calls = []
+    state = {
+        "version": 5,
+        "title": "Real Title",
+        "url": "https://example.com/foo",
+        "tags": ["context:general"],
+    }
+    client = _stateful_item_client(state, [])
+
+    def resolver() -> str:
+        calls.append(1)
+        return "Should Not Be Used"
+
+    client.add_tags("ITEM1", ["seen:2026-05-05"], title_resolver=resolver)
+    assert calls == [], (
+        "must not spend an HTTP fetch on an item that already has a title"
+    )
+    assert state["title"] == "Real Title"
+
+
+def test_add_tags_keeps_unresolved_tag_when_resolution_fails_again():
+    state = {
+        "version": 5,
+        "title": "https://example.com/foo",
+        "url": "https://example.com/foo",
+        "tags": ["context:general", "title:unresolved"],
+    }
+    client = _stateful_item_client(state, [])
+    # Resolver returns the URL again -> still unfetchable.
+    client.add_tags(
+        "ITEM1", ["seen:2026-05-05"], title_resolver=lambda: "https://example.com/foo"
+    )
+
+    assert state["title"] == "https://example.com/foo"
+    assert "title:unresolved" in state["tags"]
+
+
+def test_add_tags_patches_title_even_when_no_tags_are_new():
+    """The no-new-tags early return must not skip a pending title correction."""
+    state = {
+        "version": 5,
+        "title": "https://example.com/foo",
+        "url": "https://example.com/foo",
+        "tags": ["context:general", "seen:2026-05-05", "title:unresolved"],
+    }
+    requests_made: list = []
+    client = _stateful_item_client(state, requests_made)
+    patched = client.add_tags(
+        "ITEM1", ["seen:2026-05-05"], title_resolver=lambda: "Real Title"
+    )
+
+    assert patched is True
+    assert "PATCH" in [m for m, _ in requests_made]
+    assert state["title"] == "Real Title"
+
+
+@pytest.mark.live
+def test_live_unresolved_title_is_reenriched(live_zotero_creds: dict[str, str]):
+    """Real-execution check: a real HTTP title fetch correcting a real Zotero item.
+
+    Every other re-enrichment test stubs the transport. This one drives the actual
+    network fetch and the actual Zotero PATCH, so a break in either is caught.
+    """
+    coll_key = os.environ.get("ZOTERO_WEBSOURCES_COLLECTION_KEY_TEST")
+    if not coll_key:
+        pytest.skip("ZOTERO_WEBSOURCES_COLLECTION_KEY_TEST not set")
+
+    url = "https://example.com/"
+    probe_tag = "context:test-reenrich"
+    client = ZoteroClient(
+        api_key=live_zotero_creds["api_key"],
+        library_id=live_zotero_creds["library_id"],
+        library_type=live_zotero_creds["library_type"],
+        web_sources_collection_key=coll_key,
+    )
+    # Stored exactly as a failed capture stores it: URL as title, marked unresolved.
+    key = client.post_webpage_item(
+        url_canonical=url,
+        title=url,
+        access_date="2026-08-21",
+        tags=[probe_tag, UNRESOLVED_TITLE_TAG],
+    )
+    try:
+        patched = client.add_tags(
+            key, ["seen:2026-08-21"], title_resolver=lambda: fetch_title(url)
+        )
+        assert patched is True
+
+        stored = next(i for i in client.query_by_tag(probe_tag) if i["key"] == key)
+        assert stored["data"]["title"] == "Example Domain"
+        assert UNRESOLVED_TITLE_TAG not in {
+            t["tag"] for t in stored["data"].get("tags", [])
+        }
+    finally:
+        client.delete_item(key)
