@@ -20,7 +20,11 @@ MAX_BYTES = 32 * 1024
 
 _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 
-_USER_AGENT = "zotero-provenance/0.1"
+# Wikimedia (and Crossref/NCBI as a courtesy) reject a User-Agent that carries no
+# way to contact the operator: verified 2026-08-21, both "zotero-provenance/0.1"
+# and a plain "Mozilla/5.0" get 403 from en.wikipedia.org while this string gets
+# 200. The project URL is the contact point — deliberately not a personal email.
+_USER_AGENT = "zotero-provenance/0.4 (+https://github.com/musharna/zotero-provenance)"
 
 # Some hosts serve identifiers, not web pages: a DOI, an arXiv id, a PMID, a repo
 # path. Each has an authoritative metadata API, and the HTML behind it is slower

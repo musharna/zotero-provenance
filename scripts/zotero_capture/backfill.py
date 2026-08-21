@@ -12,6 +12,7 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 from .zotero_client import ZoteroClient, title_is_unresolved
 
@@ -38,9 +39,16 @@ def backfill(
     dry_run: bool = False,
     limit: int | None = None,
     sleep_s: float = DEFAULT_SLEEP_S,
+    hosts: set[str] | None = None,
     progress: Callable[[BackfillResult], None] | None = None,
 ) -> BackfillResult:
-    """Re-attempt the title of every unresolved item in the collection."""
+    """Re-attempt the title of every unresolved item in the collection.
+
+    `hosts` restricts the pass to those hostnames. Most of the backlog is
+    structurally unfetchable (publisher WAFs, dead links), so after a fix that
+    only helps one host, re-fetching everything spends thousands of requests to
+    change a few dozen items.
+    """
     result = BackfillResult()
     for item in zotero.iter_collection_items():
         if limit is not None and result.examined >= limit:
@@ -51,6 +59,8 @@ def backfill(
             continue
         url = data.get("url") or ""
         if not url:
+            continue
+        if hosts is not None and (urlsplit(url).hostname or "").lower() not in hosts:
             continue
         result.examined += 1
         try:
