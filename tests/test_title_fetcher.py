@@ -173,10 +173,23 @@ def test_non_doi_url_is_not_content_negotiated():
     assert not any(CSL_ACCEPT in a for a in seen), "only DOIs should negotiate"
 
 
+@pytest.fixture
+def live_client():
+    """Live identifier tests verify the API integration, not the hook's 1s budget.
+
+    Sharing a generous client keeps a slow-but-working API from failing the suite;
+    the 1s budget itself is covered by the mocked tests above.
+    """
+    with httpx.Client(timeout=8.0, follow_redirects=True) as c:
+        yield c
+
+
 @pytest.mark.live
-def test_live_real_doi_resolves_to_its_article_title():
+def test_live_real_doi_resolves_to_its_article_title(live_client):
     """Real-execution check: the plugin's own User-Agent against the real DOI resolver."""
-    title = fetch_title("https://doi.org/10.1371/journal.pcbi.1009935")
+    title = fetch_title(
+        "https://doi.org/10.1371/journal.pcbi.1009935", client=live_client
+    )
     assert "functional enrichment analysis" in title.lower(), title
 
 
@@ -271,34 +284,34 @@ def test_dead_github_repo_still_falls_back_to_the_url():
 
 
 @pytest.mark.live
-def test_live_arxiv_resolves_to_the_paper_title():
+def test_live_arxiv_resolves_to_the_paper_title(live_client):
     # The API is the intended path, but if it exceeds the 1s budget the abs-page
     # scrape returns "[id] Title" — both are acceptable resolutions, neither is the URL.
-    title = fetch_title("https://arxiv.org/abs/1706.03762")
+    title = fetch_title("https://arxiv.org/abs/1706.03762", client=live_client)
     assert "Attention Is All You Need" in title, title
 
 
 @pytest.mark.live
-def test_live_pubmed_resolves_to_the_article_title():
-    title = fetch_title("https://pubmed.ncbi.nlm.nih.gov/22817898/")
+def test_live_pubmed_resolves_to_the_article_title(live_client):
+    title = fetch_title("https://pubmed.ncbi.nlm.nih.gov/22817898/", client=live_client)
     assert "whole-cell computational model" in title.lower(), title
 
 
 @pytest.mark.live
-def test_live_github_resolves_to_owner_repo():
-    title = fetch_title("https://github.com/psf/requests")
+def test_live_github_resolves_to_owner_repo(live_client):
+    title = fetch_title("https://github.com/psf/requests", client=live_client)
     assert title.startswith("psf/requests"), title
 
 
 @pytest.mark.live
-def test_live_dead_github_repo_stays_unresolved():
+def test_live_dead_github_repo_stays_unresolved(live_client):
     """Positive control for the negative: a live 404 must not invent a title."""
     url = "https://github.com/musharna/definitely-not-a-real-repo-zp"
-    assert fetch_title(url) == url
+    assert fetch_title(url, client=live_client) == url
 
 
 @pytest.mark.live
-def test_live_arxiv_pdf_link_resolves_via_the_api():
+def test_live_arxiv_pdf_link_resolves_via_the_api(live_client):
     """122 of 128 arXiv items in the backlog are /pdf/ links, which never scrape."""
-    title = fetch_title("https://arxiv.org/pdf/1706.03762")
+    title = fetch_title("https://arxiv.org/pdf/1706.03762", client=live_client)
     assert "Attention Is All You Need" in title, title
