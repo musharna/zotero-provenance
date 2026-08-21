@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from urllib.parse import urlsplit
 
 import httpx
 from bs4 import BeautifulSoup
@@ -15,6 +16,36 @@ DEFAULT_TIMEOUT_S = 1.0
 MAX_BYTES = 32 * 1024
 
 _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+
+_USER_AGENT = "zotero-provenance/0.1"
+
+# A DOI is an identifier with an authoritative metadata API, not a web page. The
+# publisher HTML behind it is slower (3-4 redirects) and frequently bot-walled,
+# so ask the resolver for metadata directly instead of scraping what it lands on.
+_DOI_HOSTS = frozenset({"doi.org", "dx.doi.org", "www.doi.org"})
+_CSL_ACCEPT = "application/vnd.citationstyles.csl+json"
+
+
+def _doi_title(client: httpx.Client, url: str) -> str | None:
+    """Ask the DOI resolver for citation metadata. None if it can't be had."""
+    try:
+        resp = client.get(
+            url,
+            headers={"User-Agent": _USER_AGENT, "Accept": _CSL_ACCEPT},
+            follow_redirects=True,
+        )
+        if resp.status_code >= 400:
+            return None
+        title = resp.json().get("title")
+    except Exception as e:  # malformed JSON, transport failure, timeout
+        logger.debug("DOI content negotiation failed for %s: %s", url, e)
+        return None
+    # CSL allows a list of title forms; the first is the primary one.
+    if isinstance(title, list):
+        title = title[0] if title else None
+    if isinstance(title, str) and title.strip():
+        return title.strip()
+    return None
 
 
 def fetch_title(url: str, *, client: httpx.Client | None = None) -> str:
@@ -31,9 +62,13 @@ def fetch_title(url: str, *, client: httpx.Client | None = None) -> str:
         if client is None:
             client = httpx.Client(timeout=DEFAULT_TIMEOUT_S, follow_redirects=True)
         deadline = time.monotonic() + DEFAULT_TIMEOUT_S
-        with client.stream(
-            "GET", url, headers={"User-Agent": "zotero-provenance/0.1"}
-        ) as resp:
+        if (urlsplit(url).hostname or "").lower() in _DOI_HOSTS:
+            doi_title = _doi_title(client, url)
+            if doi_title:
+                return doi_title
+            # Negotiation is an optimisation, not a new point of failure: fall
+            # through and scrape the landing page as before.
+        with client.stream("GET", url, headers={"User-Agent": _USER_AGENT}) as resp:
             if resp.status_code >= 400:
                 return url
             ctype = resp.headers.get("content-type", "")

@@ -114,3 +114,67 @@ def test_fetch_title_returns_url_on_4xx():
             fetch_title("https://example.com/missing", client=client)
             == "https://example.com/missing"
         )
+
+
+DOI_URL = "https://doi.org/10.1371/journal.pcbi.1009935"
+CSL_ACCEPT = "application/vnd.citationstyles.csl+json"
+
+
+def test_doi_is_resolved_by_content_negotiation_not_by_scraping():
+    """A DOI is an identifier with a metadata API, not a web page."""
+    seen: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(req.headers.get("accept", ""))
+        if CSL_ACCEPT in req.headers.get("accept", ""):
+            return httpx.Response(200, json={"title": "Consistent standards"})
+        return httpx.Response(
+            200,
+            html="<html><title>Publisher Landing Page</title></html>",
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        assert fetch_title(DOI_URL, client=client) == "Consistent standards"
+    assert any(CSL_ACCEPT in a for a in seen), "should have negotiated for CSL JSON"
+
+
+def test_doi_csl_title_given_as_a_list_is_flattened():
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"title": ["First Form", "Alt Form"]})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        assert fetch_title(DOI_URL, client=client) == "First Form"
+
+
+def test_doi_falls_back_to_html_when_negotiation_fails():
+    """Content negotiation is an optimisation, not a new single point of failure."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if CSL_ACCEPT in req.headers.get("accept", ""):
+            return httpx.Response(503)
+        return httpx.Response(
+            200,
+            html="<html><title>Publisher Landing Page</title></html>",
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        assert fetch_title(DOI_URL, client=client) == "Publisher Landing Page"
+
+
+def test_non_doi_url_is_not_content_negotiated():
+    seen: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(req.headers.get("accept", ""))
+        return httpx.Response(200, html="<html><title>Ordinary Page</title></html>")
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        assert fetch_title("https://example.com/page", client=client) == "Ordinary Page"
+    assert not any(CSL_ACCEPT in a for a in seen), "only DOIs should negotiate"
+
+
+@pytest.mark.live
+def test_live_real_doi_resolves_to_its_article_title():
+    """Real-execution check: the plugin's own User-Agent against the real DOI resolver."""
+    title = fetch_title("https://doi.org/10.1371/journal.pcbi.1009935")
+    assert "functional enrichment analysis" in title.lower(), title

@@ -21,6 +21,14 @@ Tags:   context:lit-review  project:my-thesis  seen:2026-08-20  domain:arxiv.org
 Cite the same URL three weeks later and the item is not duplicated — it gains a second
 `seen:` tag. That history is what `/source-delta` reads.
 
+### DOIs
+
+`doi.org` links are not scraped. A DOI is an identifier with an authoritative metadata
+API, so the resolver is asked for citation metadata directly and the article's real title
+is stored. This is both faster than following the DOI to a publisher page and far more
+reliable — publisher sites are the most aggressively bot-walled pages the plugin meets.
+If negotiation fails for any reason, the ordinary scrape still runs as a fallback.
+
 ### When the title can't be fetched
 
 Plenty of pages refuse a plain HTTP fetch — bot walls, JS-rendered markup, PDFs, dead
