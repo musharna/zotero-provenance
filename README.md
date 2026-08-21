@@ -135,6 +135,12 @@ separate from ordinary browsing.
 dashboards and local dev servers never reach your library. Tracking parameters
 (`utm_*`, `fbclid`, `gclid`, …) are stripped before storing.
 
+Page machinery is dropped too: font CDNs, DNS-over-HTTPS endpoints, analytics
+beacons, and URLs whose path ends in an asset extension (`.css`, `.js`, `.png`,
+`.svg`, …). These are things a page loaded, not sources anyone cited, and they can
+never resolve to a title. Paths that are genuine pages despite the extension — a
+GitHub `/blob/` view, a Wikimedia `/wiki/File:` page — are kept.
+
 ## Known limitations
 
 - **Sessions bridged with `/remote-control` do not fire local `Stop` hooks**, so nothing
