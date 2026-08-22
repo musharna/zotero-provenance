@@ -81,6 +81,21 @@ class ZoteroClient:
             )
         return not (resp.json().get("data", {}).get("deleted"))
 
+    def get_item_tags(self, item_key: str) -> list[str]:
+        """Every tag on an item, or none if it is already gone.
+
+        Used when retiring a duplicate: its tags are the sighting history this
+        plugin exists to keep, so they move to the survivor before it is trashed.
+        """
+        resp = self._client.get(f"/items/{item_key}")
+        if resp.status_code == 404:
+            return []
+        if resp.status_code >= 400:
+            raise ZoteroError(
+                f"GET /items/{item_key} failed: {resp.status_code} {resp.text}"
+            )
+        return [t["tag"] for t in resp.json().get("data", {}).get("tags", [])]
+
     def post_webpage_item(
         self,
         *,
