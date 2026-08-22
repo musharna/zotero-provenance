@@ -5,16 +5,19 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from .sqlite_cache import (
     init_db,
+    new_zotero_key,
+    queue_pending_tags,
     lookup_url,
     release_url,
     reserve_url,
     set_zotero_key,
+    take_pending_tags,
     update_last_seen,
 )
 from .url_processing import (
@@ -33,6 +36,11 @@ DEFAULT_CONTEXT = "general"
 # HTTP request inside the Stop hook's few-second budget; unspent retries simply
 # happen on a later run, since an unresolved title stays marked until it resolves.
 MAX_REENRICH_PER_RUN = 3
+
+# How long a reservation must sit untouched before another run may question it.
+# Comfortably beyond the hook's own 10s timeout, so a POST that is merely slow is
+# never mistaken for one that was abandoned.
+STALE_CLAIM_S = 60.0
 
 
 @dataclass
@@ -72,6 +80,46 @@ def _is_generated_report(message: str, origin: str) -> bool:
     return origin == "assistant" and message.lstrip().startswith(NO_CAPTURE_MARKER)
 
 
+def _resolve_claim(
+    row: dict,
+    *,
+    url: str,
+    db_path: Path,
+    zotero: ZoteroClient,
+    now: datetime,
+) -> dict | None:
+    """Settle a reservation that never completed. None means "claim it afresh".
+
+    An abandoned claim is ambiguous on its face — the POST may have committed
+    before the response was lost — so a timeout alone cannot decide it. Because
+    the key was chosen before the request went out, Zotero can be asked directly:
+    if the item is there the claim completes, and if it is not the claim is
+    released so this run can retry.
+
+    A claim younger than STALE_CLAIM_S is left strictly alone. That is another
+    session's POST still in flight, well inside the hook's own 10s budget, and
+    questioning it is how two items get created for one URL.
+    """
+    claimed_at = row.get("claimed_at") or ""
+    pending_key = row.get("pending_key") or ""
+    if not claimed_at or not pending_key:
+        # Predates the recoverable protocol; nothing to ask Zotero about.
+        return row
+    try:
+        age = (now - datetime.fromisoformat(claimed_at)).total_seconds()
+    except ValueError:
+        return row
+    if age < STALE_CLAIM_S:
+        return row
+    if zotero.item_exists(pending_key):
+        logger.info("recovered %s: item %s exists, completing claim", url, pending_key)
+        set_zotero_key(db_path, url, pending_key)
+        return lookup_url(db_path, url)
+    logger.info("releasing stale claim on %s: %s was never created", url, pending_key)
+    release_url(db_path, url)
+    return None
+
+
 def capture_message(
     *,
     message: str,
@@ -82,9 +130,11 @@ def capture_message(
     zotero: ZoteroClient,
     title_fetcher: Callable[[str], str],
     origin: str = "assistant",
+    now: datetime | None = None,
 ) -> CaptureResult:
     """Process one message: extract URLs, then create or re-tag each in Zotero."""
     init_db(db_path)
+    now = now or datetime.now(timezone.utc)
     result = CaptureResult()
     if _is_generated_report(message, origin):
         return result
@@ -131,47 +181,61 @@ def capture_message(
     for url in canonicals:
         try:
             existing = lookup_url(db_path, url)
-            if existing is None and reserve_url(db_path, url, today):
-                # Claimed before the network call, so a second session cannot
-                # also decide this URL is new while the POST is in flight and
-                # create a duplicate item that dedup could never see again.
-                try:
-                    title = title_fetcher(url)
-                    tags = [
-                        context_tag,
-                        project_tag,
-                        seen_tag,
-                        f"domain:{_domain(url)}",
-                    ]
-                    if title == url:
-                        tags.append(UNRESOLVED_TITLE_TAG)
-                    key = zotero.post_webpage_item(
-                        url_canonical=url,
-                        title=title,
-                        access_date=today_iso,
-                        tags=tags,
-                    )
-                except BaseException:
-                    # No item was created, so the claim must not outlive the
-                    # attempt or the URL would be permanently undedupable.
-                    release_url(db_path, url)
-                    raise
-                set_zotero_key(db_path, url, key)
-                result.urls_new += 1
-                continue
+            if existing is not None and not existing["zotero_key"]:
+                existing = _resolve_claim(
+                    existing, url=url, db_path=db_path, zotero=zotero, now=now
+                )
+            if existing is None:
+                pending_key = new_zotero_key()
+                if reserve_url(db_path, url, today, pending_key=pending_key, now=now):
+                    # Claimed before the network call, so a second session cannot
+                    # also decide this URL is new while the POST is in flight and
+                    # create a duplicate item that dedup could never see again.
+                    issued = False
+                    try:
+                        title = title_fetcher(url)
+                        tags = [
+                            context_tag,
+                            project_tag,
+                            seen_tag,
+                            f"domain:{_domain(url)}",
+                        ]
+                        if title == url:
+                            tags.append(UNRESOLVED_TITLE_TAG)
+                        issued = True
+                        key = zotero.post_webpage_item(
+                            url_canonical=url,
+                            title=title,
+                            access_date=today_iso,
+                            tags=tags,
+                            item_key=pending_key,
+                        )
+                    except BaseException:
+                        # Release only while it is certain nothing was created.
+                        # Once the request has gone out, a failure says nothing
+                        # about whether Zotero committed it, and releasing then
+                        # is what produced duplicates: the claim stays, and
+                        # _resolve_claim settles it later by asking Zotero.
+                        if not issued:
+                            release_url(db_path, url)
+                        raise
+                    set_zotero_key(db_path, url, key)
+                    result.urls_new += 1
+                    continue
+                existing = lookup_url(db_path, url)
 
-            row = existing if existing is not None else lookup_url(db_path, url)
-            key = (row or {}).get("zotero_key") or ""
+            key = (existing or {}).get("zotero_key") or ""
             if not key:
                 # Another session holds the claim and its POST has not landed
                 # yet. There is no item to tag, and creating one is the very
-                # duplicate the claim exists to prevent, so let the next
-                # sighting do it.
+                # duplicate the claim exists to prevent — but the sighting is
+                # real, so queue its provenance for whoever completes the item.
                 logger.debug("%s is claimed by another session; deferring", url)
+                queue_pending_tags(db_path, url, [seen_tag, context_tag, project_tag])
                 continue
             zotero.add_tags(
                 key,
-                [seen_tag, context_tag, project_tag],
+                [seen_tag, context_tag, project_tag, *take_pending_tags(db_path, url)],
                 title_resolver=make_title_resolver(url),
             )
             result.urls_recurring += 1

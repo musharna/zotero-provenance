@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from . import USER_AGENT
+from .sqlite_cache import new_zotero_key
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,21 @@ class ZoteroClient:
     def __exit__(self, *args: object) -> None:
         self.close()
 
+    def item_exists(self, item_key: str) -> bool:
+        """Whether the library already holds this key.
+
+        The question a lost POST response leaves behind. It is only answerable
+        because the key was chosen before the request went out.
+        """
+        resp = self._client.get(f"/items/{item_key}")
+        if resp.status_code == 404:
+            return False
+        if resp.status_code >= 400:
+            raise ZoteroError(
+                f"GET /items/{item_key} failed: {resp.status_code} {resp.text}"
+            )
+        return not (resp.json().get("data", {}).get("deleted"))
+
     def post_webpage_item(
         self,
         *,
@@ -72,9 +88,21 @@ class ZoteroClient:
         title: str,
         access_date: str,
         tags: list[str],
+        item_key: str | None = None,
     ) -> str:
+        """Create the item under a key the caller chose.
+
+        The API accepts a client-supplied key matching
+        /[23456789ABCDEFGHIJKLMNPQRSTUVWXYZ]{8}/. "version": 0 makes this a
+        versioned write, which is what lets a duplicate be rejected rather than
+        silently creating a second copy — and means no Zotero-Write-Token is
+        needed, since the docs call it redundant for versioned requests.
+        """
+        item_key = item_key or new_zotero_key()
         payload = [
             {
+                "key": item_key,
+                "version": 0,
                 "itemType": "webpage",
                 "url": url_canonical,
                 "title": title,
