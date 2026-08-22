@@ -8,7 +8,7 @@ import socket
 
 import idna
 from markdown_it import MarkdownIt
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import unquote_plus, urlsplit, urlunsplit
 
 IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
@@ -35,10 +35,6 @@ _MD = MarkdownIt("commonmark")
 # tokens need no list: only "inline" tokens are walked, and a fence, an indented
 # block and an HTML block are all block-level.
 _UNCITED_INLINE = frozenset({"code_inline", "html_inline"})
-
-# Deliberately not html.unescape: see canonicalize. One layer per pass is enough,
-# since each re-print adds exactly one.
-AMP_ENTITY_RE = re.compile(r"&amp;", re.IGNORECASE)
 
 # This plugin's own reports list URLs it already holds, and the Stop hook reads
 # Claude's output — so displaying a report re-captured everything in it, stamping
@@ -155,20 +151,16 @@ PRIVATE_RANGES = [
 def canonicalize(raw: str) -> str:
     """Apply spec D7: lowercase host, strip fragment, strip trailing slash, drop tracking params.
 
-    One layer of "&amp;" escaping is undone first. A URL lifted out of rendered
-    markup carries that page's escaping, so "?a=1&b=2" arrives as "?a=1&amp;b=2"
-    — a different string for the same source, which misses the dedup lookup and
-    creates a second item. Each round of escaping compounds (&amp; -> &amp;amp;),
-    so without this the duplicates never converge.
-
-    Only "&amp;" is decoded, never the full entity table. That table contains the
-    URL's own delimiters: "&sol;" is "/", "&num;" is "#", "&quest;" is "?", so
-    decoding everything lets a path segment forge a separator, or invent a
-    fragment that the next line then discards — silently storing a different
-    resource than the one cited. "&amp;" cannot do that, and it is the only
-    entity a URL acquires merely by being written into HTML.
+    Byte-preserving except for the four things it is asked to change. It used to
+    undo one layer of "&amp;" escaping here as well, so that a URL lifted out of
+    rendered markup deduped against the same source written plainly. That belongs
+    to the parser, not here: a literal "&amp;" is legal URL data, and nothing at
+    this layer can tell the escaped separator from the data. CommonMark already
+    settles it — a link destination has its entity references decoded, an
+    autolink's content does not — so extract_urls hands over a URL that has
+    already been decoded exactly as much as it should be.
     """
-    parts = urlsplit(AMP_ENTITY_RE.sub("&", raw.strip()))
+    parts = urlsplit(raw.strip())
     host = parts.hostname or ""
     netloc = host.lower()
     # urlsplit strips the brackets off an IPv6 literal, and putting the bare
@@ -185,13 +177,29 @@ def canonicalize(raw: str) -> str:
         path = path.rstrip("/")
     elif path == "/":
         path = ""
-    query_pairs = [
-        (k, v)
-        for k, v in parse_qsl(parts.query, keep_blank_values=True)
-        if k.lower() not in TRACKING_PARAMS
+    return urlunsplit(
+        (parts.scheme.lower(), netloc, path, _drop_tracking_params(parts.query), "")
+    )
+
+
+def _drop_tracking_params(query: str) -> str:
+    """Remove tracking fields, leaving every surviving byte exactly as it came.
+
+    Splitting on "&" and rejoining rather than parse_qsl + urlencode, because
+    that round trip rewrites what it was not asked to touch: a valueless field
+    gains an "=", percent-encoding is normalised, and "+" is reinterpreted as a
+    space. A signed or opaque query does not survive any of those, and the
+    result names a resource nobody cited. Only the field NAME is decoded, and
+    only far enough to decide whether it matches.
+    """
+    if not query:
+        return ""
+    kept = [
+        field
+        for field in query.split("&")
+        if unquote_plus(field.split("=", 1)[0]).lower() not in TRACKING_PARAMS
     ]
-    query = urlencode(query_pairs)
-    return urlunsplit((parts.scheme.lower(), netloc, path, query, ""))
+    return "&".join(kept)
 
 
 def extract_urls(text: str) -> list[str]:
