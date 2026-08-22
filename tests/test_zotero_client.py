@@ -416,3 +416,48 @@ def test_live_unresolved_title_is_reenriched(live_zotero_creds: dict[str, str]):
         }
     finally:
         client.delete_item(key)
+
+
+def test_iter_collection_items_retries_a_transient_timeout():
+    """A blip must not abandon a pass halfway through a 5,000-item collection.
+
+    Observed live 2026-08-21: one page timed out and aborted the whole sweep,
+    leaving the caller with no way to tell a short collection from a truncated
+    one — the generator simply stopped yielding.
+    """
+    attempts = {"n": 0}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise httpx.ReadTimeout("simulated blip", request=req)
+        return httpx.Response(200, json=[{"key": "A", "data": {"key": "A"}}])
+
+    with ZoteroClient(
+        api_key="fake",
+        library_id="0000",
+        library_type="user",
+        web_sources_collection_key="COLL1",
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        items = list(client.iter_collection_items(retry_sleep_s=0))
+
+    assert [i["key"] for i in items] == ["A"]
+    assert attempts["n"] == 2, "should have retried exactly once before succeeding"
+
+
+def test_iter_collection_items_gives_up_loudly_after_repeated_timeouts():
+    """Fail loud: a truncated sweep must raise, never look like a short collection."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("always down", request=req)
+
+    with ZoteroClient(
+        api_key="fake",
+        library_id="0000",
+        library_type="user",
+        web_sources_collection_key="COLL1",
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        with pytest.raises(ZoteroError, match="after 3 attempts"):
+            list(client.iter_collection_items(retry_sleep_s=0))

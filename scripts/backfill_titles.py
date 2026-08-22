@@ -30,11 +30,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from zotero_capture.backfill import backfill  # noqa: E402
 from zotero_capture.cli import build_client  # noqa: E402
 from zotero_capture.config import load_config  # noqa: E402
+from zotero_capture.prune import prune  # noqa: E402
 from zotero_capture.title_fetcher import fetch_title  # noqa: E402
 
 # The Stop hook's 1s budget exists to keep a turn snappy. This runs unattended,
 # so give slow identifier APIs room to answer instead of failing them for speed.
 BACKFILL_TIMEOUT_S = 8.0
+
+# Paging a large collection is the slowest thing here, and Zotero gets slower
+# under sustained traffic. The interactive 5s default aborted whole sweeps
+# (observed 2026-08-21), so this pass waits instead.
+ZOTERO_TIMEOUT_S = 30.0
 
 
 def main() -> int:
@@ -49,6 +55,12 @@ def main() -> int:
         "--sleep", type=float, default=0.4, help="seconds between items (be polite)"
     )
     p.add_argument(
+        "--prune",
+        action="store_true",
+        help="instead of repairing titles, move every item the exclusion rules "
+        "reject to the Zotero trash (recoverable). Pair with --dry-run first.",
+    )
+    p.add_argument(
         "--host",
         action="append",
         dest="hosts",
@@ -60,6 +72,10 @@ def main() -> int:
 
     config = load_config()
     started = time.monotonic()
+
+    if args.prune:
+        return _run_prune(config, dry_run=args.dry_run, limit=args.limit,
+                          sleep_s=args.sleep)
 
     def report(r) -> None:
         if r.examined % 25:
@@ -76,7 +92,7 @@ def main() -> int:
 
     with (
         httpx.Client(timeout=BACKFILL_TIMEOUT_S, follow_redirects=True) as http,
-        build_client(config) as zotero,
+        build_client(config, timeout=ZOTERO_TIMEOUT_S) as zotero,
     ):
         result = backfill(
             zotero,
@@ -94,6 +110,23 @@ def main() -> int:
     print(f"{verb:<17}: {count}")
     print(f"still unresolved : {result.still_unresolved}")
     print(f"errors           : {result.errors}")
+    return 0
+
+
+def _run_prune(config, *, dry_run: bool, limit: int | None, sleep_s: float) -> int:
+    """Sweep the exclusion rules back over items captured before they existed."""
+    with build_client(config, timeout=ZOTERO_TIMEOUT_S) as zotero:
+        result = prune(zotero, dry_run=dry_run, limit=limit, sleep_s=sleep_s)
+
+    for url in result.urls:
+        print(f"  {'would trash' if dry_run else 'trashed'}: {url}")
+    verb = "would trash" if dry_run else "trashed"
+    count = result.would_trash if dry_run else result.trashed
+    print(f"examined  : {result.examined}")
+    print(f"{verb:<10}: {count}")
+    print(f"errors    : {result.errors}")
+    if not dry_run and count:
+        print("\nThese are in the Zotero trash, not deleted. Restore from any client.")
     return 0
 
 

@@ -149,3 +149,23 @@ def test_run_capture_does_not_enqueue_failures(tmp_db: Path):
     log_obj = json.loads(log_path.read_text().strip())
     logged_codes = {e["code"] for e in log_obj["errors"]}
     assert logged_codes == {"zotero_error", "unexpected"}
+
+
+def test_build_client_accepts_a_longer_timeout_for_unattended_passes():
+    """The hook wants a tight timeout; a bulk maintenance sweep does not.
+
+    Paging thousands of items with the interactive 5s budget made whole passes
+    abort on a slow response (observed live 2026-08-21).
+    """
+    from zotero_capture.cli import build_client
+    from zotero_capture.config import Config
+
+    cfg = Config(
+        api_key="k",
+        library_id="1",
+        library_type="user",
+        collection_key="C",
+        state_dir=Path("/tmp"),
+    )
+    assert build_client(cfg, timeout=30.0)._client.timeout.read == 30.0
+    assert build_client(cfg)._client.timeout.read == 5.0

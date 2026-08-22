@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.0 — 2026-08-21
+
+- **`backfill_titles.py --prune`** sweeps the exclusion rules back over items
+  captured before those rules existed. `is_excluded` stays the single definition
+  of what is not a source, so a rule added later needs no second list.
+  Items are moved to the Zotero **trash**, not deleted — the collection is a
+  provenance record, so a bulk cleanup has to be reversible. Pair with
+  `--dry-run` first; it prints every URL it would remove.
+- **A bulk pass no longer gives up on one slow response.** Paging the collection
+  retries a timed-out page and raises after three attempts rather than returning
+  early — a truncated sweep is indistinguishable from a short collection to the
+  caller, so it must fail loud. Maintenance passes also get a 30s Zotero timeout
+  instead of the hook's interactive 5s.
+
 ## 0.5.0 — 2026-08-21
 
 - **Give the version one source of truth.** Four copies disagreed —
