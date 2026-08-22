@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.1 — 2026-08-21
+
+- **Repairing a URL no longer strands the item.** `title_is_unresolved` detects a
+  failed fetch by `title == url`. Moving the URL while leaving the old URL as the
+  title breaks that equality, so the item silently stops looking unresolved and
+  no backfill revisits it again — the same latch the re-enrichment work removed,
+  reintroduced from the other side. `update_url` now carries a URL-shaped title
+  along with the URL. A real title is metadata and is left untouched.
+
 ## 0.8.0 — 2026-08-21
 
 - **A host that is not a hostname is no longer captured.** A display ellipsis
