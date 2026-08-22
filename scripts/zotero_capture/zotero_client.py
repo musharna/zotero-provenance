@@ -208,6 +208,34 @@ class ZoteroClient:
             )
         return True
 
+    def update_url(self, item_key: str, url: str) -> None:
+        """Correct the stored URL of an item.
+
+        Needed because a URL truncated at capture time cannot be repaired by any
+        title pass: the repair path reads the item's own URL, so the URL has to
+        be fixed first. Guarded by the item version so a concurrent edit is not
+        silently overwritten.
+        """
+        resp = self._client.get(f"/items/{item_key}")
+        if resp.status_code == 404:
+            return  # already gone, idempotent
+        if resp.status_code >= 400:
+            raise ZoteroError(
+                f"GET /items/{item_key} failed: {resp.status_code} {resp.text}"
+            )
+        version = resp.headers.get("Last-Modified-Version") or str(
+            resp.json().get("version", 0)
+        )
+        resp = self._client.patch(
+            f"/items/{item_key}",
+            json={"url": url},
+            headers={"If-Unmodified-Since-Version": version},
+        )
+        if resp.status_code not in (204, 404):
+            raise ZoteroError(
+                f"PATCH /items/{item_key} (url) failed: {resp.status_code} {resp.text}"
+            )
+
     def trash_item(self, item_key: str) -> None:
         """Move an item to the Zotero trash.
 
