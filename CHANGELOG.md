@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.7.0 — 2026-08-21
+
+- **Preprint DOIs were being built wrong.** The path regex swallowed the version
+  suffix, so `10.1101/2025.05.30.656746v1` went to doi.org — not a DOI, and
+  correctly a 404. The earlier audit blamed unregistered preprint DOIs; that was
+  wrong. Stripping the suffix resolves the same papers 200. bioRxiv's own
+  `api.biorxiv.org/details` answers 200 with an empty body, so it is not the fix
+  the audit assumed.
+- **The DOI prefix is no longer hardcoded.** bioRxiv minted `10.64898` for 2026
+  papers alongside `10.1101`; matching only the latter silently skipped them.
+- **Titles are normalised.** Publisher CSL metadata is typeset, not plain text —
+  titles arrived carrying `<sup>`/`<i>` markup, HTML entities and the newlines of
+  the source XML, and were stored in Zotero verbatim. Normalisation happens once
+  at `fetch_title`'s boundary so a new resolver cannot forget it. A bare `<` is
+  left alone: "Cost < 5% of baseline" is a real title, not markup.
+
 ## 0.6.0 — 2026-08-21
 
 - **`backfill_titles.py --prune`** sweeps the exclusion rules back over items
