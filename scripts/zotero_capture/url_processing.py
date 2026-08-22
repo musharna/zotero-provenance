@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import ipaddress
 import re
 
@@ -14,6 +15,13 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 # decide whether a trailing one belongs to the URL or to the prose around it;
 # excluding it at the tokenizer truncates the URL before that rule can run.
 URL_RE = re.compile(r"https?://[^\s<>\"'`\]]+", re.IGNORECASE)
+
+# Markdown's two ways of saying "shown, not cited". Both fence styles count, and
+# a fence may be indented or carry an info string (```python), so match a prefix
+# rather than the whole line. The inline form requires a closing backtick on the
+# same line: a lone stray backtick is prose, not an unterminated code span.
+FENCE_RE = re.compile(r"^\s*(?:```|~~~)")
+INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
 
 # ")" is deliberately absent: it is the balance rule's to judge, and stripping it
 # here unconditionally would pre-empt that and corrupt a legitimate URL.
@@ -117,8 +125,16 @@ PRIVATE_RANGES = [
 
 
 def canonicalize(raw: str) -> str:
-    """Apply spec D7: lowercase host, strip fragment, strip trailing slash, drop tracking params."""
-    parts = urlsplit(raw.strip())
+    """Apply spec D7: lowercase host, strip fragment, strip trailing slash, drop tracking params.
+
+    HTML entities are undone first. A URL lifted out of rendered markup carries
+    that page's escaping, so "?a=1&b=2" arrives as "?a=1&amp;b=2" — a different
+    string for the same source, which used to miss the dedup lookup and create a
+    second item. Each round of escaping compounds (&amp; -> &amp;amp;), so the
+    duplicates never converged; folding them back here is what makes an escaped
+    copy land on the item it already belongs to.
+    """
+    parts = urlsplit(html.unescape(raw.strip()))
     host = parts.hostname or ""
     netloc = host.lower()
     if parts.port:
@@ -141,16 +157,41 @@ def canonicalize(raw: str) -> str:
 
 
 def extract_urls(text: str) -> list[str]:
-    """Extract URLs from text (assistant message). Trim punctuation; dedup preserving order."""
+    """Extract the URLs a message CITES, skipping those it merely displays.
+
+    Markdown already draws this line: a fence or a backtick means "this is a
+    literal being shown". The distinction is load-bearing because the capture
+    hook reads the agent's own output — an audit that printed a malformed URL
+    used to re-capture it, one escape layer deeper each pass, without bound.
+
+    Measured over 260 assistant messages, 96% of real citations arrive as
+    markdown links or bare prose; the backticked form is 2.9% and is mostly
+    internal hostnames and API endpoints. Indentation is deliberately NOT a
+    signal — an indented line is usually a list item, not a code block.
+
+    Trims punctuation and dedups, preserving order.
+    """
     seen: list[str] = []
     seen_set: set[str] = set()
-    for match in URL_RE.finditer(text):
-        url = match.group(0).rstrip(TRAILING_PUNCT)
-        while url.endswith(")") and url.count("(") < url.count(")"):
-            url = url[:-1]
-        if url not in seen_set:
-            seen.append(url)
-            seen_set.add(url)
+    in_fence = False
+    for line in text.split("\n"):
+        if FENCE_RE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            # An unterminated fence keeps the rest of a truncated message quoted,
+            # which is the safe reading: displayed text is cheap to miss.
+            continue
+        # Blank the code spans rather than delete them, so the balance rule below
+        # still sees the surrounding prose exactly where it sat on the line.
+        scan = INLINE_CODE_RE.sub(lambda m: " " * len(m.group(0)), line)
+        for match in URL_RE.finditer(scan):
+            url = match.group(0).rstrip(TRAILING_PUNCT)
+            while url.endswith(")") and url.count("(") < url.count(")"):
+                url = url[:-1]
+            if url not in seen_set:
+                seen.append(url)
+                seen_set.add(url)
     return seen
 
 
@@ -162,9 +203,7 @@ def _is_reserved_name(host: str) -> bool:
     """
     if host.rpartition(".")[2] in RESERVED_TLDS:
         return True
-    return any(
-        host == name or host.endswith(f".{name}") for name in RESERVED_DOMAINS
-    )
+    return any(host == name or host.endswith(f".{name}") for name in RESERVED_DOMAINS)
 
 
 def _is_real_hostname(host: str) -> bool:

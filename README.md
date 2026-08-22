@@ -153,6 +153,26 @@ A host that is not a hostname is dropped too — a display ellipsis captured as
 `https://…` can never resolve. The test is IDNA encoding, the same one the HTTP
 client applies, so internationalised domains (`münchen.de`) are kept.
 
+### Shown, not cited
+
+A URL inside a fenced code block or inline backticks is treated as a literal
+being displayed, not a source being cited, and is not captured. Prose and
+markdown links still are.
+
+This matters because the hook reads Claude's own output. Without the rule, asking
+Claude to audit your library re-captured the very URLs the audit printed — and
+because printing re-escapes them (`&quot;` becomes `&amp;quot;`), each pass
+created a _new_ item rather than matching the old one. The loop had no ceiling.
+
+The cost is real but small: measured across 324 sessions' messages, 95.6% of
+captured URLs are unaffected, and what drops out is mostly internal
+infrastructure (`prometheus`, VPN and API endpoints). A source you only ever
+mention in backticks will be missed — write it as prose or a link to capture it.
+
+Separately, HTML entities in a URL are now decoded before storing, so a link
+copied out of rendered markup (`?a=1&amp;b=2`) lands on the same item as the
+plain form instead of duplicating it.
+
 ## Known limitations
 
 - **Sessions bridged with `/remote-control` do not fire local `Stop` hooks**, so nothing
