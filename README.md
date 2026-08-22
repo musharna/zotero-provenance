@@ -188,10 +188,13 @@ plain form instead of duplicating it.
 python3 -m pytest -q
 ```
 
-105 tests, no network required. The hook tests execute the real shell scripts as
+229 tests run by default and need no network. The 10 live ones are opted _into_
+with `-m live` rather than out of — `addopts = -m "not live"` is set, because
+they used to run on a bare `pytest -q` and reach the internet despite this
+section promising otherwise. The hook tests execute the real shell scripts as
 subprocesses; the end-to-end tests run the real hook and CLI against a local HTTP
-server standing in for the Zotero API, so only the remote service is stubbed. Live
-API tests are skipped unless `RUN_LIVE_ZOTERO=1` and credentials are present.
+server standing in for the Zotero API, so only the remote service is stubbed.
+Live Zotero tests additionally need `RUN_LIVE_ZOTERO=1` and credentials.
 
 ## License
 

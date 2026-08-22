@@ -59,11 +59,18 @@ def test_canonicalize_leaves_an_ordinary_ampersand_alone():
     )
 
 
-def test_canonicalize_collapses_an_escaped_copy_onto_the_original():
-    """The dedup property the loop depended on: both forms reach one string."""
-    plain = canonicalize("https://fixturehost.org/p?q=%22x%22")
-    escaped = canonicalize("https://fixturehost.org/p?q=&quot;x&quot;")
-    assert plain == escaped
+def test_canonicalize_collapses_a_reprinted_copy_onto_the_original():
+    """The dedup property the loop actually needed.
+
+    Re-printing a stored URL escapes it one more level, so "&quot;" comes back as
+    "&amp;quot;". Undoing that one layer is what lands the copy on the item it
+    already belongs to. Asserting that *arbitrary* entities fold together would
+    require decoding the whole table, which forges URL delimiters — see the
+    forge_* cases below.
+    """
+    original = canonicalize("https://fixturehost.org/p?q=&quot;x")
+    reprinted = canonicalize("https://fixturehost.org/p?q=&amp;quot;x")
+    assert original == reprinted
 
 
 def test_canonicalize_keeps_a_literal_ampersand_in_a_value():
@@ -71,6 +78,41 @@ def test_canonicalize_keeps_a_literal_ampersand_in_a_value():
     assert (
         canonicalize("https://fixturehost.org/s?q=Marks%26Spencer")
         == "https://fixturehost.org/s?q=Marks%26Spencer"
+    )
+
+
+# Decoding the FULL HTML entity table rewrites the URL's structure, because the
+# table contains the delimiters themselves. Only "&amp;" is decoded: it is the
+# one entity a URL picks up merely by being written into HTML, and folding it
+# back cannot move a path segment or invent a query. Reported by an external
+# audit of v0.9.0 (2026-08-22), which shipped the full-table version.
+
+
+def test_canonicalize_does_not_let_an_entity_forge_a_path_separator():
+    """&sol; is "/" — decoding it silently points at a different resource."""
+    assert (
+        canonicalize("https://fixturehost.org/x&sol;y")
+        == "https://fixturehost.org/x&sol;y"
+    )
+
+
+def test_canonicalize_does_not_let_an_entity_forge_a_fragment():
+    """&num; is "#" — decoding it truncated the URL at the invented fragment.
+
+    Asserts the payload survives rather than an exact string: query pairs are
+    re-encoded by the tracking-param pass either way, which is unrelated to the
+    entity bug and would make an exact-match assertion test the wrong thing.
+    """
+    got = canonicalize("https://fixturehost.org/p?opaque=abc&num;def")
+    assert "def" in got, "the tail was dropped as an invented fragment"
+    assert "#" not in got
+
+
+def test_canonicalize_does_not_let_an_entity_forge_a_query_start():
+    """&quest; is "?" — decoding it moves data from the path into the query."""
+    assert (
+        canonicalize("https://fixturehost.org/p&quest;def")
+        == "https://fixturehost.org/p&quest;def"
     )
 
 

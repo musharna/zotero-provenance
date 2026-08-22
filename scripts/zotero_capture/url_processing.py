@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import html
 import ipaddress
 import re
 
@@ -21,6 +20,10 @@ URL_RE = re.compile(r"https?://[^\s<>\"'`\]]+", re.IGNORECASE)
 # rather than the whole line. The inline form requires a closing backtick on the
 # same line: a lone stray backtick is prose, not an unterminated code span.
 FENCE_RE = re.compile(r"^\s*(?:```|~~~)")
+
+# Deliberately not html.unescape: see canonicalize. One layer per pass is enough,
+# since each re-print adds exactly one.
+AMP_ENTITY_RE = re.compile(r"&amp;", re.IGNORECASE)
 INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
 
 # ")" is deliberately absent: it is the balance rule's to judge, and stripping it
@@ -127,14 +130,20 @@ PRIVATE_RANGES = [
 def canonicalize(raw: str) -> str:
     """Apply spec D7: lowercase host, strip fragment, strip trailing slash, drop tracking params.
 
-    HTML entities are undone first. A URL lifted out of rendered markup carries
-    that page's escaping, so "?a=1&b=2" arrives as "?a=1&amp;b=2" — a different
-    string for the same source, which used to miss the dedup lookup and create a
-    second item. Each round of escaping compounds (&amp; -> &amp;amp;), so the
-    duplicates never converged; folding them back here is what makes an escaped
-    copy land on the item it already belongs to.
+    One layer of "&amp;" escaping is undone first. A URL lifted out of rendered
+    markup carries that page's escaping, so "?a=1&b=2" arrives as "?a=1&amp;b=2"
+    — a different string for the same source, which misses the dedup lookup and
+    creates a second item. Each round of escaping compounds (&amp; -> &amp;amp;),
+    so without this the duplicates never converge.
+
+    Only "&amp;" is decoded, never the full entity table. That table contains the
+    URL's own delimiters: "&sol;" is "/", "&num;" is "#", "&quest;" is "?", so
+    decoding everything lets a path segment forge a separator, or invent a
+    fragment that the next line then discards — silently storing a different
+    resource than the one cited. "&amp;" cannot do that, and it is the only
+    entity a URL acquires merely by being written into HTML.
     """
-    parts = urlsplit(html.unescape(raw.strip()))
+    parts = urlsplit(AMP_ENTITY_RE.sub("&", raw.strip()))
     host = parts.hostname or ""
     netloc = host.lower()
     if parts.port:
