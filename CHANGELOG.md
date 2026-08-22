@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.9.0 — 2026-08-22
+
+- **A URL that is shown is no longer captured as one that is cited.** The hook
+  reads Claude's own output, so auditing the library re-captured the URLs the
+  audit printed. Worse, printing re-escapes them (`&quot;` → `&amp;quot;`), which
+  is a _different string_ — it missed the dedup lookup and created a new item
+  every pass, with no ceiling. `extract_urls` now skips fenced code blocks and
+  inline code spans, which is Markdown's own way of marking a literal.
+
+  Measured over 324 sessions' messages, 95.6% of captured URLs are unaffected;
+  what drops out is mostly internal infrastructure. Indentation is deliberately
+  not a signal, because an indented line is usually a list item. Verified by
+  replaying the real transcripts that caused the incident, not only fixtures —
+  a synthetic-only check had already led to the wrong conclusion here once, when
+  fenced blocks turned out to carry 1 of 8 occurrences and inline spans 7.
+
+- **HTML entities in a URL are decoded before storing.** A link lifted out of
+  rendered markup carries the page's escaping, so `?a=1&amp;b=2` used to become a
+  second item for a source already held. This is what made the loop above
+  unbounded rather than merely repetitive, and it is a real defect on its own.
+
 ## 0.8.1 — 2026-08-21
 
 - **Repairing a URL no longer strands the item.** `title_is_unresolved` detects a
@@ -65,7 +86,7 @@
 
 ## 0.4.0 — 2026-08-21
 
-Backfilled entry. This release is about what the capture path should *never*
+Backfilled entry. This release is about what the capture path should _never_
 have stored, plus recovering what it stored badly.
 
 - **Stop capturing page assets and infrastructure as sources.** Font CDNs,

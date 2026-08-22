@@ -20,7 +20,10 @@ from zotero_capture.url_processing import canonicalize, extract_urls, is_exclude
             "https://fixturehost.org/foo?utm_source=x&q=keep",
             "https://fixturehost.org/foo?q=keep",
         ),
-        ("https://fixturehost.org/foo?fbclid=abc&gclid=def", "https://fixturehost.org/foo"),
+        (
+            "https://fixturehost.org/foo?fbclid=abc&gclid=def",
+            "https://fixturehost.org/foo",
+        ),
         (
             "https://FIXTUREHOST.org/foo/?utm_campaign=x&id=42#frag",
             "https://fixturehost.org/foo?id=42",
@@ -30,6 +33,45 @@ from zotero_capture.url_processing import canonicalize, extract_urls, is_exclude
 )
 def test_canonicalize(raw: str, expected: str):
     assert canonicalize(raw) == expected
+
+
+# --- HTML entities in a URL ---
+#
+# A URL lifted out of rendered HTML carries the page's escaping, so "?a=1&b=2"
+# arrives as "?a=1&amp;b=2". Undoing that here is what makes the same source
+# dedup to one item: an escaped copy used to miss the lookup and create a
+# duplicate, and because each pass escapes again (&amp; -> &amp;amp;) the
+# duplicates never stopped arriving.
+
+
+def test_canonicalize_undoes_html_escaping_of_a_query_separator():
+    assert (
+        canonicalize("https://fixturehost.org/s?a=1&amp;b=2")
+        == "https://fixturehost.org/s?a=1&b=2"
+    )
+
+
+def test_canonicalize_leaves_an_ordinary_ampersand_alone():
+    """Negative control: an already-correct separator must not be touched."""
+    assert (
+        canonicalize("https://fixturehost.org/s?a=1&b=2")
+        == "https://fixturehost.org/s?a=1&b=2"
+    )
+
+
+def test_canonicalize_collapses_an_escaped_copy_onto_the_original():
+    """The dedup property the loop depended on: both forms reach one string."""
+    plain = canonicalize("https://fixturehost.org/p?q=%22x%22")
+    escaped = canonicalize("https://fixturehost.org/p?q=&quot;x&quot;")
+    assert plain == escaped
+
+
+def test_canonicalize_keeps_a_literal_ampersand_in_a_value():
+    """Negative control: "&" that is data, not an entity, survives."""
+    assert (
+        canonicalize("https://fixturehost.org/s?q=Marks%26Spencer")
+        == "https://fixturehost.org/s?q=Marks%26Spencer"
+    )
 
 
 # --- extract_urls ---
@@ -42,7 +84,10 @@ def test_extract_basic_url():
 
 def test_extract_strips_trailing_punctuation():
     text = "Check (https://fixturehost.org/foo), and [https://fixturehost.org/bar]."
-    assert extract_urls(text) == ["https://fixturehost.org/foo", "https://fixturehost.org/bar"]
+    assert extract_urls(text) == [
+        "https://fixturehost.org/foo",
+        "https://fixturehost.org/bar",
+    ]
 
 
 def test_extract_markdown_link():
@@ -64,9 +109,52 @@ def test_extract_no_urls():
     assert extract_urls("nothing here") == []
 
 
-def test_extract_strips_backtick_fence():
+# --- cited vs displayed ---
+#
+# Backticks and fences are Markdown's way of saying "this is a literal being
+# shown", not "this is a source I am citing". The distinction matters because
+# the capture hook reads the agent's own output: an audit that prints a bad URL
+# used to re-capture it, one HTML-escape layer deeper each pass (&quot; ->
+# &amp;quot;), which is unbounded. Measured over 260 assistant messages, 96% of
+# real citations arrive as markdown links or bare prose, while the backticked
+# form is 2.9% and is mostly internal hostnames and API endpoints.
+#
+# This inverts an earlier assertion that a backticked URL should be captured.
+
+
+def test_extract_skips_a_url_shown_in_inline_code():
     text = "See `https://fixturehost.org/foo` for details."
-    assert extract_urls(text) == ["https://fixturehost.org/foo"]
+    assert extract_urls(text) == []
+
+
+def test_extract_skips_a_url_inside_a_fenced_block():
+    text = "Output:\n\n```\nGET https://fixturehost.org/foo\n```\n\ndone."
+    assert extract_urls(text) == []
+
+
+def test_extract_keeps_prose_and_links_around_a_fenced_block():
+    """Negative control: fencing one URL must not swallow the citations near it."""
+    text = (
+        "Per [the paper](https://fixturehost.org/paper) the call is:\n\n"
+        "```\ncurl https://fixturehost.org/internal\n```\n\n"
+        "See also https://fixturehost.org/followup"
+    )
+    assert extract_urls(text) == [
+        "https://fixturehost.org/paper",
+        "https://fixturehost.org/followup",
+    ]
+
+
+def test_extract_keeps_a_url_in_prose_on_a_line_that_also_has_code():
+    """A code span elsewhere on the line must not suppress a cited URL."""
+    text = "Run `make build`, then read https://fixturehost.org/guide"
+    assert extract_urls(text) == ["https://fixturehost.org/guide"]
+
+
+def test_extract_skips_an_unterminated_fence():
+    """A truncated message can leave a fence open; treat the tail as displayed."""
+    text = "Log follows:\n\n```\nfetching https://fixturehost.org/foo"
+    assert extract_urls(text) == []
 
 
 # --- parenthesised URLs ---
@@ -139,17 +227,29 @@ def test_extract_strips_sentence_punctuation_after_a_balanced_paren():
         ("https://dns.google/resolve?name=fixturehost.org", True),
         ("https://static.cloudflareinsights.com/beacon.min.js", True),
         # Asset paths: the bytes a page references, not the page itself.
-        ("https://inaturalist-open-data.s3.amazonaws.com/photos/28969484/medium.jpg", True),
+        (
+            "https://inaturalist-open-data.s3.amazonaws.com/photos/28969484/medium.jpg",
+            True,
+        ),
         ("https://upload.wikimedia.org/wikipedia/commons/3/3e/A_rose_bush.jpg", True),
-        ("https://raw.githubusercontent.com/musharna/stackhealth/main/stackhealth.py", False),
+        (
+            "https://raw.githubusercontent.com/musharna/stackhealth/main/stackhealth.py",
+            False,
+        ),
         ("https://fixturehost.org/theme.css", True),
         ("https://fixturehost.org/bundle.min.js", True),
         ("https://fixturehost.org/logo.SVG", True),
         # Negative controls: HTML pages whose path merely ends in an asset
         # extension. Both resolved to real titles in production, so a naive
         # extension match would silently drop genuine sources.
-        ("https://github.com/mrdoob/three.js/blob/dev/examples/jsm/loaders/GLTFLoader.js", False),
-        ("https://github.com/musharna/stackhealth/actions/workflows/smoke.yml/badge.svg", False),
+        (
+            "https://github.com/mrdoob/three.js/blob/dev/examples/jsm/loaders/GLTFLoader.js",
+            False,
+        ),
+        (
+            "https://github.com/musharna/stackhealth/actions/workflows/smoke.yml/badge.svg",
+            False,
+        ),
         ("https://commons.wikimedia.org/wiki/File:Glycine_max_kz01.jpg", False),
         # A query string must not smuggle an asset extension past the check.
         ("https://fixturehost.org/article?ref=x.css", False),
