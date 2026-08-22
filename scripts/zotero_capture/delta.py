@@ -6,6 +6,9 @@ import re
 from datetime import date
 from typing import Any
 
+from .url_processing import NO_CAPTURE_MARKER
+
+
 SEEN_RE = re.compile(r"^seen:(\d{4}-\d{2}-\d{2})$")
 
 BUCKET_KEYS = (
@@ -57,8 +60,19 @@ def bucket_items(items: list[dict[str, Any]], *, run_started: date) -> dict[str,
 
 
 def _md_link(item: dict[str, Any]) -> str:
+    """Show the source without citing it.
+
+    Deliberately NOT a markdown link. Claude presents this report, and the Stop
+    hook reads what Claude prints, so a link here re-captured every listed source
+    the instant the report was displayed — including the ones being reported as
+    dropped. Backticks mark a URL as shown rather than cited, which is the same
+    rule extraction applies everywhere else.
+
+    The cost is that the URL is no longer clickable from the report. These are
+    items already in the library, so Zotero is where you would open them anyway.
+    """
     title = item["data"].get("title") or item["data"]["url"]
-    return f"[{title}]({item['data']['url']})"
+    return f"**{title}** — `{item['data']['url']}`"
 
 
 def emit_markdown(
@@ -74,6 +88,8 @@ def emit_markdown(
     )
 
     lines = [
+        NO_CAPTURE_MARKER,
+        "",
         f"## Source delta — context:{context_name}",
         "",
         f"**Window:** last {since_days} days · **This run:** {run_started.isoformat()} · "

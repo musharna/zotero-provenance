@@ -19,13 +19,36 @@ TRANSCRIPT_PATH="$(printf '%s' "$INPUT" | jq -r '.transcript_path // empty')"
 SESSION_ID="$(printf '%s' "$INPUT" | jq -r '.session_id // empty')"
 CWD="$(printf '%s' "$INPUT" | jq -r '.cwd // empty')"
 
-if [[ -z "$TRANSCRIPT_PATH" || ! -f "$TRANSCRIPT_PATH" ]]; then
-	exit 0
+# Claude Code hands the Stop hook the final assistant text directly, and its docs
+# say to use it rather than re-reading the transcript. Prefer it.
+ASSISTANT_TEXT="$(printf '%s' "$INPUT" | jq -r '.last_assistant_message // empty')"
+
+if [[ -z "$ASSISTANT_TEXT" ]]; then
+	# Fallback for clients that predate that field. This hook fires once per
+	# turn, so it must read ONE turn: the previous version concatenated every
+	# assistant event in the whole transcript and kept the last 200 lines, which
+	# re-captured old URLs with today's seen: tag and the current turn's
+	# context:, and let a code fence opened in an earlier turn decide whether
+	# this turn's citations were captured at all.
+	#
+	# base64 keeps each message on a single line, so `tail -1` selects a whole
+	# final message instead of the tail of several concatenated ones.
+	if [[ -z "$TRANSCRIPT_PATH" || ! -f "$TRANSCRIPT_PATH" ]]; then
+		exit 0
+	fi
+	# Per-line tolerant parse (-R + fromjson?): one malformed transcript line
+	# would otherwise abort the whole jq pass and strand everything after it.
+	ENCODED="$(jq -Rr '
+		fromjson?
+		| select(.type=="assistant")
+		| [.message.content[]? | select(.type=="text") | .text]
+		| join("\n")
+		| select(. != "")
+		| @base64
+	' "$TRANSCRIPT_PATH" 2>/dev/null | tail -1)"
+	[[ -n "$ENCODED" ]] && ASSISTANT_TEXT="$(printf '%s' "$ENCODED" | base64 -d 2>/dev/null)"
 fi
 
-# Per-line tolerant parse (-R + fromjson?): one malformed transcript line would
-# otherwise abort the whole jq pass and silently strand every URL after it.
-ASSISTANT_TEXT="$(jq -Rr 'fromjson? | select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text' "$TRANSCRIPT_PATH" 2>/dev/null | tail -200)"
 [[ -z "$ASSISTANT_TEXT" ]] && exit 0
 
 # Cheap pre-filter: nothing to do without a URL.

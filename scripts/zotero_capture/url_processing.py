@@ -4,27 +4,55 @@ from __future__ import annotations
 
 import ipaddress
 import re
+import socket
 
 import idna
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
 # A closing paren is a legal URL character — Cell Press PII links and the DOIs
 # behind them carry one (10.1016/s0092-8674(00)80876-3), as do Wikipedia
 # disambiguation pages. Admit it here and let the balance rule in extract_urls
 # decide whether a trailing one belongs to the URL or to the prose around it;
 # excluding it at the tokenizer truncates the URL before that rule can run.
-URL_RE = re.compile(r"https?://[^\s<>\"'`\]]+", re.IGNORECASE)
+# A bracketed IPv6 literal is matched first and keeps its brackets: the general
+# branch stops at "]", which silently truncated every IPv6 URL to an unparseable
+# "https://[::1" that then raised for the rest of the item's life.
+URL_RE = re.compile(
+    r"https?://\[[0-9A-Fa-f:.]+\](?::\d+)?[^\s<>\"'`\]]*"
+    r"|https?://[^\s<>\"'`\]]+",
+    re.IGNORECASE,
+)
 
-# Markdown's two ways of saying "shown, not cited". Both fence styles count, and
-# a fence may be indented or carry an info string (```python), so match a prefix
-# rather than the whole line. The inline form requires a closing backtick on the
-# same line: a lone stray backtick is prose, not an unterminated code span.
-FENCE_RE = re.compile(r"^\s*(?:```|~~~)")
+# CommonMark fence rules, which the first cut of this did not implement. A fence
+# opens on a run of 3+ backticks or tildes indented at most 3 spaces; it closes
+# only on the SAME character, a run at least as long, and nothing but whitespace
+# after it. Getting the close wrong is the dangerous direction: a fence that
+# never closes swallows every citation in the rest of the message.
+FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+
+# A fence may sit inside a blockquote, where every line carries a "> " prefix.
+BLOCKQUOTE_RE = re.compile(r"^ {0,3}(?:> ?)+")
+
+# Runs of backticks, paired by EQUAL length per CommonMark, so ``code`` is one
+# span rather than two empty ones with a URL stranded between them.
+TICK_RUN_RE = re.compile(r"`+")
 
 # Deliberately not html.unescape: see canonicalize. One layer per pass is enough,
 # since each re-print adds exactly one.
 AMP_ENTITY_RE = re.compile(r"&amp;", re.IGNORECASE)
-INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
+
+# This plugin's own reports list URLs it already holds, and the Stop hook reads
+# Claude's output — so displaying a report re-captured everything in it, stamping
+# today's seen: tag onto the sources it was reporting as dropped. Reports carry
+# this marker and capture skips the whole message.
+#
+# It backs up the structural rule rather than replacing it: a report reformatted
+# on the way out loses its backticks, one that gets summarised loses its marker.
+# Neither layer is sufficient alone. Lives here because this module owns the
+# definition of what counts as citable.
+NO_CAPTURE_MARKER = "<!-- zotero-provenance: generated report, not citations -->"
 
 # ")" is deliberately absent: it is the balance rule's to judge, and stripping it
 # here unconditionally would pre-empt that and corrupt a legitimate URL.
@@ -146,6 +174,10 @@ def canonicalize(raw: str) -> str:
     parts = urlsplit(AMP_ENTITY_RE.sub("&", raw.strip()))
     host = parts.hostname or ""
     netloc = host.lower()
+    # urlsplit strips the brackets off an IPv6 literal, and putting the bare
+    # address back produces a netloc whose colons read as a port separator.
+    if ":" in netloc:
+        netloc = f"[{netloc}]"
     if parts.port:
         netloc = f"{netloc}:{parts.port}"
     if parts.username:
@@ -182,19 +214,8 @@ def extract_urls(text: str) -> list[str]:
     """
     seen: list[str] = []
     seen_set: set[str] = set()
-    in_fence = False
-    for line in text.split("\n"):
-        if FENCE_RE.match(line):
-            in_fence = not in_fence
-            continue
-        if in_fence:
-            # An unterminated fence keeps the rest of a truncated message quoted,
-            # which is the safe reading: displayed text is cheap to miss.
-            continue
-        # Blank the code spans rather than delete them, so the balance rule below
-        # still sees the surrounding prose exactly where it sat on the line.
-        scan = INLINE_CODE_RE.sub(lambda m: " " * len(m.group(0)), line)
-        for match in URL_RE.finditer(scan):
+    for chunk in _prose_paragraphs(text):
+        for match in URL_RE.finditer(_mask_code_spans(chunk)):
             url = match.group(0).rstrip(TRAILING_PUNCT)
             while url.endswith(")") and url.count("(") < url.count(")"):
                 url = url[:-1]
@@ -202,6 +223,70 @@ def extract_urls(text: str) -> list[str]:
                 seen.append(url)
                 seen_set.add(url)
     return seen
+
+
+def _prose_paragraphs(text: str) -> list[str]:
+    """Drop fenced blocks, then split what is left on blank lines.
+
+    Splitting into paragraphs bounds the damage an unpaired backtick can do. A
+    code span cannot cross a blank line in CommonMark, so pairing runs only
+    within a paragraph stops a single stray tick from masking — and silently
+    discarding — every citation in the rest of the message.
+    """
+    out: list[str] = []
+    current: list[str] = []
+    fence: tuple[str, int] | None = None
+    for raw_line in text.split("\n"):
+        line = BLOCKQUOTE_RE.sub("", raw_line)
+        match = FENCE_RE.match(line)
+        if fence is None:
+            if match:
+                fence = (match.group(1)[0], len(match.group(1)))
+                continue
+            if line.strip():
+                current.append(line)
+            elif current:
+                out.append("\n".join(current))
+                current = []
+            continue
+        if not match:
+            continue
+        char, length = fence
+        run = match.group(1)
+        # Closes only on the same character, at least as long, nothing trailing.
+        if run[0] == char and len(run) >= length and not match.group(2).strip():
+            fence = None
+    if current:
+        out.append("\n".join(current))
+    return out
+
+
+def _mask_code_spans(text: str) -> str:
+    """Blank out backtick-delimited spans, pairing runs of EQUAL length.
+
+    Blanking rather than deleting keeps every other offset intact, so the
+    trailing-paren balance rule still sees the prose exactly where it sat. An
+    unpaired run is left alone: a lone backtick is prose, not an open span.
+    """
+    runs = [(m.start(), m.end()) for m in TICK_RUN_RE.finditer(text)]
+    if not runs:
+        return text
+    chars = list(text)
+    i = 0
+    while i < len(runs):
+        start, end = runs[i]
+        width = end - start
+        closer = next(
+            (j for j in range(i + 1, len(runs)) if runs[j][1] - runs[j][0] == width),
+            None,
+        )
+        if closer is None:
+            i += 1
+            continue
+        for pos in range(start, runs[closer][1]):
+            chars[pos] = " "
+        i = closer + 1
+    return "".join(chars)
 
 
 def _is_reserved_name(host: str) -> bool:
@@ -256,11 +341,48 @@ def is_excluded(url: str) -> bool:
         return True
     if _is_asset_path(parts.path or ""):
         return True
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
+    ip = parse_ip_literal(host)
+    if ip is None:
         # Not an address, so it has to be a name a resolver could look up.
         return not _is_real_hostname(host)
-    if ip.is_loopback or ip.is_link_local or ip.is_private:
+    return is_unsafe_address(ip)
+
+
+def parse_ip_literal(host: str) -> IPAddress | None:
+    """Parse a host as an IP in any notation a resolver would accept, else None.
+
+    `ipaddress.ip_address` only understands the dotted-quad spelling, but
+    `inet_aton` — and therefore every HTTP client — also accepts decimal, hex,
+    octal and short forms. `2130706433`, `0x7f000001`, `017700000001` and
+    `127.1` are all 127.0.0.1, and all four used to sail past a check that only
+    knew what loopback looks like written out.
+    """
+    try:
+        return ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    try:
+        return ipaddress.IPv4Address(socket.inet_aton(host))
+    except (OSError, ipaddress.AddressValueError):
+        return None
+
+
+def is_unsafe_address(ip: IPAddress) -> bool:
+    """True for any address a fetch must never reach.
+
+    Deliberately broader than "private": link-local carries the cloud metadata
+    endpoint, and reserved/unspecified ranges have no business being a source.
+    """
+    if (
+        ip.is_loopback
+        or ip.is_link_local
+        or ip.is_private
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    ):
+        return True
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None and is_unsafe_address(mapped):
         return True
     return any(ip in net for net in PRIVATE_RANGES)

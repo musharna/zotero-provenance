@@ -116,3 +116,41 @@ def test_emit_markdown_contains_all_sections():
     assert "### Recurring (untriaged) (1)" in md
     assert "https://x.com/new" in md
     assert "seen 3×" in md
+
+
+# --- the report must not become the thing it reports on ---
+#
+# The capture hook reads Claude's own output, and /source-delta tells Claude to
+# present this markdown. Emitting citations as markdown links therefore re-tagged
+# every reported source with seen:<today> the moment the report was displayed:
+# the command silently mutated the dataset it was reporting on.
+
+
+def _report() -> str:
+    items = [
+        _make_item("A", "https://fixturehost.org/new", "A Paper", ["seen:2026-05-05"]),
+        _make_item(
+            "B",
+            "https://fixturehost.org/gone",
+            "An Older Paper",
+            ["seen:2026-04-01", "seen:2026-04-20"],
+        ),
+    ]
+    return emit_markdown(
+        items, run_started=date(2026, 5, 5), context_name="lit-review", since_days=90
+    )
+
+
+def test_the_report_carries_no_capturable_citations():
+    from zotero_capture.url_processing import extract_urls
+
+    report = _report()
+    # Positive control first: an empty report would sail through the real check.
+    assert "https://fixturehost.org/new" in report, "the URLs must still be shown"
+    assert extract_urls(report) == []
+
+
+def test_the_report_is_marked_as_plugin_output():
+    from zotero_capture.capture import NO_CAPTURE_MARKER
+
+    assert NO_CAPTURE_MARKER in _report()

@@ -40,15 +40,28 @@ def prune(
     sleep_s: float = DEFAULT_SLEEP_S,
     progress: object = None,
 ) -> PruneResult:
-    """Trash every item in the collection whose URL the exclusion rules reject."""
+    """Trash every item in the collection whose URL the exclusion rules reject.
+
+    The walk is completed BEFORE anything is written. Zotero excludes trashed
+    items from ordinary listings, and the walk pages by offset, so trashing as
+    we went shifted every later entry left and the next `start=` stepped over
+    exactly as many items as had just been removed. The sweep then reported a
+    clean pass over a collection it had only partly seen.
+
+    Holding the collection costs one (key, url) pair per item, which is small
+    next to the alternative of silently skipping some of them.
+    """
     result = PruneResult()
+    snapshot: list[tuple[str, str]] = []
     for item in zotero.iter_collection_items():
-        if limit is not None and result.examined >= limit:
+        if limit is not None and len(snapshot) >= limit:
             break
-        data = item.get("data", {})
-        url = data.get("url") or ""
+        url = item.get("data", {}).get("url") or ""
         if not url:
             continue
+        snapshot.append((item["key"], url))
+
+    for key, url in snapshot:
         result.examined += 1
         if not is_excluded(url):
             continue
@@ -57,7 +70,7 @@ def prune(
             result.would_trash += 1
             continue
         try:
-            zotero.trash_item(item["key"])
+            zotero.trash_item(key)
             result.trashed += 1
         except Exception as e:  # one bad item must not abort the pass
             logger.warning("prune failed for %s: %s", url, e)

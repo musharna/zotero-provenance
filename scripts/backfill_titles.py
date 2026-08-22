@@ -23,7 +23,6 @@ import sys
 import time
 from pathlib import Path
 
-import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -31,7 +30,10 @@ from zotero_capture.backfill import backfill  # noqa: E402
 from zotero_capture.cli import build_client  # noqa: E402
 from zotero_capture.config import load_config  # noqa: E402
 from zotero_capture.prune import prune  # noqa: E402
-from zotero_capture.title_fetcher import fetch_title  # noqa: E402
+from zotero_capture.title_fetcher import (  # noqa: E402
+    build_fetch_client,
+    fetch_title,
+)
 
 # The Stop hook's 1s budget exists to keep a turn snappy. This runs unattended,
 # so give slow identifier APIs room to answer instead of failing them for speed.
@@ -74,8 +76,9 @@ def main() -> int:
     started = time.monotonic()
 
     if args.prune:
-        return _run_prune(config, dry_run=args.dry_run, limit=args.limit,
-                          sleep_s=args.sleep)
+        return _run_prune(
+            config, dry_run=args.dry_run, limit=args.limit, sleep_s=args.sleep
+        )
 
     def report(r) -> None:
         if r.examined % 25:
@@ -91,7 +94,10 @@ def main() -> int:
         )
 
     with (
-        httpx.Client(timeout=BACKFILL_TIMEOUT_S, follow_redirects=True) as http,
+        # Guarded like every other fetch path: this pass walks thousands of
+        # stored URLs unattended, which is exactly where a redirect into a
+        # private address would go unnoticed.
+        build_fetch_client(timeout=BACKFILL_TIMEOUT_S) as http,
         build_client(config, timeout=ZOTERO_TIMEOUT_S) as zotero,
     ):
         result = backfill(

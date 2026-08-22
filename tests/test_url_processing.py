@@ -340,3 +340,119 @@ def test_extract_strips_sentence_punctuation_after_a_balanced_paren():
 )
 def test_is_excluded(url: str, excluded: bool):
     assert is_excluded(url) is excluded
+
+
+# --- CommonMark delimiter rules (F4) ---
+#
+# v0.9.0 toggled on any line starting with three backticks or tildes and only
+# understood single-backtick, same-line spans. CommonMark requires a closing
+# fence to use the opener's character, be at least as long, and carry only
+# trailing whitespace; and a code span pairs backtick runs of EQUAL length.
+# Getting this wrong is worse than a false positive: one bogus toggle swallows
+# every genuine citation after it.
+
+
+def test_a_double_backtick_span_is_still_code():
+    assert extract_urls("see ``https://fixturehost.org/x`` ok") == []
+
+
+def test_a_tilde_line_does_not_close_a_backtick_fence():
+    text = "```\ncode\n~~~\nhttps://fixturehost.org/leak\n```\n"
+    assert extract_urls(text) == []
+
+
+def test_a_shorter_fence_does_not_close_a_longer_one():
+    text = "````\nhttps://fixturehost.org/a\n```\nhttps://fixturehost.org/b\n````\n"
+    assert extract_urls(text) == []
+
+
+def test_a_closing_fence_may_not_carry_trailing_content():
+    """```still-code opens nothing and closes nothing; the block stays open."""
+    text = "```\nhttps://fixturehost.org/a\n```still-code\nhttps://fixturehost.org/b\n"
+    assert extract_urls(text) == []
+
+
+def test_a_fence_inside_a_blockquote_is_recognised():
+    text = "> ```\n> https://fixturehost.org/quoted\n> ```\n"
+    assert extract_urls(text) == []
+
+
+def test_a_code_span_may_cross_a_line_within_a_paragraph():
+    text = "run `curl\nhttps://fixturehost.org/internal` then stop"
+    assert extract_urls(text) == []
+
+
+def test_a_stray_backtick_cannot_swallow_a_later_paragraph():
+    """Bounds the damage: an unpaired tick must not mask the rest of the message."""
+    text = "an unclosed ` tick here\n\nSee https://fixturehost.org/cited for details."
+    assert extract_urls(text) == ["https://fixturehost.org/cited"]
+
+
+def test_prose_and_links_survive_all_of_the_above():
+    """Positive control for the whole block."""
+    text = (
+        "Per [paper](https://fixturehost.org/p) and https://fixturehost.org/q:\n\n"
+        "```\nhttps://fixturehost.org/hidden\n```\n"
+    )
+    assert extract_urls(text) == [
+        "https://fixturehost.org/p",
+        "https://fixturehost.org/q",
+    ]
+
+
+# --- IPv6 through the whole pipeline (F8) ---
+#
+# The existing IPv6 cases call is_excluded() directly, so neither the tokenizer
+# nor canonicalize was ever exercised. Both were broken: URL_RE stopped before
+# "]", and canonicalize rebuilt the netloc without brackets.
+
+
+def test_extract_keeps_a_bracketed_ipv6_url_whole():
+    url = "https://[2606:4700:4700::1111]/x"
+    assert extract_urls(f"see {url} here") == [url]
+
+
+def test_canonicalize_keeps_the_ipv6_brackets():
+    assert (
+        canonicalize("https://[2606:4700:4700::1111]/x")
+        == "https://[2606:4700:4700::1111]/x"
+    )
+
+
+def test_ipv6_loopback_is_excluded_through_the_pipeline():
+    (url,) = extract_urls("see http://[::1]:8080/admin here")
+    assert is_excluded(canonicalize(url))
+
+
+def test_public_ipv6_survives_the_pipeline():
+    """Negative control: a real address must not be dropped."""
+    (url,) = extract_urls("see https://[2606:4700:4700::1111]/x here")
+    assert not is_excluded(canonicalize(url))
+
+
+# --- SSRF: the host filter is a boundary, not a spelling check (F6) ---
+#
+# inet_aton accepts every one of these and they all resolve to 127.0.0.1, so a
+# textual "does it look like 127.0.0.1" test never sees them.
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["2130706433", "0x7f000001", "017700000001", "127.1", "0177.0.0.1"],
+)
+def test_obfuscated_loopback_forms_are_excluded(host: str):
+    assert is_excluded(canonicalize(f"http://{host}/admin"))
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["3232235777", "0xa000001", "10.1", "192.168.1.1"],
+)
+def test_obfuscated_private_forms_are_excluded(host: str):
+    assert is_excluded(canonicalize(f"http://{host}/admin"))
+
+
+@pytest.mark.parametrize("url", ["https://8.8.8.8/x", "https://fixturehost.org/x"])
+def test_public_addresses_and_names_survive(url: str):
+    """Negative control: the boundary must not swallow the legitimate case."""
+    assert not is_excluded(canonicalize(url))

@@ -164,13 +164,39 @@ class ZoteroClient:
         new_tags: list[str],
         *,
         title_resolver: Callable[[], str] | None = None,
+        attempts: int = 3,
     ) -> bool:
         """Idempotent: PATCH only if a tag is missing or an unresolved title got resolved.
 
         `title_resolver` is a zero-arg callable invoked ONLY when the stored title is
         still the URL-as-fallback sentinel. It reuses the GET this method already
         performs, so re-enrichment costs no extra Zotero round-trip.
+
+        A 412 means another session wrote between our GET and our PATCH — routine
+        here, since several Claude sessions capture into one library and the
+        prompt hook runs detached. Zotero's documented answer is to refetch and
+        reapply, which is what this does: giving up instead lost the tags
+        silently, because capture deliberately does not queue failures. Refetching
+        also merges the other writer's tags in rather than overwriting them.
         """
+        for attempt in range(1, attempts + 1):
+            outcome = self._try_add_tags(item_key, new_tags, title_resolver)
+            if outcome is not None:
+                return outcome
+            if attempt == attempts:
+                raise ZoteroError(
+                    f"PATCH /items/{item_key} kept losing to a concurrent write "
+                    f"after {attempts} attempts"
+                )
+        raise AssertionError("unreachable")
+
+    def _try_add_tags(
+        self,
+        item_key: str,
+        new_tags: list[str],
+        title_resolver: Callable[[], str] | None,
+    ) -> bool | None:
+        """One read-modify-write. None means "version moved, try again"."""
         resp = self._client.get(f"/items/{item_key}")
         if resp.status_code >= 400:
             raise ZoteroError(
@@ -202,6 +228,8 @@ class ZoteroClient:
             json=patch_body,
             headers={"If-Unmodified-Since-Version": str(version)},
         )
+        if resp.status_code == 412:
+            return None  # someone else wrote; caller refetches and reapplies
         if resp.status_code not in (200, 204):
             raise ZoteroError(
                 f"PATCH /items/{item_key} failed: {resp.status_code} {resp.text}"
