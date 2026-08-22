@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.9.1 — 2026-08-22
+
+Fixes from an external audit of 0.9.0.
+
+- **Decoding the full HTML entity table rewrote the URL's structure.** 0.9.0 ran
+  `html.unescape()` over the whole URL, but that table contains the URL's own
+  delimiters: `&sol;` is `/`, `&num;` is `#`, `&quest;` is `?`. So a path
+  segment could forge a separator, or invent a fragment that canonicalization
+  then discarded — storing a different resource than the one cited. Only `&amp;`
+  is decoded now. It is the one entity a URL acquires merely by being written
+  into HTML, it cannot move a delimiter, and it is what the dedup fold actually
+  needed: a re-printed `&quot;` comes back as `&amp;quot;`.
+
+- **`pyproject.toml` still advertised 0.1.0** — eight releases stale, while
+  `test_version.py` asserted "exactly one source of truth" in its own docstring.
+  The drift guard now covers it.
+
+- **`pytest -q` reached the internet** despite the README promising it did not.
+  The live title-fetch tests carry their own fixture and never checked an opt-in.
+  `addopts = -m "not live"` makes the documented behaviour the real one.
+
 ## 0.9.0 — 2026-08-22
 
 - **A URL that is shown is no longer captured as one that is cited.** The hook

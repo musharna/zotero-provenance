@@ -9,6 +9,7 @@ copy is a thing that silently drifts.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import httpx
@@ -17,12 +18,26 @@ from zotero_capture import USER_AGENT, __version__
 from zotero_capture.zotero_client import ZoteroClient
 
 PLUGIN_JSON = Path(__file__).resolve().parents[1] / ".claude-plugin" / "plugin.json"
+PYPROJECT = Path(__file__).resolve().parents[1] / "pyproject.toml"
 
 
 def test_package_version_matches_the_plugin_manifest():
     """Drift guard. plugin.json is what the installer keys on, so it wins."""
     manifest = json.loads(PLUGIN_JSON.read_text())
     assert __version__ == manifest["version"]
+
+
+def test_pyproject_version_matches_the_plugin_manifest():
+    """The third copy — the one this guard did not cover, and which had drifted.
+
+    An external audit found pyproject still advertising 0.1.0 against a 0.9.0
+    plugin: eight releases stale. "Exactly one source of truth" was asserted in
+    this module's own docstring while a file nobody checked kept its own copy.
+    """
+    manifest = json.loads(PLUGIN_JSON.read_text())
+    declared = re.search(r'^version = "([^"]+)"', PYPROJECT.read_text(), re.MULTILINE)
+    assert declared, "pyproject.toml has no [project] version"
+    assert declared.group(1) == manifest["version"]
 
 
 def test_user_agent_carries_the_current_version_and_a_contact_url():

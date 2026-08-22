@@ -1,6 +1,6 @@
 [project]
 name = "zotero-provenance"
-version = "0.1.0"
+version = "0.9.1"
 description = "Record the sources a Claude Code session cites into a Zotero collection"
 requires-python = ">=3.10"
 dependencies = ["httpx>=0.24", "beautifulsoup4>=4.11"]
@@ -11,3 +11,7 @@ dev = ["pytest>=7", "respx>=0.20"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["scripts"]
+# The README promises `pytest -q` needs no network. It did not: the live title
+# fetches carry their own fixture and never checked an opt-in, so a bare run hit
+# the internet and failed under unrelated load. Opt in with `-m live`.
+addopts = '-m "not live"'
