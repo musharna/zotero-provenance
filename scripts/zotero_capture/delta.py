@@ -11,6 +11,8 @@ from .url_processing import NO_CAPTURE_MARKER
 
 SEEN_RE = re.compile(r"^seen:(\d{4}-\d{2}-\d{2})$")
 
+BACKTICK_RUN_RE = re.compile(r"`+")
+
 BUCKET_KEYS = (
     "new",
     "persisting",
@@ -70,9 +72,33 @@ def _md_link(item: dict[str, Any]) -> str:
 
     The cost is that the URL is no longer clickable from the report. These are
     items already in the library, so Zotero is where you would open them anyway.
+
+    The title goes in a code span too, and that is not cosmetic. A title is
+    whatever a fetched page put in its <title>, so it is untrusted text pasted
+    into markdown, and the commonest junk title in this library is a bare URL —
+    the very thing the report exists to list. Bolded as prose, those titles were
+    read straight back as fresh citations. Backslash-escaping does not help
+    either: escaping the brackets of a title like "[here](http://…)" still
+    leaves the URL sitting in prose. Only marking it as a literal does.
     """
-    title = item["data"].get("title") or item["data"]["url"]
-    return f"**{title}** — `{item['data']['url']}`"
+    return (
+        f"**{_code_span(item['data'].get('title') or item['data']['url'])}**"
+        f" — {_code_span(item['data']['url'])}"
+    )
+
+
+def _code_span(text: str) -> str:
+    """Wrap text in a code span its own content cannot close.
+
+    Backslash escapes do not apply inside a code span, so a backtick in the text
+    cannot be escaped — CommonMark's answer is a longer delimiter than any run
+    within, plus a space of padding when the text itself starts or ends with a
+    backtick (the renderer strips one such space from each end).
+    """
+    longest = max((len(m.group(0)) for m in BACKTICK_RUN_RE.finditer(text)), default=0)
+    fence = "`" * (longest + 1)
+    pad = " " if text.startswith("`") or text.endswith("`") else ""
+    return f"{fence}{pad}{text}{pad}{fence}"
 
 
 def emit_markdown(

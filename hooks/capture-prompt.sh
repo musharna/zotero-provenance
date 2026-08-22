@@ -27,7 +27,7 @@ mkdir -p "$(dirname "$LOG")"
 	printf '%s' "$PROMPT" | timeout 15 "$(zp_python)" \
 		"$HOOK_DIR/../scripts/zotero_capture_main.py" \
 		--cwd "$CWD" --session "$SESSION_ID" \
-		--context user-shared --message-from-stdin
+		--context user-shared --origin user --message-from-stdin
 ) >/dev/null 2>>"$LOG" &
 disown 2>/dev/null || true
 

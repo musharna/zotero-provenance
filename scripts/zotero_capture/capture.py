@@ -55,6 +55,23 @@ def _domain(url: str) -> str:
     return (urlsplit(url).hostname or "").lower()
 
 
+def _is_generated_report(message: str, origin: str) -> bool:
+    """True for one of this plugin's own reports, which must not be re-captured.
+
+    Two restrictions, both because the marker is a public string that anyone can
+    type. It is honoured only in assistant output — a user prompt is not a
+    generated report, and honouring it there let anyone silence capture for a
+    whole message by quoting it. And it must LEAD the message, the way
+    emit_markdown writes it, so that merely discussing the marker does not
+    suppress the citations in the same turn.
+
+    This is the backup layer. The structural rule — a report shows each URL in a
+    code span, which extraction reads as displayed rather than cited — is what
+    normally does the work.
+    """
+    return origin == "assistant" and message.lstrip().startswith(NO_CAPTURE_MARKER)
+
+
 def capture_message(
     *,
     message: str,
@@ -64,11 +81,12 @@ def capture_message(
     db_path: Path,
     zotero: ZoteroClient,
     title_fetcher: Callable[[str], str],
+    origin: str = "assistant",
 ) -> CaptureResult:
     """Process one message: extract URLs, then create or re-tag each in Zotero."""
     init_db(db_path)
     result = CaptureResult()
-    if NO_CAPTURE_MARKER in message:
+    if _is_generated_report(message, origin):
         return result
     raw_urls = extract_urls(message)
     canonicals: list[str] = []

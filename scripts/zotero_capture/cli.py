@@ -49,6 +49,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--message", default=None, help="message text inline (testing)")
     p.add_argument(
+        "--origin",
+        choices=("assistant", "user"),
+        default="assistant",
+        help="who wrote the message; only assistant output may carry the "
+        "generated-report marker",
+    )
+    p.add_argument(
         "--triage",
         default=None,
         metavar="URL",
@@ -123,6 +130,7 @@ def run_capture(
     title_fetcher: Callable[..., str],
     log_path: Path,
     retry_queue_path: Path,
+    origin: str = "assistant",
 ) -> CaptureResult:
     text: str = sys.stdin.read() if message is None else message
     started = time.monotonic()
@@ -135,6 +143,7 @@ def run_capture(
         db_path=db_path,
         zotero=zotero,
         title_fetcher=title_fetcher,
+        origin=origin,
     )
     # Failures are NOT enqueued: _retry_handler is a stub that never drains, so
     # enqueuing would grow the file forever. Errors are surfaced in the log below.
@@ -191,6 +200,7 @@ def main(argv: list[str] | None = None) -> int:
                 title_fetcher=fetch_title,
                 log_path=log_path,
                 retry_queue_path=queue_path,
+                origin=args.origin,
             )
         return 0
     except Exception:
