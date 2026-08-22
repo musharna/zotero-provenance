@@ -131,8 +131,16 @@ def test_patch_add_tag_dedups():
     }
 
 
-def test_add_tags_412_raises_zotero_error():
-    """412 conflict (concurrent writer bumped version) must raise ZoteroError, not httpx.HTTPStatusError."""
+def test_add_tags_surfaces_a_persistent_412_as_zotero_error():
+    """A conflict that never clears must still raise ZoteroError, not httpx's.
+
+    Behaviour change: 412 used to raise on the FIRST occurrence. It is now
+    retried, because a single conflict is the ordinary outcome of two sessions
+    tagging one item and giving up silently dropped this session's tags. The
+    contract preserved here is the error TYPE and the fact that a hopeless
+    conflict still fails loudly rather than being swallowed.
+    """
+    attempts = {"n": 0}
 
     def handler(req: httpx.Request) -> httpx.Response:
         if req.method == "GET":
@@ -141,6 +149,7 @@ def test_add_tags_412_raises_zotero_error():
                 headers={"Last-Modified-Version": "5"},
                 json={"key": "ITEM1", "version": 5, "data": {"tags": []}},
             )
+        attempts["n"] += 1
         return httpx.Response(412, text="version conflict")
 
     client = ZoteroClient(
@@ -150,8 +159,9 @@ def test_add_tags_412_raises_zotero_error():
         web_sources_collection_key="COLL",
         transport=httpx.MockTransport(handler),
     )
-    with pytest.raises(ZoteroError, match="412"):
+    with pytest.raises(ZoteroError, match="concurrent write"):
         client.add_tags("ITEM1", ["seen:2026-05-05"])
+    assert attempts["n"] == 3, "it should have retried, then given up"
 
 
 def test_delete_item_tolerates_404_from_get():
@@ -351,7 +361,9 @@ def test_add_tags_keeps_unresolved_tag_when_resolution_fails_again():
     client = _stateful_item_client(state, [])
     # Resolver returns the URL again -> still unfetchable.
     client.add_tags(
-        "ITEM1", ["seen:2026-05-05"], title_resolver=lambda: "https://fixturehost.org/foo"
+        "ITEM1",
+        ["seen:2026-05-05"],
+        title_resolver=lambda: "https://fixturehost.org/foo",
     )
 
     assert state["title"] == "https://fixturehost.org/foo"
@@ -521,15 +533,23 @@ def test_update_url_carries_a_url_shaped_title_along():
             return httpx.Response(
                 200,
                 headers={"Last-Modified-Version": "3"},
-                json={"key": "K", "version": 3,
-                      "data": {"key": "K", "url": "https://a.test/x(1",
-                               "title": "https://a.test/x(1"}},
+                json={
+                    "key": "K",
+                    "version": 3,
+                    "data": {
+                        "key": "K",
+                        "url": "https://a.test/x(1",
+                        "title": "https://a.test/x(1",
+                    },
+                },
             )
         calls.append(json.loads(req.content))
         return httpx.Response(204)
 
     with ZoteroClient(
-        api_key="fake", library_id="0", library_type="user",
+        api_key="fake",
+        library_id="0",
+        library_type="user",
         web_sources_collection_key="C",
         transport=httpx.MockTransport(handler),
     ) as client:
@@ -547,15 +567,23 @@ def test_update_url_leaves_a_real_title_alone():
             return httpx.Response(
                 200,
                 headers={"Last-Modified-Version": "3"},
-                json={"key": "K", "version": 3,
-                      "data": {"key": "K", "url": "https://a.test/x(1",
-                               "title": "A Real Article Title"}},
+                json={
+                    "key": "K",
+                    "version": 3,
+                    "data": {
+                        "key": "K",
+                        "url": "https://a.test/x(1",
+                        "title": "A Real Article Title",
+                    },
+                },
             )
         calls.append(json.loads(req.content))
         return httpx.Response(204)
 
     with ZoteroClient(
-        api_key="fake", library_id="0", library_type="user",
+        api_key="fake",
+        library_id="0",
+        library_type="user",
         web_sources_collection_key="C",
         transport=httpx.MockTransport(handler),
     ) as client:
@@ -563,3 +591,88 @@ def test_update_url_leaves_a_real_title_alone():
 
     assert calls == [{"url": "https://a.test/x(1)"}]
 
+
+# --- 412 recovery (F5) ---
+#
+# Zotero rejects a PATCH whose If-Unmodified-Since-Version is stale, which is
+# exactly what happens when two sessions tag the same item at once. Raising and
+# giving up lost this session's tags silently, because capture deliberately does
+# not queue failures. The API's documented answer is to refetch and retry.
+
+
+def test_add_tags_retries_after_a_412_and_keeps_the_other_writer_s_tags():
+    versions = {"n": 5}
+    tags_now = [{"tag": "seen:2026-05-01"}]
+    patches: list = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET":
+            return httpx.Response(
+                200,
+                headers={"Last-Modified-Version": str(versions["n"])},
+                json={
+                    "version": versions["n"],
+                    "data": {
+                        "tags": list(tags_now),
+                        "title": "Real Title",
+                        "url": "https://fixturehost.org/a",
+                    },
+                },
+            )
+        body = json.loads(req.content)
+        patches.append((req.headers.get("if-unmodified-since-version"), body))
+        if len(patches) == 1:
+            # Someone else wrote first: bump the version and add their tag.
+            versions["n"] = 9
+            tags_now.append({"tag": "context:their-work"})
+            return httpx.Response(412, text="Precondition Failed")
+        return httpx.Response(204)
+
+    with ZoteroClient(
+        api_key="k",
+        library_id="0",
+        library_type="user",
+        web_sources_collection_key="C",
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        assert client.add_tags("KEY1", ["context:mine"]) is True
+
+    assert len(patches) == 2, "a stale version must be refetched and retried"
+    assert patches[1][0] == "9", "the retry must carry the version it just refetched"
+    final = {t["tag"] for t in patches[1][1]["tags"]}
+    assert "context:mine" in final, "our tag must survive"
+    assert "context:their-work" in final, "and must not clobber the concurrent writer"
+
+
+def test_add_tags_gives_up_after_repeated_412s():
+    """A livelock must surface as an error, not spin."""
+    patches: list = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET":
+            return httpx.Response(
+                200,
+                headers={"Last-Modified-Version": "1"},
+                json={
+                    "version": 1,
+                    "data": {
+                        "tags": [],
+                        "title": "T",
+                        "url": "https://fixturehost.org/a",
+                    },
+                },
+            )
+        patches.append(1)
+        return httpx.Response(412, text="Precondition Failed")
+
+    with ZoteroClient(
+        api_key="k",
+        library_id="0",
+        library_type="user",
+        web_sources_collection_key="C",
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        with pytest.raises(ZoteroError):
+            client.add_tags("KEY1", ["context:mine"])
+
+    assert len(patches) <= 4, "must not retry without bound"

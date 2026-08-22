@@ -230,3 +230,126 @@ def test_private_urls_never_reach_the_api(tmp_path: Path, fake_zotero):
     assert not [r for r in handler.requests if r[0] == "POST"], (
         f"a private URL was sent to the API: {handler.requests}"
     )
+
+
+def _run_hook_turns(
+    tmp_path: Path,
+    port: int,
+    texts: list[str],
+    cwd: str,
+    *,
+    last_message: str | None = None,
+) -> subprocess.CompletedProcess:
+    """Drive the Stop hook over a transcript holding SEVERAL assistant turns."""
+    transcript = tmp_path / "transcript.jsonl"
+    transcript.write_text(
+        "".join(
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {"content": [{"type": "text", "text": t}]},
+                }
+            )
+            + "\n"
+            for t in texts
+        )
+    )
+    secrets = tmp_path / "secrets.env"
+    secrets.write_text(
+        "ZOTERO_API_KEY=testkey\n"
+        "ZOTERO_LIBRARY_TYPE=user\n"
+        "ZOTERO_LIBRARY_ID=testlib\n"
+        "ZOTERO_WEBSOURCES_COLLECTION_KEY=COLL1\n"
+        f"ZOTERO_API_BASE=http://127.0.0.1:{port}\n"
+    )
+    env = os.environ.copy()
+    env.pop("ZOTERO_CAPTURE_DISABLE", None)
+    env["ZOTERO_SECRETS_FILE"] = str(secrets)
+    env["ZOTERO_CAPTURE_STATE_DIR"] = str(tmp_path / "state")
+    payload: dict[str, Any] = {
+        "transcript_path": str(transcript),
+        "session_id": "s1",
+        "cwd": cwd,
+    }
+    if last_message is not None:
+        payload["last_assistant_message"] = last_message
+    return subprocess.run(
+        ["bash", str(STOP_HOOK)],
+        input=json.dumps(payload),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
+OLD_URL = "https://zp-e2e.fixturehost.org/old-turn"
+NEW_URL = "https://zp-e2e.fixturehost.org/new-turn"
+
+
+@requires_jq
+def test_only_the_last_turn_is_captured_from_a_transcript(tmp_path: Path, fake_zotero):
+    """A Stop hook fires once per turn, so it must read one turn.
+
+    Reading every assistant event and taking the last N lines re-captured the
+    whole recent history on every turn: old URLs got today's seen: tag and the
+    current turn's context:, and a long answer could push its own opening fence
+    out of the window.
+    """
+    server, handler = fake_zotero
+    port = server.server_address[1]
+
+    proc = _run_hook_turns(
+        tmp_path,
+        port,
+        [f"earlier I read {OLD_URL}", f"now see {NEW_URL}"],
+        "/home/someone/my-thesis",
+    )
+    assert proc.returncode == 0, proc.stderr
+
+    posted = {r[2][0]["url"] for r in handler.requests if r[0] == "POST"}
+    assert posted == {NEW_URL}, f"only the final turn should be captured, got {posted}"
+
+
+@requires_jq
+def test_last_assistant_message_is_preferred_over_the_transcript(
+    tmp_path: Path, fake_zotero
+):
+    """The field Claude Code supplies wins; the transcript is only a fallback."""
+    server, handler = fake_zotero
+    port = server.server_address[1]
+
+    proc = _run_hook_turns(
+        tmp_path,
+        port,
+        [f"stale transcript entry {OLD_URL}"],
+        "/home/someone/my-thesis",
+        last_message=f"the real final message cites {NEW_URL}",
+    )
+    assert proc.returncode == 0, proc.stderr
+
+    posted = {r[2][0]["url"] for r in handler.requests if r[0] == "POST"}
+    assert posted == {NEW_URL}
+
+
+@requires_jq
+def test_a_fence_opened_in_an_earlier_turn_does_not_leak(tmp_path: Path, fake_zotero):
+    """Positive control for the window bug, in the direction that loses data.
+
+    With the old concatenate-then-tail behaviour a fence opened in one turn kept
+    toggling state into the next, so whether a citation was captured depended on
+    text the user could no longer see.
+    """
+    server, handler = fake_zotero
+    port = server.server_address[1]
+
+    proc = _run_hook_turns(
+        tmp_path,
+        port,
+        ["```\nunclosed fence from an earlier turn", f"plainly citing {NEW_URL}"],
+        "/home/someone/my-thesis",
+    )
+    assert proc.returncode == 0, proc.stderr
+
+    posted = {r[2][0]["url"] for r in handler.requests if r[0] == "POST"}
+    assert posted == {NEW_URL}, "a stale fence must not suppress this turn's citation"

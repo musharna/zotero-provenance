@@ -106,3 +106,66 @@ def test_prune_skips_items_with_no_url():
 
     assert calls == []
     assert result.trashed == 0
+
+
+def _live_client(items: list[dict], calls: list) -> ZoteroClient:
+    """A mock that behaves like Zotero: trashing REMOVES the item from listings.
+
+    The mock above keeps every patched item in the list, so it cannot fail on a
+    loop that mutates while paginating — which is exactly the bug this exercises.
+    """
+    live = list(items)
+    by_key = {i["key"]: i for i in items}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        path = req.url.path
+        if path.endswith("/items/top"):
+            start = int(req.url.params.get("start", 0))
+            limit = int(req.url.params.get("limit", 100))
+            return httpx.Response(200, json=live[start : start + limit])
+        key = path.rsplit("/", 1)[-1]
+        if req.method == "GET":
+            return httpx.Response(
+                200, headers={"Last-Modified-Version": "7"}, json=by_key[key]
+            )
+        if req.method == "PATCH":
+            calls.append(key)
+            body = json.loads(req.content)
+            if body.get("deleted") == 1:
+                live[:] = [i for i in live if i["key"] != key]
+            return httpx.Response(204)
+        return httpx.Response(405)
+
+    return ZoteroClient(
+        api_key="fake",
+        library_id="0000",
+        library_type="user",
+        web_sources_collection_key="COLL1",
+        transport=httpx.MockTransport(handler),
+    )
+
+
+def test_prune_does_not_skip_items_when_trashing_shifts_the_pages():
+    """Trashing during an offset walk used to step over its own gap.
+
+    Zotero excludes trashed items from normal listings, so removing entries from
+    page 1 shifts everything left; asking for start=100 next then skips as many
+    entries as were removed. Sized past one page so the shift actually bites.
+    """
+    items = []
+    for n in range(250):
+        junk = n % 3 == 0
+        url = (
+            f"https://fonts.gstatic.com/f{n}.woff2"
+            if junk
+            else f"https://arxiv.org/abs/2401.{n:05d}"
+        )
+        items.append(_item(f"K{n:04d}", url))
+    expected_junk = {i["key"] for i in items if "gstatic" in i["data"]["url"]}
+
+    calls: list = []
+    result = prune(_live_client(items, calls), sleep_s=0)
+
+    assert set(calls) == expected_junk, "every excluded item must be trashed exactly once"
+    assert result.trashed == len(expected_junk)
+    assert result.examined == 250, "and every item must have been examined"

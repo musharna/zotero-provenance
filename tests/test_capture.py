@@ -63,7 +63,10 @@ def test_capture_known_url_same_day_same_context_is_noop(
     empty_cache, fake_zotero, fake_title_fetcher
 ):
     insert_url(
-        empty_cache, "https://fixturehost.org/foo", "EXISTKEY", first_seen=date(2026, 5, 5)
+        empty_cache,
+        "https://fixturehost.org/foo",
+        "EXISTKEY",
+        first_seen=date(2026, 5, 5),
     )
     fake_zotero.add_tags.return_value = False
     result = capture_message(
@@ -84,7 +87,10 @@ def test_capture_known_url_new_context_adds_tag(
     empty_cache, fake_zotero, fake_title_fetcher
 ):
     insert_url(
-        empty_cache, "https://fixturehost.org/foo", "EXISTKEY", first_seen=date(2026, 5, 1)
+        empty_cache,
+        "https://fixturehost.org/foo",
+        "EXISTKEY",
+        first_seen=date(2026, 5, 1),
     )
     result = capture_message(
         message="Source: https://fixturehost.org/foo",
@@ -185,7 +191,10 @@ def test_capture_zotero_error_on_add_tags_records_error_no_last_seen_update(
     from zotero_capture.zotero_client import ZoteroError
 
     insert_url(
-        empty_cache, "https://fixturehost.org/foo", "EXISTKEY", first_seen=date(2026, 5, 1)
+        empty_cache,
+        "https://fixturehost.org/foo",
+        "EXISTKEY",
+        first_seen=date(2026, 5, 1),
     )
     fake_zotero.add_tags.side_effect = ZoteroError("simulated 503")
     result = capture_message(
@@ -240,7 +249,10 @@ def test_recurring_url_is_offered_a_title_resolver(
 ):
     """Recurrence is the retry opportunity: the client must be handed a way to resolve."""
     insert_url(
-        empty_cache, "https://fixturehost.org/foo", "EXISTKEY", first_seen=date(2026, 5, 1)
+        empty_cache,
+        "https://fixturehost.org/foo",
+        "EXISTKEY",
+        first_seen=date(2026, 5, 1),
     )
     capture_message(
         message="https://fixturehost.org/foo",
@@ -286,3 +298,149 @@ def test_reenrichment_is_capped_per_run(empty_cache, fake_zotero):
         title_fetcher=counting_fetcher,
     )
     assert len(fetched) == MAX_REENRICH_PER_RUN
+
+
+def test_a_message_marked_as_plugin_output_captures_nothing(
+    empty_cache, fake_zotero, fake_title_fetcher
+):
+    """Second, independent layer against the plugin re-capturing its own report.
+
+    The backtick rule already covers the URLs themselves; this covers a report
+    that got reformatted on the way out, which is the failure mode a rule based
+    purely on formatting cannot survive alone.
+    """
+    from zotero_capture.capture import NO_CAPTURE_MARKER
+
+    result = capture_message(
+        message=f"{NO_CAPTURE_MARKER}\n\nSee https://fixturehost.org/reported here.",
+        project_slug="home",
+        context=None,
+        today=date(2026, 5, 5),
+        db_path=empty_cache,
+        zotero=fake_zotero,
+        title_fetcher=fake_title_fetcher,
+    )
+
+    assert result.urls_seen == 0
+    fake_zotero.post_webpage_item.assert_not_called()
+
+
+def test_the_same_message_without_the_marker_is_captured(
+    empty_cache, fake_zotero, fake_title_fetcher
+):
+    """Positive control: the marker must be doing the work, not the prose."""
+    result = capture_message(
+        message="See https://fixturehost.org/reported here.",
+        project_slug="home",
+        context=None,
+        today=date(2026, 5, 5),
+        db_path=empty_cache,
+        zotero=fake_zotero,
+        title_fetcher=fake_title_fetcher,
+    )
+
+    assert result.urls_seen == 1
+    fake_zotero.post_webpage_item.assert_called_once()
+
+
+def test_a_url_another_session_is_mid_post_on_is_not_posted_again(
+    empty_cache, fake_zotero, fake_title_fetcher
+):
+    """The race the reservation exists to stop.
+
+    A reservation with no key means another process has claimed the URL and its
+    POST is in flight. Creating a second item here is what orphaned one of them:
+    only one key fits in the index, so the other Zotero item became invisible to
+    dedup permanently.
+    """
+    from zotero_capture.sqlite_cache import reserve_url
+
+    reserve_url(empty_cache, "https://fixturehost.org/contested", date(2026, 5, 5))
+
+    result = capture_message(
+        message="See https://fixturehost.org/contested here.",
+        project_slug="home",
+        context=None,
+        today=date(2026, 5, 5),
+        db_path=empty_cache,
+        zotero=fake_zotero,
+        title_fetcher=fake_title_fetcher,
+    )
+
+    fake_zotero.post_webpage_item.assert_not_called()
+    # And it must not "tag" the empty key either: the old code fell straight
+    # through to the recurring branch and PATCHed an item key of "".
+    fake_zotero.add_tags.assert_not_called()
+    assert result.urls_new == 0
+
+
+def test_the_claim_is_taken_before_the_item_is_created(
+    empty_cache, fake_zotero, fake_title_fetcher
+):
+    """The ordering that makes dedup safe, observed from inside the POST.
+
+    Asserting only the end state cannot tell the fixed code from the broken one:
+    both leave exactly one row behind. What changed is WHEN the row appears —
+    before the network call, so a second process cannot also conclude the URL is
+    new while this POST is still in flight.
+    """
+    from zotero_capture.sqlite_cache import lookup_url
+
+    observed: dict = {}
+
+    def _post(**kwargs):
+        observed["row"] = lookup_url(empty_cache, "https://fixturehost.org/ordered")
+        return "NEWKEY"
+
+    fake_zotero.post_webpage_item.side_effect = _post
+    capture_message(
+        message="See https://fixturehost.org/ordered here.",
+        project_slug="home",
+        context=None,
+        today=date(2026, 5, 5),
+        db_path=empty_cache,
+        zotero=fake_zotero,
+        title_fetcher=fake_title_fetcher,
+    )
+
+    assert observed["row"] is not None, "the URL must be claimed before the POST"
+    assert observed["row"]["zotero_key"] == "", "and the key only lands afterwards"
+    row = lookup_url(empty_cache, "https://fixturehost.org/ordered")
+    assert row["zotero_key"] == "NEWKEY"
+
+
+def test_a_failed_post_releases_the_reservation(
+    empty_cache, fake_zotero, fake_title_fetcher
+):
+    """A claim that never produced an item must not block the URL forever."""
+    from zotero_capture.sqlite_cache import lookup_url
+
+    fake_zotero.post_webpage_item.side_effect = RuntimeError("boom")
+    capture_message(
+        message="See https://fixturehost.org/doomed here.",
+        project_slug="home",
+        context=None,
+        today=date(2026, 5, 5),
+        db_path=empty_cache,
+        zotero=fake_zotero,
+        title_fetcher=fake_title_fetcher,
+    )
+    assert lookup_url(empty_cache, "https://fixturehost.org/doomed") is None
+
+    # Positive control: the retry actually succeeds once the API recovers.
+    fake_zotero.post_webpage_item.side_effect = None
+    fake_zotero.post_webpage_item.return_value = "NEWKEY"
+    result = capture_message(
+        message="See https://fixturehost.org/doomed here.",
+        project_slug="home",
+        context=None,
+        today=date(2026, 5, 5),
+        db_path=empty_cache,
+        zotero=fake_zotero,
+        title_fetcher=fake_title_fetcher,
+    )
+    assert result.urls_new == 1
+    assert (
+        lookup_url(empty_cache, "https://fixturehost.org/doomed")["zotero_key"]
+        == "NEWKEY"
+    )

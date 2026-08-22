@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import html
+import ipaddress
 import logging
 import os
 import re
+import socket
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from urllib.parse import urlsplit
 from xml.etree import ElementTree
 
@@ -15,11 +17,76 @@ import httpx
 from bs4 import BeautifulSoup
 
 from . import USER_AGENT
+from .url_processing import IPAddress, is_unsafe_address, parse_ip_literal
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_S = 1.0
 MAX_BYTES = 32 * 1024
+
+
+class UnsafeHostError(Exception):
+    """Raised instead of connecting to an address a fetch must never reach."""
+
+
+def _resolve(host: str) -> Sequence[IPAddress]:
+    """Every address a connection to `host` could actually land on."""
+    return [ipaddress.ip_address(info[4][0]) for info in socket.getaddrinfo(host, None)]
+
+
+class GuardedTransport(httpx.BaseTransport):
+    """Refuses any request whose host resolves to a non-public address.
+
+    This lives at the transport rather than at the call sites because httpx
+    re-enters the transport once per redirect hop. Checking the URL we were
+    handed would miss the only case that matters: a public, innocuous-looking
+    URL that 302s to 169.254.169.254 or a host on the loopback interface.
+
+    Known limit, stated rather than papered over: validation happens at resolve
+    time, so a DNS entry that changes between this lookup and the socket connect
+    (a rebinding attack) is not covered. Closing that needs the connection
+    pinned to the address checked here, which httpx does not expose.
+    """
+
+    def __init__(
+        self,
+        inner: httpx.BaseTransport | None = None,
+        *,
+        resolve: Callable[[str], Sequence[IPAddress]] = _resolve,
+    ) -> None:
+        self._inner = inner if inner is not None else httpx.HTTPTransport()
+        self._resolve = resolve
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        host = request.url.host
+        literal = parse_ip_literal(host)
+        candidates: Sequence[IPAddress]
+        if literal is not None:
+            candidates = [literal]
+        else:
+            try:
+                candidates = self._resolve(host)
+            except OSError as e:
+                # A name that will not resolve cannot be a source, and treating
+                # the failure as "allow" would make the guard fail open.
+                raise UnsafeHostError(f"{host} does not resolve: {e}") from e
+        if not candidates:
+            raise UnsafeHostError(f"{host} resolves to nothing")
+        for ip in candidates:
+            if is_unsafe_address(ip):
+                raise UnsafeHostError(f"{host} resolves to {ip}, which is not public")
+        return self._inner.handle_request(request)
+
+    def close(self) -> None:
+        self._inner.close()
+
+
+def build_fetch_client(*, timeout: float = DEFAULT_TIMEOUT_S) -> httpx.Client:
+    """The only client this module should make: redirects on, addresses guarded."""
+    return httpx.Client(
+        timeout=timeout, follow_redirects=True, transport=GuardedTransport()
+    )
+
 
 _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 
@@ -219,7 +286,7 @@ def _fetch_title_raw(url: str, *, client: httpx.Client | None = None) -> str:
     owns_client = client is None
     try:
         if client is None:
-            client = httpx.Client(timeout=DEFAULT_TIMEOUT_S, follow_redirects=True)
+            client = build_fetch_client()
         deadline = time.monotonic() + DEFAULT_TIMEOUT_S
         identifier_title = _identifier_title(client, url)
         if identifier_title:

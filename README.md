@@ -169,9 +169,28 @@ captured URLs are unaffected, and what drops out is mostly internal
 infrastructure (`prometheus`, VPN and API endpoints). A source you only ever
 mention in backticks will be missed — write it as prose or a link to capture it.
 
-Separately, HTML entities in a URL are now decoded before storing, so a link
-copied out of rendered markup (`?a=1&amp;b=2`) lands on the same item as the
-plain form instead of duplicating it.
+Separately, `&amp;` in a URL is decoded before storing, so a link copied out of
+rendered markup (`?a=1&amp;b=2`) lands on the same item as the plain form
+instead of duplicating it. Only that one entity: the full HTML entity table
+contains the URL's own delimiters (`&sol;` is `/`, `&num;` is `#`), and decoding
+those would silently store a different resource than the one cited.
+
+This plugin's own reports — `/source-delta` in particular — show URLs in
+backticks and carry a marker that suppresses capture for the whole message.
+Without that, displaying a report re-tagged every source it listed, including
+the ones it was reporting as dropped.
+
+### Where fetching is allowed to go
+
+Title fetching runs through a transport that resolves each host and refuses
+anything that is not publicly routable — loopback, private, link-local (which
+carries the cloud metadata endpoint), reserved. Every redirect hop is checked,
+not just the URL captured, since a public link can redirect anywhere. Numeric
+host spellings (`2130706433`, `0x7f000001`, `127.1`) resolve like any other and
+are refused the same way.
+
+The check happens at resolution time, so a DNS record that changes between the
+lookup and the connection — a rebinding attack — is not covered.
 
 ## Known limitations
 
@@ -188,7 +207,7 @@ plain form instead of duplicating it.
 python3 -m pytest -q
 ```
 
-229 tests run by default and need no network. The 10 live ones are opted _into_
+280 tests run by default and need no network. The 10 live ones are opted _into_
 with `-m live` rather than out of — `addopts = -m "not live"` is set, because
 they used to run on a bare `pytest -q` and reach the internet despite this
 section promising otherwise. The hook tests execute the real shell scripts as

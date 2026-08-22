@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.10.0 — 2026-08-22
+
+The rest of the external audit of 0.9.0.
+
+- **The Stop hook never read "the last message."** It selected every assistant
+  event in the whole transcript, concatenated them, and kept the last 200 lines.
+  Old URLs were therefore re-captured on later turns with today's `seen:` tag and
+  the current turn's `context:`, and a code fence opened in an earlier turn
+  decided whether this turn's citations were captured at all. It now uses the
+  `last_assistant_message` the hook is given, falling back to the final assistant
+  event only — base64-framed so a multi-line message survives intact.
+
+- **`/source-delta` re-captured everything it reported.** It emitted markdown
+  links, the one form capture deliberately keeps, so displaying the report
+  stamped today's `seen:` tag onto the very sources it listed as dropped. Reports
+  now show URLs in backticks and carry an explicit no-capture marker that capture
+  honours. Two independent layers, because a reformatted report loses its
+  backticks and a summarised one loses its marker.
+
+- **The fence and code-span rules were not CommonMark.** Any three-backtick or
+  three-tilde line toggled state, so `~~~` closed a `fence and` closed a
+  ```` one; only single-backtick same-line spans were understood, so ``` ``url` ```` `
+  slipped through. Closing fences now require the opener's character, at least
+  its length, and nothing but trailing whitespace; spans pair runs of equal
+  length and may cross lines within a paragraph. Blockquoted fences are
+  recognised. Span pairing is bounded to a paragraph so one stray backtick cannot
+  silently swallow every later citation. Retention on a 324-message replay is
+  unchanged at 95.6%.
+
+- **Host filtering was not an SSRF boundary.** It inspected spelling only, so
+  `2130706433`, `0x7f000001`, `017700000001` and `127.1` — all 127.0.0.1 to any
+  HTTP client — passed straight through, and a public host could simply redirect
+  to a private one. Fetching now goes through a guarded transport that resolves
+  and validates every hop, redirects included. Known limit, stated rather than
+  hidden: validation happens at resolve time, so DNS rebinding is not covered.
+
+- **Dedup was neither atomic nor durable.** `lookup → POST → INSERT OR IGNORE`
+  let two sessions both create an item, after which one key was silently dropped
+  and the other Zotero item became invisible to dedup forever. A URL is now
+  claimed before the POST; a failed POST releases the claim. Verified with real
+  concurrent processes, not a simulated race.
+
+- **A 412 lost this session's tags.** Two sessions tagging one item is ordinary,
+  and the loser simply raised — with no retry queue behind it, the tags were
+  gone. It now refetches and reapplies, merging the other writer's tags instead
+  of overwriting them, and gives up loudly after three attempts.
+
+- **`prune` skipped items while paginating.** Trashed items leave Zotero's
+  listings, so removing entries from one page shifted the rest left and the next
+  offset stepped over exactly as many as had been removed — reporting a clean
+  sweep over a collection it had only partly seen. It now snapshots before
+  writing. The old test could not catch this because its mock never removed
+  patched items.
+
+- **IPv6 was broken end to end.** The tokenizer stopped at `]`, truncating every
+  bracketed URL, and canonicalization rebuilt the netloc without brackets. The
+  passing IPv6 tests only ever called `is_excluded` directly.
+
 ## 0.9.1 — 2026-08-22
 
 Fixes from an external audit of 0.9.0.

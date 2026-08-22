@@ -9,8 +9,20 @@ from datetime import date
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from .sqlite_cache import init_db, insert_url, lookup_url, update_last_seen
-from .url_processing import canonicalize, extract_urls, is_excluded
+from .sqlite_cache import (
+    init_db,
+    lookup_url,
+    release_url,
+    reserve_url,
+    set_zotero_key,
+    update_last_seen,
+)
+from .url_processing import (
+    NO_CAPTURE_MARKER,
+    canonicalize,
+    extract_urls,
+    is_excluded,
+)
 from .zotero_client import UNRESOLVED_TITLE_TAG, ZoteroClient, ZoteroError
 
 logger = logging.getLogger(__name__)
@@ -56,6 +68,8 @@ def capture_message(
     """Process one message: extract URLs, then create or re-tag each in Zotero."""
     init_db(db_path)
     result = CaptureResult()
+    if NO_CAPTURE_MARKER in message:
+        return result
     raw_urls = extract_urls(message)
     canonicals: list[str] = []
     seen_canonicals: set[str] = set()
@@ -99,28 +113,51 @@ def capture_message(
     for url in canonicals:
         try:
             existing = lookup_url(db_path, url)
-            if existing is None:
-                title = title_fetcher(url)
-                tags = [context_tag, project_tag, seen_tag, f"domain:{_domain(url)}"]
-                if title == url:
-                    tags.append(UNRESOLVED_TITLE_TAG)
-                key = zotero.post_webpage_item(
-                    url_canonical=url,
-                    title=title,
-                    access_date=today_iso,
-                    tags=tags,
-                )
+            if existing is None and reserve_url(db_path, url, today):
+                # Claimed before the network call, so a second session cannot
+                # also decide this URL is new while the POST is in flight and
+                # create a duplicate item that dedup could never see again.
+                try:
+                    title = title_fetcher(url)
+                    tags = [
+                        context_tag,
+                        project_tag,
+                        seen_tag,
+                        f"domain:{_domain(url)}",
+                    ]
+                    if title == url:
+                        tags.append(UNRESOLVED_TITLE_TAG)
+                    key = zotero.post_webpage_item(
+                        url_canonical=url,
+                        title=title,
+                        access_date=today_iso,
+                        tags=tags,
+                    )
+                except BaseException:
+                    # No item was created, so the claim must not outlive the
+                    # attempt or the URL would be permanently undedupable.
+                    release_url(db_path, url)
+                    raise
+                set_zotero_key(db_path, url, key)
                 result.urls_new += 1
-                insert_url(db_path, url, key, today)
-            else:
-                key = existing["zotero_key"]
-                zotero.add_tags(
-                    key,
-                    [seen_tag, context_tag, project_tag],
-                    title_resolver=make_title_resolver(url),
-                )
-                result.urls_recurring += 1
-                update_last_seen(db_path, url, today)
+                continue
+
+            row = existing if existing is not None else lookup_url(db_path, url)
+            key = (row or {}).get("zotero_key") or ""
+            if not key:
+                # Another session holds the claim and its POST has not landed
+                # yet. There is no item to tag, and creating one is the very
+                # duplicate the claim exists to prevent, so let the next
+                # sighting do it.
+                logger.debug("%s is claimed by another session; deferring", url)
+                continue
+            zotero.add_tags(
+                key,
+                [seen_tag, context_tag, project_tag],
+                title_resolver=make_title_resolver(url),
+            )
+            result.urls_recurring += 1
+            update_last_seen(db_path, url, today)
         except ZoteroError as e:
             logger.error("Zotero API error for %s: %s", url, e)
             result.errors.append(
