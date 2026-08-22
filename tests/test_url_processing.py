@@ -38,16 +38,32 @@ def test_canonicalize(raw: str, expected: str):
 # --- HTML entities in a URL ---
 #
 # A URL lifted out of rendered HTML carries the page's escaping, so "?a=1&b=2"
-# arrives as "?a=1&amp;b=2". Undoing that here is what makes the same source
-# dedup to one item: an escaped copy used to miss the lookup and create a
-# duplicate, and because each pass escapes again (&amp; -> &amp;amp;) the
-# duplicates never stopped arriving.
+# arrives as "?a=1&amp;b=2", which misses the dedup lookup and creates a second
+# item for one source.
+#
+# canonicalize used to undo that with a blanket "&amp;" -> "&" substitution. That
+# is the wrong layer: a literal "&amp;" is legal URL data, so the substitution
+# also corrupted URLs that genuinely contained one, and in a query it invented a
+# parameter delimiter that was never cited. Deciding whether an "&amp;" is
+# escaping or data needs to know how the URL was written, which only the parser
+# knows — and CommonMark already specifies the answer: a link destination has its
+# entity references decoded, an autolink's content does not. So the property now
+# lives in extract_urls, and canonicalize passes bytes through.
+# Reported by an external audit of v0.10.0 (2026-08-22).
 
 
-def test_canonicalize_undoes_html_escaping_of_a_query_separator():
+def test_extraction_undoes_html_escaping_of_a_query_separator():
+    """The dedup property, now asserted where the parser decides it."""
+    assert extract_urls("[x](https://fixturehost.org/s?a=1&amp;b=2)") == [
+        "https://fixturehost.org/s?a=1&b=2"
+    ]
+
+
+def test_canonicalize_no_longer_rewrites_an_escaped_ampersand():
+    """canonicalize is byte-preserving now; it cannot tell escaping from data."""
     assert (
         canonicalize("https://fixturehost.org/s?a=1&amp;b=2")
-        == "https://fixturehost.org/s?a=1&b=2"
+        == "https://fixturehost.org/s?a=1&amp;b=2"
     )
 
 
@@ -59,18 +75,26 @@ def test_canonicalize_leaves_an_ordinary_ampersand_alone():
     )
 
 
-def test_canonicalize_collapses_a_reprinted_copy_onto_the_original():
-    """The dedup property the loop actually needed.
+def test_a_stored_url_redisplayed_lands_back_on_itself():
+    """The dedup property the loop actually needed, stated as idempotence.
 
-    Re-printing a stored URL escapes it one more level, so "&quot;" comes back as
-    "&amp;quot;". Undoing that one layer is what lands the copy on the item it
-    already belongs to. Asserting that *arbitrary* entities fold together would
-    require decoding the whole table, which forges URL delimiters — see the
-    forge_* cases below.
+    The failure was a stored URL coming back as a second item every time it was
+    displayed and re-read. What has to hold is therefore a round trip: capture a
+    URL, print it the way a report prints it, capture again, land on the same
+    string. Asserting instead that two DIFFERENT escapings compare equal was
+    asserting a blanket fold, which is the bug — an escaped "&amp;" and a
+    literal one are not the same URL and only the parser can tell them apart.
     """
-    original = canonicalize("https://fixturehost.org/p?q=&quot;x")
-    reprinted = canonicalize("https://fixturehost.org/p?q=&amp;quot;x")
-    assert original == reprinted
+    stored = canonicalize(extract_urls("See https://fixturehost.org/p?q=%22x")[0])
+    redisplayed = canonicalize(extract_urls(f"[title]({stored})")[0])
+    assert redisplayed == stored
+
+
+def test_an_entity_escaped_destination_lands_on_the_unescaped_one():
+    """One layer of HTML escaping is exactly what a link destination undoes."""
+    escaped = extract_urls("[x](https://fixturehost.org/p?q=&quot;x)")
+    literal = extract_urls("[x](https://fixturehost.org/p?q=%22x)")
+    assert escaped == literal
 
 
 def test_canonicalize_keeps_a_literal_ampersand_in_a_value():
@@ -113,6 +137,61 @@ def test_canonicalize_does_not_let_an_entity_forge_a_query_start():
     assert (
         canonicalize("https://fixturehost.org/p&quest;def")
         == "https://fixturehost.org/p&quest;def"
+    )
+
+
+# --- the query is data, not a dict ---
+#
+# Tracking params were dropped by running the query through parse_qsl and then
+# urlencode. That round-trip does not preserve what it was not asked to change:
+# a valueless field gained an "=", percent-encoding was normalised, and "+" was
+# reinterpreted. A signed or opaque query survives none of that, and the URL then
+# names a resource nobody cited. Filtering now splits on "&", drops the fields
+# that match, and rejoins the survivors untouched.
+# Reported by an external audit of v0.10.0 (2026-08-22).
+
+
+def test_canonicalize_does_not_invent_a_value_for_a_bare_field():
+    assert (
+        canonicalize("https://fixturehost.org/x?sig=a&b")
+        == "https://fixturehost.org/x?sig=a&b"
+    )
+
+
+def test_canonicalize_preserves_percent_encoding_in_a_signed_query():
+    """Re-encoding a signature invalidates it."""
+    assert (
+        canonicalize("https://fixturehost.org/x?token=aGVsbG8%3D&sig=A%2FB%2BC")
+        == "https://fixturehost.org/x?token=aGVsbG8%3D&sig=A%2FB%2BC"
+    )
+
+
+def test_canonicalize_does_not_reinterpret_a_plus():
+    """ "+" means "+" to some servers and " " to others; guessing corrupts one."""
+    assert (
+        canonicalize("https://fixturehost.org/p?q=a+b")
+        == "https://fixturehost.org/p?q=a+b"
+    )
+
+
+def test_canonicalize_keeps_a_repeated_field_and_its_order():
+    assert (
+        canonicalize("https://fixturehost.org/x?a=2&a=1&b=3")
+        == "https://fixturehost.org/x?a=2&a=1&b=3"
+    )
+
+
+def test_canonicalize_drops_trackers_without_touching_the_survivors():
+    """Positive control for the filter, inside the byte-preservation guarantee."""
+    assert (
+        canonicalize("https://fixturehost.org/x?utm_source=n&q=a+b&fbclid=z&sig=A%2FB")
+        == "https://fixturehost.org/x?q=a+b&sig=A%2FB"
+    )
+
+
+def test_canonicalize_matches_a_tracker_case_insensitively():
+    assert canonicalize("https://fixturehost.org/x?UTM_Source=n") == (
+        "https://fixturehost.org/x"
     )
 
 

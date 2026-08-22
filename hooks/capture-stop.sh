@@ -60,7 +60,7 @@ CONTEXT="$(printf '%s' "$ASSISTANT_TEXT" |
 	grep -oE '\[(SOURCE|AUDIT)-CONTEXT: *[A-Za-z0-9][A-Za-z0-9_-]*\]' |
 	tail -1 | sed -E 's/^\[(SOURCE|AUDIT)-CONTEXT: *//; s/\]$//')"
 
-ARGS=(--cwd "$CWD" --session "$SESSION_ID" --message-from-stdin)
+ARGS=(--cwd "$CWD" --session "$SESSION_ID" --origin assistant --message-from-stdin)
 [[ -n "$CONTEXT" ]] && ARGS+=(--context "$CONTEXT")
 
 printf '%s' "$ASSISTANT_TEXT" | timeout 10 "$(zp_python)" \

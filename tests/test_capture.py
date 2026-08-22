@@ -162,7 +162,13 @@ def test_capture_dedups_canonical_collisions(
 def test_capture_zotero_error_on_post_records_error_no_insert(
     empty_cache, fake_zotero, fake_title_fetcher
 ):
-    """ZoteroError on POST → urls_new stays 0, error recorded, no cache insert."""
+    """ZoteroError on POST → urls_new stays 0, error recorded, no completed row.
+
+    The row itself now survives as an unfulfilled claim. A 500 is returned by a
+    server that may already have committed the write, so deleting the claim
+    would throw away the only record of which key to ask about — which is how
+    the same URL got posted twice. It is settled later by _resolve_claim.
+    """
     from zotero_capture.sqlite_cache import lookup_url
     from zotero_capture.zotero_client import ZoteroError
 
@@ -180,7 +186,8 @@ def test_capture_zotero_error_on_post_records_error_no_insert(
     assert len(result.errors) == 1
     assert result.errors[0].url == "https://fixturehost.org/foo"
     assert result.errors[0].code == "zotero_error"
-    assert lookup_url(empty_cache, "https://fixturehost.org/foo") is None
+    row = lookup_url(empty_cache, "https://fixturehost.org/foo")
+    assert row is not None and row["zotero_key"] == "", "no item may be recorded"
 
 
 def test_capture_zotero_error_on_add_tags_records_error_no_last_seen_update(
@@ -409,13 +416,24 @@ def test_the_claim_is_taken_before_the_item_is_created(
     assert row["zotero_key"] == "NEWKEY"
 
 
-def test_a_failed_post_releases_the_reservation(
+def test_a_failure_before_the_request_releases_the_reservation(
     empty_cache, fake_zotero, fake_title_fetcher
 ):
-    """A claim that never produced an item must not block the URL forever."""
+    """A claim that provably produced no item must not block the URL forever.
+
+    This asserts a narrower thing than it used to. It once covered a failing
+    POST as well, on the assumption that a POST which raised had created
+    nothing — which is false for a network call, and releasing on that
+    assumption is what produced duplicate items. Releasing is now confined to
+    failures that happen before the request goes out, where "nothing was
+    created" is actually known. The ambiguous case is settled by asking Zotero;
+    see tests/test_reservation_recovery.py.
+    """
     from zotero_capture.sqlite_cache import lookup_url
 
-    fake_zotero.post_webpage_item.side_effect = RuntimeError("boom")
+    def _boom(_url: str) -> str:
+        raise RuntimeError("title fetch failed before anything was sent")
+
     capture_message(
         message="See https://fixturehost.org/doomed here.",
         project_slug="home",
@@ -423,13 +441,14 @@ def test_a_failed_post_releases_the_reservation(
         today=date(2026, 5, 5),
         db_path=empty_cache,
         zotero=fake_zotero,
-        title_fetcher=fake_title_fetcher,
+        title_fetcher=_boom,
+    )
+    assert fake_zotero.post_webpage_item.call_count == 0, (
+        "nothing should have been sent"
     )
     assert lookup_url(empty_cache, "https://fixturehost.org/doomed") is None
 
-    # Positive control: the retry actually succeeds once the API recovers.
-    fake_zotero.post_webpage_item.side_effect = None
-    fake_zotero.post_webpage_item.return_value = "NEWKEY"
+    # Positive control: the retry actually succeeds once the fetcher recovers.
     result = capture_message(
         message="See https://fixturehost.org/doomed here.",
         project_slug="home",
@@ -444,3 +463,25 @@ def test_a_failed_post_releases_the_reservation(
         lookup_url(empty_cache, "https://fixturehost.org/doomed")["zotero_key"]
         == "NEWKEY"
     )
+
+
+def test_a_failed_post_keeps_the_reservation_for_recovery(
+    empty_cache, fake_zotero, fake_title_fetcher
+):
+    """Once the request is out, "it raised" says nothing about what Zotero did."""
+    from zotero_capture.sqlite_cache import lookup_url
+
+    fake_zotero.post_webpage_item.side_effect = RuntimeError("connection reset")
+    capture_message(
+        message="See https://fixturehost.org/doomed here.",
+        project_slug="home",
+        context=None,
+        today=date(2026, 5, 5),
+        db_path=empty_cache,
+        zotero=fake_zotero,
+        title_fetcher=fake_title_fetcher,
+    )
+    row = lookup_url(empty_cache, "https://fixturehost.org/doomed")
+    assert row is not None, "the claim was dropped while an item might exist"
+    assert row["zotero_key"] == ""
+    assert row["pending_key"], "recovery needs the key the POST was sent under"

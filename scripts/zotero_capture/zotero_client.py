@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from . import USER_AGENT
+from .sqlite_cache import new_zotero_key
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,36 @@ class ZoteroClient:
     def __exit__(self, *args: object) -> None:
         self.close()
 
+    def item_exists(self, item_key: str) -> bool:
+        """Whether the library already holds this key.
+
+        The question a lost POST response leaves behind. It is only answerable
+        because the key was chosen before the request went out.
+        """
+        resp = self._client.get(f"/items/{item_key}")
+        if resp.status_code == 404:
+            return False
+        if resp.status_code >= 400:
+            raise ZoteroError(
+                f"GET /items/{item_key} failed: {resp.status_code} {resp.text}"
+            )
+        return not (resp.json().get("data", {}).get("deleted"))
+
+    def get_item_tags(self, item_key: str) -> list[str]:
+        """Every tag on an item, or none if it is already gone.
+
+        Used when retiring a duplicate: its tags are the sighting history this
+        plugin exists to keep, so they move to the survivor before it is trashed.
+        """
+        resp = self._client.get(f"/items/{item_key}")
+        if resp.status_code == 404:
+            return []
+        if resp.status_code >= 400:
+            raise ZoteroError(
+                f"GET /items/{item_key} failed: {resp.status_code} {resp.text}"
+            )
+        return [t["tag"] for t in resp.json().get("data", {}).get("tags", [])]
+
     def post_webpage_item(
         self,
         *,
@@ -72,9 +103,21 @@ class ZoteroClient:
         title: str,
         access_date: str,
         tags: list[str],
+        item_key: str | None = None,
     ) -> str:
+        """Create the item under a key the caller chose.
+
+        The API accepts a client-supplied key matching
+        /[23456789ABCDEFGHIJKLMNPQRSTUVWXYZ]{8}/. "version": 0 makes this a
+        versioned write, which is what lets a duplicate be rejected rather than
+        silently creating a second copy — and means no Zotero-Write-Token is
+        needed, since the docs call it redundant for versioned requests.
+        """
+        item_key = item_key or new_zotero_key()
         payload = [
             {
+                "key": item_key,
+                "version": 0,
                 "itemType": "webpage",
                 "url": url_canonical,
                 "title": title,
@@ -179,8 +222,24 @@ class ZoteroClient:
         silently, because capture deliberately does not queue failures. Refetching
         also merges the other writer's tags in rather than overwriting them.
         """
+        # Resolve at most once for the whole call. The resolver is a live HTTP
+        # fetch, so it can succeed on one attempt and fail on the next; re-asking
+        # per attempt threw away a title that had already been found and left the
+        # item marked unresolved while reporting success. It also let a single
+        # contended item spend the run's entire re-enrichment budget.
+        memo: dict[str, str] = {}
+
+        def resolve_once() -> str:
+            if title_resolver is None:
+                return ""
+            if "title" not in memo:
+                memo["title"] = title_resolver()
+            return memo["title"]
+
         for attempt in range(1, attempts + 1):
-            outcome = self._try_add_tags(item_key, new_tags, title_resolver)
+            outcome = self._try_add_tags(
+                item_key, new_tags, None if title_resolver is None else resolve_once
+            )
             if outcome is not None:
                 return outcome
             if attempt == attempts:

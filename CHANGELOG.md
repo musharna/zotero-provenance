@@ -1,5 +1,73 @@
 # Changelog
 
+## 0.11.0 — 2026-08-22
+
+A second external audit, this time of the 0.10.0 fixes themselves. Nine findings,
+all reproduced locally before being accepted — plus one that neither the audit
+nor I had ranked, which turned out to be the largest.
+
+- **A parser now decides where a URL ends.** Extraction scanned raw text: a
+  line-oriented fence state machine and hand-paired backtick runs. Measured
+  against a CommonMark reference over 1,415 real assistant messages, that lost a
+  citation on 0.14% of them but mangled the *boundary* of **10.72%** of the URLs
+  it found. Trailing punctuation was trimmed from markdown that had never been
+  parsed, so `**[text](url)**` kept its emphasis — `*` is in no trim set, and by
+  leaving the URL ending in `*` it also stopped the paren-balance rule from ever
+  firing. Lengthening the trim set is not the fix: RFC 3986 makes `_` unreserved
+  and `*` a sub-delimiter. Extraction now walks a markdown-it AST — skipping code
+  spans, fences and inline HTML, taking a link destination exactly as the parser
+  reports it, suppressing the label inside a link, and running the bare-URL
+  matcher only over text the parser has already stripped of markdown.
+  Re-measured on the same corpus: boundary damage **10.72% → 0.09%**, structural
+  loss **0.14% → 0.00%**.
+
+- **116 damaged rows repaired in place.** A URL ending in `**` can never resolve
+  a title, so it degrades into exactly the URL-as-title junk this plugin exists
+  to remove. `scripts/repair_urls.py` corrects them, merging into the existing
+  item where one is already present and carrying the duplicate's tags across
+  before retiring it to the trash. It deliberately refuses 17 rows that are not
+  URLs at all — regexes, wildcards and escape sequences the old extractor
+  captured — because "correcting" those would fabricate an address nobody cited.
+
+- **Queries are no longer rewritten.** Tracking params were dropped by
+  `parse_qsl` + `urlencode`, a round trip that does not preserve what it was not
+  asked to change: a valueless field gained an `=`, percent-encoding was
+  normalised, `+` was reinterpreted. Signed and opaque queries survived none of
+  it. Filtering now splits on `&` and rejoins the survivors byte for byte. The
+  blanket `&amp;` fold is gone too — it was at the wrong layer, since a literal
+  `&amp;` is legal URL data and only the parser knows how the URL was written.
+
+- **A claim is now answerable rather than guessed at.** A POST that raised was
+  treated as a POST that created nothing, so the claim was released and the next
+  sighting posted a duplicate — but Zotero can commit before the response is
+  lost. The item key is now chosen before the request goes out and stored with
+  the claim, so an abandoned claim is settled with one GET: item there, complete
+  it; item absent, release and retry. Claims younger than 60s are left alone.
+
+- **A hook killed by its own timeout releases its claim.** `timeout 10` sends
+  SIGTERM, which Python leaves at its default disposition — the process died
+  without unwinding, stranding the URL as both uncaptured and undedupable.
+
+- **The loser of a race keeps its provenance.** It queues its context and project
+  tags for whoever completes the item, instead of dropping the sighting silently.
+
+- **Fetches connect to the address that was checked.** The guard resolved a name,
+  then handed the *name* onward, so the inner transport resolved it again —
+  letting an attacker-controlled DNS answer public for the check and private for
+  the connect. The validated address is now pinned for the request, with the Host
+  header and TLS SNI preserved so virtual hosts and certificate verification
+  still work, and restored afterwards so each redirect hop gets its own check.
+
+- **A report cannot cite itself.** Item titles come from fetched pages, and the
+  commonest junk title here is a bare URL — bolded as prose, those were read
+  straight back as citations. Titles are now shown as literals in a code span
+  built so nothing in the content can close it. The no-capture marker is no
+  longer an unauthenticated kill switch: it is honoured only in assistant output,
+  and only when it leads the message.
+
+- **A resolved title survives a 412 retry.** The resolver was re-invoked per
+  attempt, so a title found on the first try was discarded if the second failed.
+
 ## 0.10.0 — 2026-08-22
 
 The rest of the external audit of 0.9.0.
