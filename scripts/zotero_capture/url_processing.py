@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import ipaddress
 import re
+
+import idna
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 # A closing paren is a legal URL character — Cell Press PII links and the DOIs
@@ -102,6 +104,10 @@ ASSET_EXTENSIONS = (
 # resolves to a real title, so the extension test must not claim them.
 PAGE_PATH_RE = re.compile(r"/(wiki|blob|tree|releases|actions)/", re.IGNORECASE)
 
+# idna is stricter than the resolver about a few plain-ASCII names (a lone
+# underscore label, an over-long one). Those still resolve, so keep them.
+_ASCII_HOST_RE = re.compile(r"[A-Za-z0-9_](?:[A-Za-z0-9._-]*[A-Za-z0-9_])?")
+
 PRIVATE_RANGES = [
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
@@ -161,6 +167,22 @@ def _is_reserved_name(host: str) -> bool:
     )
 
 
+def _is_real_hostname(host: str) -> bool:
+    """True when `host` is something a resolver could actually look up.
+
+    A display ellipsis reached the library as `https://\u2026` and then raised
+    "Invalid IDNA hostname" on every fetch for the rest of its life. IDNA is the
+    right test rather than a character whitelist, because it is what the HTTP
+    client itself applies — and it keeps genuine internationalised domains
+    (m\u00fcnchen.de) which a naive ASCII rule would wrongly drop.
+    """
+    try:
+        idna.encode(host, uts46=True)
+    except Exception:
+        return _ASCII_HOST_RE.fullmatch(host) is not None
+    return True
+
+
 def _is_asset_path(path: str) -> bool:
     """True when the path points at an asset rather than a page.
 
@@ -189,7 +211,8 @@ def is_excluded(url: str) -> bool:
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
-        return False
+        # Not an address, so it has to be a name a resolver could look up.
+        return not _is_real_hostname(host)
     if ip.is_loopback or ip.is_link_local or ip.is_private:
         return True
     return any(ip in net for net in PRIVATE_RANGES)
