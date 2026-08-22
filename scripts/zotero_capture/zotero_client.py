@@ -223,12 +223,21 @@ class ZoteroClient:
             raise ZoteroError(
                 f"GET /items/{item_key} failed: {resp.status_code} {resp.text}"
             )
+        body = resp.json()
         version = resp.headers.get("Last-Modified-Version") or str(
-            resp.json().get("version", 0)
+            body.get("version", 0)
         )
+        data = body.get("data", {})
+        payload: dict[str, Any] = {"url": url}
+        # title_is_unresolved detects a failed fetch by title == url. Moving the
+        # URL without the title breaks that equality, and the item silently stops
+        # looking unresolved — no backfill would ever revisit it again. Carry a
+        # sentinel title along; a real title is metadata and stays untouched.
+        if (data.get("title") or "").strip() == (data.get("url") or "").strip():
+            payload["title"] = url
         resp = self._client.patch(
             f"/items/{item_key}",
-            json={"url": url},
+            json=payload,
             headers={"If-Unmodified-Since-Version": version},
         )
         if resp.status_code not in (204, 404):

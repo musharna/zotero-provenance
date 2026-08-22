@@ -504,3 +504,62 @@ def test_update_url_is_idempotent_when_the_item_is_gone():
         transport=httpx.MockTransport(handler),
     ) as client:
         client.update_url("GONE", "https://example.test/x")  # must not raise
+
+
+def test_update_url_carries_a_url_shaped_title_along():
+    """A URL repair must not strand the item outside re-enrichment.
+
+    title_is_unresolved detects a failed fetch by title == url. Changing the URL
+    while leaving the old URL as the title breaks that equality, so the item
+    stops looking unresolved and no backfill ever revisits it — the exact latch
+    the re-enrichment work removed, reintroduced from the other side.
+    """
+    calls: list = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET":
+            return httpx.Response(
+                200,
+                headers={"Last-Modified-Version": "3"},
+                json={"key": "K", "version": 3,
+                      "data": {"key": "K", "url": "https://a.test/x(1",
+                               "title": "https://a.test/x(1"}},
+            )
+        calls.append(json.loads(req.content))
+        return httpx.Response(204)
+
+    with ZoteroClient(
+        api_key="fake", library_id="0", library_type="user",
+        web_sources_collection_key="C",
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        client.update_url("K", "https://a.test/x(1)")
+
+    assert calls == [{"url": "https://a.test/x(1)", "title": "https://a.test/x(1)"}]
+
+
+def test_update_url_leaves_a_real_title_alone():
+    """Only a URL-shaped title is a sentinel; real metadata must survive."""
+    calls: list = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET":
+            return httpx.Response(
+                200,
+                headers={"Last-Modified-Version": "3"},
+                json={"key": "K", "version": 3,
+                      "data": {"key": "K", "url": "https://a.test/x(1",
+                               "title": "A Real Article Title"}},
+            )
+        calls.append(json.loads(req.content))
+        return httpx.Response(204)
+
+    with ZoteroClient(
+        api_key="fake", library_id="0", library_type="user",
+        web_sources_collection_key="C",
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        client.update_url("K", "https://a.test/x(1)")
+
+    assert calls == [{"url": "https://a.test/x(1)"}]
+
