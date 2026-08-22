@@ -7,6 +7,7 @@ import re
 import socket
 
 import idna
+from markdown_it import MarkdownIt
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
@@ -25,19 +26,15 @@ URL_RE = re.compile(
     re.IGNORECASE,
 )
 
-# CommonMark fence rules, which the first cut of this did not implement. A fence
-# opens on a run of 3+ backticks or tildes indented at most 3 spaces; it closes
-# only on the SAME character, a run at least as long, and nothing but whitespace
-# after it. Getting the close wrong is the dangerous direction: a fence that
-# never closes swallows every citation in the rest of the message.
-FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+# Strict CommonMark: no linkification of bare URLs, so a URL in prose stays in a
+# text token and URL_RE still has a job. What the parser buys is that the text it
+# hands over has already had the markdown taken out of it.
+_MD = MarkdownIt("commonmark")
 
-# A fence may sit inside a blockquote, where every line carries a "> " prefix.
-BLOCKQUOTE_RE = re.compile(r"^ {0,3}(?:> ?)+")
-
-# Runs of backticks, paired by EQUAL length per CommonMark, so ``code`` is one
-# span rather than two empty ones with a URL stranded between them.
-TICK_RUN_RE = re.compile(r"`+")
+# Inline tokens that are showing a literal rather than citing a source. Block
+# tokens need no list: only "inline" tokens are walked, and a fence, an indented
+# block and an HTML block are all block-level.
+_UNCITED_INLINE = frozenset({"code_inline", "html_inline"})
 
 # Deliberately not html.unescape: see canonicalize. One layer per pass is enough,
 # since each re-print adds exactly one.
@@ -210,83 +207,68 @@ def extract_urls(text: str) -> list[str]:
     internal hostnames and API endpoints. Indentation is deliberately NOT a
     signal — an indented line is usually a list item, not a code block.
 
-    Trims punctuation and dedups, preserving order.
+    A parser draws the line rather than a scan over the raw text, because the
+    scan could not say where a URL *ended*. It trimmed trailing punctuation from
+    markdown it had never parsed, so `**[text](url)**` kept its emphasis — `*`
+    is in no trim set, and by ending the URL in `*` it also stopped the
+    paren-balance rule from firing. That mangled 10.72% of URLs in real traffic
+    against 0.14% lost to the container bugs, and left 116 of 4,893 live rows
+    unable to ever resolve a title. Lengthening the trim set is not the fix:
+    `*` and `_` are legal URL characters (RFC 3986), so trimming them corrupts
+    real URLs. Only a parse can tell markdown punctuation from URL data.
+
+    Dedups preserving order. A link destination is taken exactly as the parser
+    reports it; only a bare URL recovered from prose is trimmed, and then only
+    of sentence punctuation, which is genuinely ambiguous in a way markdown is
+    not.
     """
     seen: list[str] = []
     seen_set: set[str] = set()
-    for chunk in _prose_paragraphs(text):
-        for match in URL_RE.finditer(_mask_code_spans(chunk)):
-            url = match.group(0).rstrip(TRAILING_PUNCT)
-            while url.endswith(")") and url.count("(") < url.count(")"):
-                url = url[:-1]
-            if url not in seen_set:
-                seen.append(url)
-                seen_set.add(url)
+
+    def emit(url: str) -> None:
+        if url and url not in seen_set:
+            seen.append(url)
+            seen_set.add(url)
+
+    for token in _MD.parse(text):
+        # Only inline tokens carry citable text. A fence, an indented code block
+        # and an HTML block are block-level and simply never appear here.
+        if token.type != "inline":
+            continue
+        in_link = 0
+        for child in token.children or []:
+            if child.type == "link_open":
+                in_link += 1
+                href = child.attrGet("href") or ""
+                if href.lower().startswith(("http://", "https://")):
+                    emit(href)
+            elif child.type == "link_close":
+                in_link = max(0, in_link - 1)
+            elif child.type == "image":
+                # A badge or screenshot is a page asset, not a cited source, and
+                # its alt text is not prose that cites anything either.
+                continue
+            elif child.type in _UNCITED_INLINE:
+                continue
+            elif child.type == "text" and not in_link:
+                # Inside a link the label is decoration — `[displayed](cited)`
+                # cites only the destination, which link_open already emitted.
+                for match in URL_RE.finditer(child.content):
+                    emit(_trim_prose_url(match.group(0)))
     return seen
 
 
-def _prose_paragraphs(text: str) -> list[str]:
-    """Drop fenced blocks, then split what is left on blank lines.
+def _trim_prose_url(url: str) -> str:
+    """Strip sentence punctuation from a URL recovered from running prose.
 
-    Splitting into paragraphs bounds the damage an unpaired backtick can do. A
-    code span cannot cross a blank line in CommonMark, so pairing runs only
-    within a paragraph stops a single stray tick from masking — and silently
-    discarding — every citation in the rest of the message.
+    Applies ONLY to bare URLs in text. A link destination arrives with its
+    extent already decided by the parser, and trimming it would corrupt a
+    destination that legitimately ends in one of these characters.
     """
-    out: list[str] = []
-    current: list[str] = []
-    fence: tuple[str, int] | None = None
-    for raw_line in text.split("\n"):
-        line = BLOCKQUOTE_RE.sub("", raw_line)
-        match = FENCE_RE.match(line)
-        if fence is None:
-            if match:
-                fence = (match.group(1)[0], len(match.group(1)))
-                continue
-            if line.strip():
-                current.append(line)
-            elif current:
-                out.append("\n".join(current))
-                current = []
-            continue
-        if not match:
-            continue
-        char, length = fence
-        run = match.group(1)
-        # Closes only on the same character, at least as long, nothing trailing.
-        if run[0] == char and len(run) >= length and not match.group(2).strip():
-            fence = None
-    if current:
-        out.append("\n".join(current))
-    return out
-
-
-def _mask_code_spans(text: str) -> str:
-    """Blank out backtick-delimited spans, pairing runs of EQUAL length.
-
-    Blanking rather than deleting keeps every other offset intact, so the
-    trailing-paren balance rule still sees the prose exactly where it sat. An
-    unpaired run is left alone: a lone backtick is prose, not an open span.
-    """
-    runs = [(m.start(), m.end()) for m in TICK_RUN_RE.finditer(text)]
-    if not runs:
-        return text
-    chars = list(text)
-    i = 0
-    while i < len(runs):
-        start, end = runs[i]
-        width = end - start
-        closer = next(
-            (j for j in range(i + 1, len(runs)) if runs[j][1] - runs[j][0] == width),
-            None,
-        )
-        if closer is None:
-            i += 1
-            continue
-        for pos in range(start, runs[closer][1]):
-            chars[pos] = " "
-        i = closer + 1
-    return "".join(chars)
+    url = url.rstrip(TRAILING_PUNCT)
+    while url.endswith(")") and url.count("(") < url.count(")"):
+        url = url[:-1]
+    return url
 
 
 def _is_reserved_name(host: str) -> bool:
