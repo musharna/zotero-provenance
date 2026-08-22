@@ -37,6 +37,11 @@ from zotero_capture.title_fetcher import fetch_title  # noqa: E402
 # so give slow identifier APIs room to answer instead of failing them for speed.
 BACKFILL_TIMEOUT_S = 8.0
 
+# Paging a large collection is the slowest thing here, and Zotero gets slower
+# under sustained traffic. The interactive 5s default aborted whole sweeps
+# (observed 2026-08-21), so this pass waits instead.
+ZOTERO_TIMEOUT_S = 30.0
+
 
 def main() -> int:
     p = argparse.ArgumentParser(prog="backfill-titles")
@@ -87,7 +92,7 @@ def main() -> int:
 
     with (
         httpx.Client(timeout=BACKFILL_TIMEOUT_S, follow_redirects=True) as http,
-        build_client(config) as zotero,
+        build_client(config, timeout=ZOTERO_TIMEOUT_S) as zotero,
     ):
         result = backfill(
             zotero,
@@ -110,7 +115,7 @@ def main() -> int:
 
 def _run_prune(config, *, dry_run: bool, limit: int | None, sleep_s: float) -> int:
     """Sweep the exclusion rules back over items captured before they existed."""
-    with build_client(config) as zotero:
+    with build_client(config, timeout=ZOTERO_TIMEOUT_S) as zotero:
         result = prune(zotero, dry_run=dry_run, limit=limit, sleep_s=sleep_s)
 
     for url in result.urls:

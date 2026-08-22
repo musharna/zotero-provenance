@@ -60,12 +60,20 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def build_client(config: Config) -> ZoteroClient:
+def build_client(config: Config, *, timeout: float | None = None) -> ZoteroClient:
+    """Build a client. `timeout` overrides the interactive default.
+
+    The hook's budget is tight on purpose, but an unattended pass that pages
+    thousands of items should wait on a slow response rather than abandon the
+    sweep partway through.
+    """
+    kwargs = {} if timeout is None else {"timeout": timeout}
     return ZoteroClient(
         api_key=config.api_key,
         library_id=config.library_id,
         library_type=config.library_type,
         web_sources_collection_key=config.collection_key,
+        **kwargs,
     )
 
 

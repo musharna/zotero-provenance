@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from collections.abc import Callable, Iterator
 from typing import Any
 from urllib.parse import urlsplit
@@ -94,18 +95,42 @@ class ZoteroClient:
             raise ZoteroError(f"POST /items returned no successful entries: {body}")
         return next(iter(successful.values()))["key"]
 
-    def iter_collection_items(self, *, limit: int = 100) -> Iterator[dict[str, Any]]:
+    def iter_collection_items(
+        self,
+        *,
+        limit: int = 100,
+        attempts: int = 3,
+        retry_sleep_s: float = 1.0,
+    ) -> Iterator[dict[str, Any]]:
         """Yield every top-level item in the target collection, page by page.
 
         Streams rather than accumulating: a mature collection runs to thousands of
         items and callers here only ever look at one at a time.
+
+        A timed-out page is retried, because the failure is indistinguishable from
+        a short collection to anyone consuming the generator — the sweep just stops
+        yielding. Callers run unattended over thousands of items, so one blip must
+        not silently truncate the pass. After `attempts` it raises rather than
+        returning what it has: a partial sweep reported as a complete one is worse
+        than an error.
         """
         start = 0
         while True:
-            resp = self._client.get(
-                f"/collections/{self.collection_key}/items/top",
-                params={"format": "json", "limit": limit, "start": start},
-            )
+            for attempt in range(1, attempts + 1):
+                try:
+                    resp = self._client.get(
+                        f"/collections/{self.collection_key}/items/top",
+                        params={"format": "json", "limit": limit, "start": start},
+                    )
+                    break
+                except httpx.TransportError as e:
+                    if attempt == attempts:
+                        raise ZoteroError(
+                            f"GET collection items at start={start} failed after "
+                            f"{attempts} attempts: {e!r}"
+                        ) from e
+                    if retry_sleep_s:
+                        time.sleep(retry_sleep_s * attempt)
             if resp.status_code >= 400:
                 raise ZoteroError(
                     f"GET collection items failed: {resp.status_code} {resp.text}"
