@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from zotero_capture.project_slug import derive_slug
 
 HOME_ENV = {"HOME": "/home/someone"}

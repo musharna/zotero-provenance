@@ -149,6 +149,10 @@ project's fixture URLs become citations the moment its test output is echoed
 into a session. Matching is on label boundaries, so ordinary hosts that merely
 contain a reserved name (`myexample.com`, `example.com.evil.co`) are kept.
 
+A host that is not a hostname is dropped too — a display ellipsis captured as
+`https://…` can never resolve. The test is IDNA encoding, the same one the HTTP
+client applies, so internationalised domains (`münchen.de`) are kept.
+
 ## Known limitations
 
 - **Sessions bridged with `/remote-control` do not fire local `Stop` hooks**, so nothing
