@@ -6,6 +6,7 @@ import argparse
 import json
 import logging
 import os
+import signal
 import sys
 import time
 from collections.abc import Callable
@@ -22,6 +23,33 @@ from .url_processing import canonicalize
 from .zotero_client import ZoteroClient
 
 logger = logging.getLogger(__name__)
+
+
+class HookTerminated(BaseException):
+    """The hook's `timeout` fired. Raised so the claim can be released.
+
+    Derives from BaseException, not Exception, deliberately: capture's per-URL
+    loop swallows Exception into a CaptureFailure and carries on, which is the
+    wrong response to being killed. Only the `except BaseException` that
+    releases the reservation should see this, and then it re-raises.
+    """
+
+
+def _on_terminate(signum: int, _frame: object) -> None:
+    raise HookTerminated(f"terminated by signal {signum}")
+
+
+def install_termination_handler() -> None:
+    """Turn SIGTERM into an exception so cleanup runs before the process dies.
+
+    hooks/capture-stop.sh runs capture under `timeout 10`, and GNU timeout sends
+    SIGTERM. Python leaves SIGTERM at its default disposition, which kills the
+    process outright without unwinding — so a URL claimed just before a slow
+    title fetch stayed claimed forever, and every later sighting skipped it as
+    "held by another session". SIGKILL cannot be handled and is not what
+    `timeout` sends.
+    """
+    signal.signal(signal.SIGTERM, _on_terminate)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -171,6 +199,7 @@ def run_triage(*, url: str, db_path: Path, zotero: ZoteroClient) -> int:
 def main(argv: list[str] | None = None) -> int:
     if os.environ.get("ZOTERO_CAPTURE_DISABLE") == "1":
         return 0
+    install_termination_handler()
     args = build_parser().parse_args(argv)
 
     try:

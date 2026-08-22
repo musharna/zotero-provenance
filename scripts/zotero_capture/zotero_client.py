@@ -179,8 +179,24 @@ class ZoteroClient:
         silently, because capture deliberately does not queue failures. Refetching
         also merges the other writer's tags in rather than overwriting them.
         """
+        # Resolve at most once for the whole call. The resolver is a live HTTP
+        # fetch, so it can succeed on one attempt and fail on the next; re-asking
+        # per attempt threw away a title that had already been found and left the
+        # item marked unresolved while reporting success. It also let a single
+        # contended item spend the run's entire re-enrichment budget.
+        memo: dict[str, str] = {}
+
+        def resolve_once() -> str:
+            if title_resolver is None:
+                return ""
+            if "title" not in memo:
+                memo["title"] = title_resolver()
+            return memo["title"]
+
         for attempt in range(1, attempts + 1):
-            outcome = self._try_add_tags(item_key, new_tags, title_resolver)
+            outcome = self._try_add_tags(
+                item_key, new_tags, None if title_resolver is None else resolve_once
+            )
             if outcome is not None:
                 return outcome
             if attempt == attempts:
