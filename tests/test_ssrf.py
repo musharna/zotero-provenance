@@ -78,12 +78,16 @@ def test_a_redirect_into_a_private_address_is_refused():
 
     Asserts the first hop succeeded before the second was refused, so a guard
     that blocked everything could not masquerade as a pass.
+
+    Keyed on the path, not the host: the guard now rewrites the URL host to the
+    validated address before handing the request on, so a handler that switched
+    on the hostname would never see the first hop at all.
     """
     hops: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        hops.append(request.url.host)
-        if request.url.host == "public.test-host":
+        hops.append(request.url.path)
+        if request.url.path == "/start":
             return httpx.Response(302, headers={"location": "http://192.168.0.1/admin"})
         return _ok(request)
 
@@ -95,7 +99,7 @@ def test_a_redirect_into_a_private_address_is_refused():
         with pytest.raises(UnsafeHostError):
             client.get("http://public.test-host/start")
 
-    assert hops == ["public.test-host"], "the public first hop should have been served"
+    assert hops == ["/start"], "the public first hop should have been served"
 
 
 def test_a_host_that_does_not_resolve_is_refused():

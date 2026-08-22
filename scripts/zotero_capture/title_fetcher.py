@@ -34,6 +34,23 @@ def _resolve(host: str) -> Sequence[IPAddress]:
     return [ipaddress.ip_address(info[4][0]) for info in socket.getaddrinfo(host, None)]
 
 
+def _pin_to_address(request: httpx.Request, ip: IPAddress) -> httpx.Request:
+    """Send this request to `ip`, still addressed to the host it named.
+
+    Three things have to stay true at once. httpcore connects to the URL's host,
+    so that becomes the literal. Virtual hosts need the original name, so the
+    Host header keeps it. And TLS must be negotiated and the certificate checked
+    against the name, not the address, so it also goes in the sni_hostname
+    extension — httpcore uses `sni_hostname or origin.host` as server_hostname.
+    """
+    hostname = request.url.host
+    authority = request.headers.get("Host") or request.url.netloc.decode("ascii")
+    request.url = request.url.copy_with(host=str(ip))
+    request.headers["Host"] = authority
+    request.extensions = {**request.extensions, "sni_hostname": hostname}
+    return request
+
+
 class GuardedTransport(httpx.BaseTransport):
     """Refuses any request whose host resolves to a non-public address.
 
@@ -42,10 +59,11 @@ class GuardedTransport(httpx.BaseTransport):
     handed would miss the only case that matters: a public, innocuous-looking
     URL that 302s to 169.254.169.254 or a host on the loopback interface.
 
-    Known limit, stated rather than papered over: validation happens at resolve
-    time, so a DNS entry that changes between this lookup and the socket connect
-    (a rebinding attack) is not covered. Closing that needs the connection
-    pinned to the address checked here, which httpx does not expose.
+    The connection is then pinned to the address that was checked. Validating a
+    name and passing the NAME onward is not a boundary at all: the inner
+    transport resolves it again, and whoever controls that name's DNS can answer
+    the two queries differently — public for the check, private for the connect.
+    Alternating answers make that deterministic, not a race.
     """
 
     def __init__(
@@ -75,7 +93,20 @@ class GuardedTransport(httpx.BaseTransport):
         for ip in candidates:
             if is_unsafe_address(ip):
                 raise UnsafeHostError(f"{host} resolves to {ip}, which is not public")
-        return self._inner.handle_request(request)
+        if literal is not None:
+            return self._inner.handle_request(request)
+        original_url = request.url
+        _pin_to_address(request, candidates[0])
+        try:
+            return self._inner.handle_request(request)
+        finally:
+            # httpx resolves a relative Location against this request's URL and
+            # copies its Host header onward. Left pinned, the next hop would be
+            # addressed to a bare IP and miss a virtual-hosted site entirely.
+            # Restoring the name also means each hop gets its own fresh lookup
+            # and its own check, which is the property the guard exists for.
+            request.url = original_url
+            request.headers["Host"] = original_url.netloc.decode("ascii")
 
     def close(self) -> None:
         self._inner.close()
