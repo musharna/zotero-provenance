@@ -461,3 +461,46 @@ def test_iter_collection_items_gives_up_loudly_after_repeated_timeouts():
     ) as client:
         with pytest.raises(ZoteroError, match="after 3 attempts"):
             list(client.iter_collection_items(retry_sleep_s=0))
+
+
+def test_update_url_patches_the_url_field_with_a_version_guard():
+    """Repairing a stored URL must not clobber a concurrent edit."""
+    calls: list = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET":
+            return httpx.Response(
+                200,
+                headers={"Last-Modified-Version": "11"},
+                json={"key": "K1", "version": 11, "data": {"key": "K1", "url": "old"}},
+            )
+        calls.append((json.loads(req.content), dict(req.headers)))
+        return httpx.Response(204)
+
+    with ZoteroClient(
+        api_key="fake",
+        library_id="0000",
+        library_type="user",
+        web_sources_collection_key="COLL1",
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        client.update_url("K1", "https://example.test/full(1)")
+
+    assert len(calls) == 1
+    body, headers = calls[0]
+    assert body == {"url": "https://example.test/full(1)"}
+    assert headers["if-unmodified-since-version"] == "11"
+
+
+def test_update_url_is_idempotent_when_the_item_is_gone():
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    with ZoteroClient(
+        api_key="fake",
+        library_id="0000",
+        library_type="user",
+        web_sources_collection_key="COLL1",
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        client.update_url("GONE", "https://example.test/x")  # must not raise

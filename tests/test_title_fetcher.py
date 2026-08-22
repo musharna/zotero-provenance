@@ -253,7 +253,83 @@ def test_biorxiv_resolves_through_the_doi_embedded_in_its_path():
             "https://www.biorxiv.org/content/10.1101/2025.05.30.656746v1", client=client
         )
     assert got == "Bamboos flower after the return"
-    assert any("10.1101/2025.05.30.656746" in u for u in seen)
+    # Exact, not a substring: the substring form passed happily while the DOI
+    # still carried a "v1" suffix, which is how the defect below survived.
+    assert seen == ["https://doi.org/10.1101/2025.05.30.656746"]
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.biorxiv.org/content/10.1101/2025.05.30.656746v1",
+        "https://www.biorxiv.org/content/10.1101/2025.05.30.656746v2",
+        "https://www.biorxiv.org/content/10.1101/2025.05.30.656746v1.full",
+        "https://www.biorxiv.org/content/10.1101/2025.05.30.656746v1.full.pdf",
+        "https://www.biorxiv.org/content/10.1101/2025.05.30.656746v1.supplementary-material",
+        "https://www.biorxiv.org/content/10.1101/2025.05.30.656746",
+        "https://www.medrxiv.org/content/10.1101/2025.05.30.656746v3.article-info",
+    ],
+)
+def test_preprint_version_suffix_is_not_part_of_the_doi(url: str):
+    """A preprint URL carries a version suffix that is NOT part of its DOI.
+
+    Sending "10.1101/2025.05.30.656746v1" makes doi.org 404 — correctly, since
+    that is not a DOI. Measured live 2026-08-21: the bare DOI returns 200 for
+    the same papers. This is why the backfill only moved bioRxiv 55 -> 53, and
+    it was misattributed to preprint DOIs being unregistered.
+    """
+    seen: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(str(req.url))
+        return httpx.Response(200, json={"title": "Bamboos flower after the return"})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        got = fetch_title(url, client=client)
+
+    assert got == "Bamboos flower after the return"
+    assert seen == ["https://doi.org/10.1101/2025.05.30.656746"], (
+        f"requested a malformed DOI for {url}"
+    )
+
+
+@pytest.mark.parametrize(
+    "url, doi",
+    [
+        # bioRxiv minted a new DOI prefix for 2026 papers; hardcoding 10.1101
+        # silently skips them. Both verified live 2026-08-21.
+        (
+            "https://www.biorxiv.org/content/10.64898/2026.02.05.703842v1.full.pdf",
+            "10.64898/2026.02.05.703842",
+        ),
+        (
+            "https://www.biorxiv.org/content/10.64898/2026.01.13.699201v1",
+            "10.64898/2026.01.13.699201",
+        ),
+        # Older preprints carry a bare serial rather than a dated identifier.
+        (
+            "https://www.biorxiv.org/content/10.1101/269415.full.pdf",
+            "10.1101/269415",
+        ),
+        (
+            "https://www.biorxiv.org/content/10.1101/2025.10.10.681754.full.pdf",
+            "10.1101/2025.10.10.681754",
+        ),
+    ],
+)
+def test_preprint_doi_prefix_is_not_hardcoded(url: str, doi: str):
+    """The registrant prefix is data, not a constant — bioRxiv changed it."""
+    seen: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(str(req.url))
+        return httpx.Response(200, json={"title": "A preprint"})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        got = fetch_title(url, client=client)
+
+    assert got == "A preprint"
+    assert seen == [f"https://doi.org/{doi}"]
 
 
 def test_github_repo_is_resolved_by_the_api():
@@ -359,3 +435,55 @@ def test_live_wikipedia_resolves_to_the_article_title(live_client):
         "https://en.wikipedia.org/wiki/Thismia_americana", client=live_client
     )
     assert "Thismia americana" in title, title
+
+
+# --- title normalisation ---
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        # Publisher CSL metadata carries inline markup. Observed live 2026-08-21
+        # on 10.1101/2024.01.15.575765.
+        (
+            "Combining RAS\n    <sup>G12C</sup>\n    (ON) inhibitors",
+            "Combining RAS G12C (ON) inhibitors",
+        ),
+        ("H<sub>2</sub>O uptake", "H2O uptake"),
+        ("<i>Arabidopsis thaliana</i> growth", "Arabidopsis thaliana growth"),
+        ("Genes &amp; Development", "Genes & Development"),
+        ("Spaced   out\ttitle\n", "Spaced out title"),
+        ("<scp>DNA</scp> repair", "DNA repair"),
+        # Negative controls: a bare "<" is not markup and must survive.
+        ("Growth when a < b in plants", "Growth when a < b in plants"),
+        ("Cost < 5% of baseline", "Cost < 5% of baseline"),
+        ("A normal title", "A normal title"),
+    ],
+)
+def test_titles_are_normalised(raw: str, expected: str):
+    """Markup and stray whitespace must not reach the Zotero item."""
+    from zotero_capture.title_fetcher import _clean_title
+
+    assert _clean_title(raw) == expected
+
+
+def test_fetch_title_normalises_what_a_resolver_returns():
+    """The clean step belongs at the boundary, so every route benefits."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"title": "Ras\n  <sup>G12C</sup>\n  binding"})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        got = fetch_title("https://doi.org/10.1101/2024.01.15.575765", client=client)
+    assert got == "Ras G12C binding"
+
+
+def test_fetch_title_still_returns_the_url_unchanged_on_failure():
+    """The URL-as-sentinel contract: callers test equality with the URL."""
+    url = "https://fixturehost.org/a_(b)?x=1&y=2"
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(500)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        assert fetch_title(url, client=client) == url

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import logging
 import os
 import re
@@ -33,6 +34,25 @@ _USER_AGENT = USER_AGENT
 # and frequently bot-walled — pubmed and arxiv 403 a plain fetch outright. Ask the
 # API instead of scraping whatever the identifier happens to land on.
 _CSL_ACCEPT = "application/vnd.citationstyles.csl+json"
+
+
+# Publisher metadata is typeset, not plain text: CSL JSON titles arrive carrying
+# inline markup and the newlines of the source XML (observed live on
+# 10.1101/2024.01.15.575765 -> "Combining RAS\n <sup>G12C</sup>\n (ON)").
+# Only these tags are stripped, never a bare "<": a title may legitimately read
+# "Cost < 5% of baseline", and eating that would corrupt real metadata.
+_MARKUP_RE = re.compile(
+    r"</?(?:sup|sub|i|b|em|strong|span|scp|sc|inf|u|tt|small|br|p|mml:[a-z]+)\b[^>]*>",
+    re.IGNORECASE,
+)
+_WS_RE = re.compile(r"\s+")
+
+
+def _clean_title(title: str) -> str:
+    """Flatten a typeset title into the single line a Zotero item should hold."""
+    text = _MARKUP_RE.sub("", title)
+    text = html.unescape(text)
+    return _WS_RE.sub(" ", text).strip()
 
 
 def _doi_title(client: httpx.Client, url: str) -> str | None:
@@ -94,9 +114,27 @@ def _pubmed_title(client: httpx.Client, url: str) -> str | None:
     return title.strip() if isinstance(title, str) and title.strip() else None
 
 
+# A preprint DOI is 10.1101/ plus either a dated identifier (2025.05.30.656746)
+# or an older bare serial. What follows in the URL is the *version* — v1, v2.full,
+# v1.full.pdf, v1.supplementary-material — and is not part of the DOI. Matching it
+# greedily produced DOIs like 10.1101/2025.05.30.656746v1, which doi.org 404s,
+# correctly. Anchoring the shape here is what keeps the version out.
+# The registrant prefix is data, not a constant: bioRxiv minted 10.64898 for 2026
+# papers alongside the long-standing 10.1101, so hardcoding one silently skips
+# the other. Match any prefix and anchor on the suffix shape instead — a dated
+# identifier (2026.02.05.703842) or an older bare serial (269415).
+_PREPRINT_DOI_RE = re.compile(r"(10\.\d{4,9}/(?:\d{4}\.\d{2}\.\d{2}\.\d+|\d+))")
+
+
 def _preprint_title(client: httpx.Client, url: str) -> str | None:
-    """bioRxiv/medRxiv carry their DOI in the URL path; resolve that."""
-    m = re.search(r"(10\.1101/[0-9a-zA-Z.]+)", urlsplit(url).path)
+    """bioRxiv/medRxiv carry their DOI in the URL path; resolve that.
+
+    Verified live 2026-08-21: the bare DOI returns 200 from doi.org content
+    negotiation for papers whose versioned form 404s. bioRxiv's own
+    api.biorxiv.org/details endpoint answers 200 with an empty body, so it is
+    not a usable alternative.
+    """
+    m = _PREPRINT_DOI_RE.search(urlsplit(url).path)
     if not m:
         return None
     return _doi_title(client, f"https://doi.org/{m.group(1)}")
@@ -161,12 +199,23 @@ def _identifier_title(client: httpx.Client, url: str) -> str | None:
 def fetch_title(url: str, *, client: httpx.Client | None = None) -> str:
     """Fetch <title> with 1s wall-clock budget. Return URL on any failure.
 
+    Whatever route produced the title, it is normalised once here rather than in
+    each resolver, so a new resolver cannot forget to do it. The URL sentinel is
+    returned untouched — callers detect failure by comparing against the URL.
+
     Designed for the Stop hook (T8) — URL-as-fallback is the contract;
     callers distinguish "got real title" from "got URL back" by string equality.
 
     For batch use (≥2 URLs per Stop turn), pass a shared `httpx.Client`
     to amortize TCP/TLS handshake — caller owns lifecycle.
     """
+    title = _fetch_title_raw(url, client=client)
+    if title == url:
+        return url
+    return _clean_title(title) or url
+
+
+def _fetch_title_raw(url: str, *, client: httpx.Client | None = None) -> str:
     owns_client = client is None
     try:
         if client is None:
