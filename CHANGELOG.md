@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.0 — 2026-08-21
+
+- **A host that is not a hostname is no longer captured.** A display ellipsis
+  reached the library as `https://…` and then raised "Invalid IDNA hostname" on
+  every fetch attempt for the rest of its life. The test is IDNA encoding — what
+  the HTTP client itself applies — rather than an ASCII whitelist, so genuine
+  internationalised domains (`münchen.de`, `例え.テスト`) are kept. IP addresses
+  are settled before the name test, which is what keeps public IPv6 working.
+
 ## 0.7.0 — 2026-08-21
 
 - **Preprint DOIs were being built wrong.** The path regex swallowed the version

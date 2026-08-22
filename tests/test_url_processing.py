@@ -183,6 +183,17 @@ def test_extract_strips_sentence_punctuation_after_a_balanced_paren():
         ("https://contest.com/x", False),
         ("https://localhostage.com/x", False),
         ("https://internal-affairs.gov/x", False),
+        # A host that is not a hostname. "https://…" reached the library from a
+        # display ellipsis in a message and raised "Invalid IDNA hostname" on
+        # every single fetch attempt thereafter.
+        ("https://\u2026", True),
+        ("https://\u2026/report.html", True),
+        ("https://foo\u2026bar.com/x", True),
+        ("https://exa mple.com/x", True),
+        # Negative controls: internationalised domains are real and must survive.
+        ("https://m\u00fcnchen.de/x", False),
+        ("https://\u4f8b\u3048.\u30c6\u30b9\u30c8/x", False),
+        ("https://xn--mnchen-3ya.de/x", False),
     ],
 )
 def test_is_excluded(url: str, excluded: bool):
