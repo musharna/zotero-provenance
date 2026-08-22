@@ -63,14 +63,18 @@ def test_fetch_title_falls_back_on_non_html():
 
 
 @pytest.mark.live
-def test_fetch_title_real_well_known_url():
+def test_fetch_title_real_well_known_url(live_client):
     """Real-execution check at the HTTP-fetch boundary (per global rule).
 
     Deliberately uses example.com even though capture excludes it: this probes
     fetch_title, which never consults is_excluded, and the page is the one URL
     on the web whose title is guaranteed stable by standard.
+
+    Takes the shared generous client for the same reason the identifier tests
+    do: on the hook's 1s budget this fails whenever the network is busy, which
+    tests the budget rather than the scrape. The budget has its own mocked test.
     """
-    title = fetch_title("https://example.com/")
+    title = fetch_title("https://example.com/", client=live_client)
     assert title == "Example Domain"
 
 
