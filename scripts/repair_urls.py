@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from zotero_capture.cli import build_client  # noqa: E402
 from zotero_capture.config import load_config  # noqa: E402
 from zotero_capture.repair import apply_repair, plan_repair  # noqa: E402
+from zotero_capture.sqlite_cache import init_db  # noqa: E402
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -48,6 +49,10 @@ def main(argv: list[str] | None = None) -> int:
 
     config = load_config()
     db_path = Path(args.db_path) if args.db_path else config.db_path
+    # Bring the schema up to date first. This tool can run against an index
+    # written by an older release, and the repair reads columns that arrived by
+    # migration — without this every merge failed on "no such column".
+    init_db(db_path)
     rows = _read_rows(db_path)
     steps = plan_repair(rows)
     if args.limit:

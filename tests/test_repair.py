@@ -127,3 +127,35 @@ def test_a_row_with_no_item_yet_is_skipped():
     steps = plan_repair([_row("https://h.example/p**", "")])
     assert steps[0].action == "skip"
     assert "claim" in steps[0].reason
+
+
+def test_the_repair_runs_against_an_index_written_by_an_older_release(tmp_path):
+    """Regression: every merge failed on the live index with "no such column".
+
+    The repair reads columns that arrived by migration, but the tool never
+    brought the schema up to date, and the index it runs against was written by
+    an older release. The rewrites went through (they touch no such column) and
+    all 64 merges failed, which is the worst shape for a partial pass to take.
+    """
+    import sqlite3
+
+    from zotero_capture.sqlite_cache import init_db, lookup_url
+
+    db = tmp_path / "legacy.db"
+    legacy = sqlite3.connect(db)
+    legacy.execute(
+        "CREATE TABLE url_index (url_canonical TEXT PRIMARY KEY, zotero_key TEXT"
+        " NOT NULL, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL)"
+    )
+    legacy.execute(
+        "INSERT INTO url_index VALUES ('https://h.example/p', 'K1', '2026-01-01',"
+        " '2026-01-01')"
+    )
+    legacy.commit()
+    legacy.close()
+
+    init_db(db)  # what the tool must do before reading
+
+    row = lookup_url(db, "https://h.example/p")
+    assert row is not None and row["zotero_key"] == "K1"
+    assert row["pending_key"] == "" and row["claimed_at"] == ""
