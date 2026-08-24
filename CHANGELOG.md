@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.11.1 — 2026-08-23
+
+- **The URL tokenizer asks the grammar instead of a list of exclusions.** The
+  bare-URL matcher was a character blacklist, ``[^\s<>"'`\]]+``, so anything
+  nobody had thought to exclude was taken as URL data: a trailing ``|`` from an
+  unpadded table cell, ``{ID}`` from a template, a raw ANSI escape from pasted
+  terminal output. Those addresses can never resolve a title, so they decay into
+  the URL-as-title junk this plugin exists to remove — 49 such rows are in the
+  live index. Lengthening ``TRAILING_PUNCT`` is the wrong layer: it consumes the
+  bad boundary rather than preventing it, and only ever in trailing position.
+  The character class is now derived from RFC 3986, with three departures, each
+  argued in the source: ``[`` and ``]`` stay out (legal only in an IPv6 host,
+  which has its own branch), ``'`` stays out (legal, but across 1,370 real
+  messages all seven apostrophes adjacent to a URL were shell, Python or English
+  delimiters and none was URL data), and non-ASCII is admitted per RFC 3987,
+  because a strict-ASCII class truncates ``.../wiki/München`` to ``.../wiki/M``
+  — the same damage as the ``]`` truncation that once broke every IPv6 URL.
+
+  Measured over 1,370 real assistant messages and the 4,009 URLs 0.11.0 extracts
+  from them, the change is a **no-op: 0 messages differ, output byte-identical**.
+  Every illegal character in that corpus already sat inside a code span or fence,
+  which the AST skips, and the live index's bad rows all predate the 0.11.0
+  deploy. This removes the mechanism, not a measured defect rate. A deliberately
+  broken variant admitting a space changed 218 of the same messages, so the
+  measurement could tell a difference when there was one to tell.
+
 ## 0.11.0 — 2026-08-22
 
 A second external audit, this time of the 0.10.0 fixes themselves. Nine findings,

@@ -12,17 +12,51 @@ from urllib.parse import unquote_plus, urlsplit, urlunsplit
 
 IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
-# A closing paren is a legal URL character — Cell Press PII links and the DOIs
-# behind them carry one (10.1016/s0092-8674(00)80876-3), as do Wikipedia
-# disambiguation pages. Admit it here and let the balance rule in extract_urls
-# decide whether a trailing one belongs to the URL or to the prose around it;
-# excluding it at the tokenizer truncates the URL before that rule can run.
-# A bracketed IPv6 literal is matched first and keeps its brackets: the general
-# branch stops at "]", which silently truncated every IPv6 URL to an unparseable
-# "https://[::1" that then raised for the rest of the item's life.
+# What a URL may contain is decided by the grammar, not by a list of characters
+# someone remembered to exclude. This was a blacklist — [^\s<>"'`\]]+ — so every
+# character nobody had thought of was taken as URL data: a trailing "|" from an
+# unpadded table cell, "{ID}" from a template, a raw ANSI escape from pasted
+# terminal output. Those addresses can never resolve a title, so they decay into
+# the URL-as-title junk this plugin exists to remove. Lengthening TRAILING_PUNCT
+# does not fix it: that is the consumer of the bad boundary, not its producer,
+# and it only ever sees the trailing position.
+#
+# Two deliberate departures from RFC 3986, both narrowing:
+#
+#   "[" and "]" are gen-delims, but legal only inside an IPv6 host — which is
+#   matched by its own branch first and keeps its brackets. Admitting them to
+#   the general branch would let a "filter[name]" template through.
+#
+#   "'" is a sub-delimiter and therefore legal, but in 1,370 real assistant
+#   messages all 7 apostrophes adjacent to a URL were delimiters — a shell
+#   quote, a Python string, an English possessive — and none was URL data. A
+#   URL that genuinely needs one writes %27.
+#
+# Non-ASCII is admitted (RFC 3987): a real URL may carry UTF-8 unencoded, and a
+# strict-ASCII class truncated ".../wiki/München" to ".../wiki/M" — the same
+# damage as the "]" truncation that once left every IPv6 URL as "https://[::1".
+#
+# A closing paren stays in: Cell Press PII links and the DOIs behind them carry
+# one (10.1016/s0092-8674(00)80876-3), as do Wikipedia disambiguation pages.
+# Whether a trailing one belongs to the URL or to the prose is the balance rule's
+# call in extract_urls, and excluding it here would pre-empt that rule.
+#
+# Measured over those 1,370 messages / 4,009 extracted URLs, the switch from
+# blacklist to whitelist changes nothing: every illegal character in that corpus
+# already sat inside a code span or fence, which the AST skips. It removes the
+# mechanism, not a measured defect rate. (A variant admitting a space, used as
+# the control, changed 218 of the messages.)
+_URL_CHARS = (
+    "A-Za-z0-9"  # unreserved: ALPHA / DIGIT
+    r"\-._~"  # unreserved: the rest
+    "!$&()*+,;="  # sub-delims, less "'"
+    ":/?#@"  # gen-delims that may follow the authority
+    "%"  # pct-encoded
+    "\u00a0-\U0010ffff"  # RFC 3987, above the C0/C1 control blocks
+)
 URL_RE = re.compile(
-    r"https?://\[[0-9A-Fa-f:.]+\](?::\d+)?[^\s<>\"'`\]]*"
-    r"|https?://[^\s<>\"'`\]]+",
+    rf"https?://\[[0-9A-Fa-f:.]+\](?::\d+)?[{_URL_CHARS}]*"
+    rf"|https?://[{_URL_CHARS}]+",
     re.IGNORECASE,
 )
 
