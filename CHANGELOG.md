@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.11.2 — 2026-08-23
+
+- **A URL cut short by a template is dropped, not stored as its prefix.** The
+  0.11.1 whitelist changed how a template in plain prose fails, and not for the
+  better: ``https://files.rcsb.org/download/{ID}.pdb`` used to be stored whole,
+  where no exclusion rule caught it but it could never resolve, so it failed
+  loudly as the URL-as-title junk this plugin removes. Stopping at ``{`` instead
+  stored ``https://files.rcsb.org/download/`` — a real, fetchable directory that
+  acquires a genuine title and reads as a citation nobody made. Quiet wrong data
+  is worse than loud junk.
+
+  A match is now discarded when URL text *resumes* after the illegal character:
+  ``{`` followed by ``ID}.pdb`` means the run was one literal. Whitespace never
+  counts, since that is how a URL normally ends, and neither does a *closing*
+  delimiter — a closer can only appear after the thing it closes, so the URL had
+  already ended. That second rule is not decoration: without it,
+  ``[https://example.org/bar].`` lost a real citation, because the match stops at
+  ``]`` and the sentence period reads as resumed URL text. An existing test
+  caught it.
+
+  Measured over the same 1,370 real assistant messages: **0 messages change, 0
+  URLs dropped**. Forcing the guard to fire on every bare URL drops 852 of the
+  4,009, so the measurement can tell a difference when there is one.
+
+  A regex literal still escapes both rules — CommonMark unescapes ``\.``, so
+  ``https://data\.gramene\.org/...`` arrives with no illegal character left and
+  ``*`` is a legal sub-delimiter. Two such rows are in the live index. That is
+  the wildcard class, which needs the code-block judgement rather than the
+  grammar; ``test_a_regex_literal_survives_because_commonmark_unescapes_it``
+  records the limit instead of hiding it.
+
 ## 0.11.1 — 2026-08-23
 
 - **The URL tokenizer asks the grammar instead of a list of exclusions.** The

@@ -40,10 +40,9 @@ def test_an_unpadded_table_cell_does_not_leak_its_delimiters():
     ]
 
 
-def test_a_brace_placeholder_is_not_absorbed():
-    assert extract_urls("https://example.org/{ID}.pdb|.cif here") == [
-        "https://example.org/"
-    ]
+def test_a_brace_placeholder_is_dropped_rather_than_absorbed():
+    """Not stored as "https://example.org/" either — see _stopped_mid_literal."""
+    assert extract_urls("https://example.org/{ID}.pdb|.cif here") == []
 
 
 def test_a_raw_ansi_escape_terminates_the_url():
@@ -108,3 +107,75 @@ def test_a_bracketed_ipv6_url_still_matches_through_its_own_branch():
 def test_a_balanced_paren_is_still_the_balance_rule_to_judge():
     url = "https://doi.org/10.1016/s0092-8674(00)80876-3"
     assert extract_urls(f"see {url}.") == [url]
+
+
+# --- a truncated match is evidence, not a citation ---
+#
+# The whitelist changed how a template fails. 0.11.0 stored
+# "https://files.rcsb.org/download/{ID}.pdb", which no exclusion rule caught but
+# which could never resolve, so it failed loudly as URL-as-title junk. 0.11.1
+# stops at "{" and stores "https://files.rcsb.org/download/" — a real, fetchable
+# directory that will acquire a genuine title and read as a citation nobody made.
+# Quiet wrong data is worse than loud junk.
+#
+# The signal is that the text CONTINUES past the illegal character with more URL
+# material: "{" followed by "ID}.pdb" means the run was a template. A closing
+# quote followed by a space means the URL simply ended and the prose resumed.
+
+
+def test_a_template_in_prose_is_dropped_rather_than_stored_truncated():
+    assert extract_urls("fetch https://files.rcsb.org/download/{ID}.pdb now") == []
+
+
+def test_a_regex_literal_survives_because_commonmark_unescapes_it():
+    """A known limit, recorded rather than hidden.
+
+    CommonMark treats ``\.`` as an escaped literal, so the parser hands over
+    ``https://data.gramene.org/v69/genes.*`` with no illegal character left for
+    either the grammar or the truncation guard to notice — and ``*`` is a legal
+    sub-delimiter. Two such rows are in the live index. They belong to the
+    wildcard/regex class, which needs the code-block judgement, not the grammar.
+    """
+    assert extract_urls(r"matches https://data\.gramene\.org/v69/genes.* here") == [
+        "https://data.gramene.org/v69/genes.*"
+    ]
+
+
+def test_a_two_placeholder_path_is_dropped():
+    assert extract_urls("see https://atted.jp/api/coex/Ath-u/{locus}/{top_n} there") == []
+
+
+def test_a_quoted_url_is_still_a_citation():
+    """The terminator is illegal but nothing URL-like follows it: the URL ended."""
+    assert extract_urls('he cited "https://example.org/a/b" earlier') == [
+        "https://example.org/a/b"
+    ]
+
+
+def test_a_trailing_pipe_still_yields_the_url_not_a_drop():
+    """"|" then a space: the pipe is punctuation, not the middle of a template."""
+    assert extract_urls("see https://example.org/a| next") == ["https://example.org/a"]
+
+
+def test_an_ansi_suffix_still_yields_the_url():
+    """After the escape comes "[", also illegal — so the run did not continue."""
+    assert extract_urls("https://sqlalche.me/e/20/e3q8\x1b[0m done") == [
+        "https://sqlalche.me/e/20/e3q8"
+    ]
+
+
+def test_a_plain_url_at_the_end_of_a_sentence_is_untouched():
+    assert extract_urls("see https://example.org/a/b.") == ["https://example.org/a/b"]
+
+
+def test_a_bracketed_url_at_the_end_of_a_sentence_survives():
+    """The guard's own regression: "]" then "." is a wrapped URL, not a template.
+
+    "]" can only close something, so the URL had already ended; the "." that
+    follows is the sentence, not resumed URL text.
+    """
+    text = "Check (https://fixturehost.org/foo), and [https://fixturehost.org/bar]."
+    assert extract_urls(text) == [
+        "https://fixturehost.org/foo",
+        "https://fixturehost.org/bar",
+    ]
