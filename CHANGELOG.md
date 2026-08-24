@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.11.5 — 2026-08-23
+
+- **A title behind a large inline script is no longer missed.** The reader
+  stopped at 32 KiB. experian.com serves 200 with a perfectly good ``<title>`` —
+  at byte 167,895, behind a long inline script — so three rows in the live index
+  stored their URL as the title, which is precisely the junk this plugin exists
+  to remove. The cap was the cause and the 1s budget was not: 32 KiB arrived in
+  0.49s and the whole 271 KB page in 0.63s.
+
+  The cap is now 256 KiB, and the read stops the moment ``</title>`` arrives, so
+  an ordinary page still reads about a kilobyte and pays nothing for the higher
+  ceiling. A blown deadline now *stops* the read instead of discarding it —
+  without that, raising the cap would have made things worse for a slow page,
+  which used to stop at 32 KiB with a title in hand and would instead have
+  streamed past the clock and thrown it away.
+
+  Verified against the live sites: experian.com/help/credit-freeze,
+  experian.com/protection/creditlock and a Yahoo Finance article all resolve
+  now; myaccount.google.com correctly does not, since it needs a login.
+
+  The existing cap test was written against a literal 32 KiB and would have
+  silently become a test of nothing. It is written against ``MAX_BYTES`` now.
+
+### Triage of what remains
+
+16 items were left carrying ``title:unresolved``. Fetching every one of them,
+against a positive control so that "they all failed" could not be the harness
+lying, gives four causes and only one was ours:
+
+- the read cap above (fixed);
+- HTTP 404 — a Fortune article that is gone, a private repo's pull request, and
+  a Wikipedia page that never existed (a test fixture);
+- authentication — Google account pages cannot resolve without a login;
+- a broken certificate chain on ``mirror.oit.ncsu.edu``, which fails identically
+  under plain ``httpx``, so it is the host's, not the guard's.
+
 ## 0.11.4 — 2026-08-23
 
 - **A host with no dot is never a public document.** 19 rows in the live index
