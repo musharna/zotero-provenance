@@ -128,7 +128,7 @@ def test_a_template_in_prose_is_dropped_rather_than_stored_truncated():
 
 
 def test_a_regex_literal_survives_because_commonmark_unescapes_it():
-    """A known limit, recorded rather than hidden.
+    r"""A known limit, recorded rather than hidden.
 
     CommonMark treats ``\.`` as an escaped literal, so the parser hands over
     ``https://data.gramene.org/v69/genes.*`` with no illegal character left for
