@@ -485,3 +485,77 @@ def test_a_failed_post_keeps_the_reservation_for_recovery(
     assert row is not None, "the claim was dropped while an item might exist"
     assert row["zotero_key"] == ""
     assert row["pending_key"], "recovery needs the key the POST was sent under"
+
+
+# --- a stale plugin root must not write (0.11.7) ---
+
+
+def test_a_stale_plugin_root_captures_nothing(
+    empty_cache, fake_zotero, fake_title_fetcher, monkeypatch
+):
+    """The failure this exists for: v0.3.0 wrote eight junk URLs on 2026-08-23.
+
+    A session keeps whichever plugin root it resolved at its own start, so an
+    old one goes on applying rules that were corrected releases ago — and
+    nothing reports a problem, because from its point of view the capture
+    succeeded. "https://example.org/bar" is exactly such a row: refused by every
+    release since v0.8, stored anyway by a session still on v0.3.0.
+    """
+    import zotero_capture.capture as cap
+
+    monkeypatch.setattr(cap, "installed_version", lambda: "99.0.0")
+    result = capture_message(
+        message="See https://fixturehost.org/foo for details.",
+        project_slug="home",
+        context=None,
+        today=date(2026, 8, 24),
+        db_path=empty_cache,
+        zotero=fake_zotero,
+        title_fetcher=fake_title_fetcher,
+    )
+    assert result == CaptureResult()
+    fake_zotero.post_webpage_item.assert_not_called()
+    fake_zotero.add_tags.assert_not_called()
+
+
+def test_a_current_plugin_root_still_captures(
+    empty_cache, fake_zotero, fake_title_fetcher, monkeypatch
+):
+    """Positive control, in the same file as the refusal.
+
+    Without it the refusal test passes just as happily on a guard that blocks
+    everything, which would silently switch capture off for every user.
+    """
+    import zotero_capture.capture as cap
+
+    monkeypatch.setattr(cap, "installed_version", lambda: cap.__version__)
+    result = capture_message(
+        message="See https://fixturehost.org/foo for details.",
+        project_slug="home",
+        context=None,
+        today=date(2026, 8, 24),
+        db_path=empty_cache,
+        zotero=fake_zotero,
+        title_fetcher=fake_title_fetcher,
+    )
+    assert result.urls_new == 1
+    fake_zotero.post_webpage_item.assert_called_once()
+
+
+def test_an_unreadable_installed_version_does_not_stop_capture(
+    empty_cache, fake_zotero, fake_title_fetcher, monkeypatch
+):
+    """Fail open: a layout we cannot read must not switch capture off."""
+    import zotero_capture.capture as cap
+
+    monkeypatch.setattr(cap, "installed_version", lambda: "")
+    result = capture_message(
+        message="See https://fixturehost.org/foo for details.",
+        project_slug="home",
+        context=None,
+        today=date(2026, 8, 24),
+        db_path=empty_cache,
+        zotero=fake_zotero,
+        title_fetcher=fake_title_fetcher,
+    )
+    assert result.urls_new == 1

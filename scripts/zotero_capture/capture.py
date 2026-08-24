@@ -9,6 +9,8 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from . import __version__
+from .staleness import installed_version, stale_reason
 from .sqlite_cache import (
     init_db,
     new_zotero_key,
@@ -133,9 +135,17 @@ def capture_message(
     now: datetime | None = None,
 ) -> CaptureResult:
     """Process one message: extract URLs, then create or re-tag each in Zotero."""
+    result = CaptureResult()
+    # Before anything is written: is this root even allowed to write? A session
+    # keeps the plugin version it resolved at its own start, and an old one
+    # applies rules that have since been corrected — v0.3.0 put eight URLs into
+    # the collection on 2026-08-23 that every release since v0.8 would refuse.
+    reason = stale_reason(__version__, installed_version())
+    if reason:
+        logger.error("%s", reason)
+        return result
     init_db(db_path)
     now = now or datetime.now(timezone.utc)
-    result = CaptureResult()
     if _is_generated_report(message, origin):
         return result
     raw_urls = extract_urls(message)
