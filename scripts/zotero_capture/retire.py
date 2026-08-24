@@ -2,53 +2,120 @@
 
 Repair and retirement are different verbs and they need different predicates.
 `repair` corrects a URL that was damaged on the way in — there is a right answer
-and it recovers it. Retirement is for a row where there is no right answer: the
-text was never an address, or it is one today's rules would refuse outright. The
+and it recovers it. Retirement is for a row where there is no right answer. The
 repair pass deliberately SKIPS these rather than guessing a correction, which is
 right, but skipping leaves them in the library for good.
 
-The predicate is "this can never resolve to a document", NOT "this contains a
-character RFC 3986 forbids". The two overlap heavily and are not the same test,
-and using the character test to decide deletion is how something real eventually
-gets thrown away. Three reasons qualify:
+Retirement asks repair first. That is not merely ordering: "https://cloud.r-
+project.org\\" fails the address test outright — a backslash is not a hostname
+character — yet the citation behind it is recoverable, and judging it alone
+would have trashed a real source for a reason that reads convincingly in a log.
 
-  PLACEHOLDER  a template, not a URL: "{ID}", "{locus}", "${VERSION}". Nobody
-               cited "https://files.rcsb.org/download/{ID}.pdb"; it is a shape.
-  CONTROL      a control byte, from terminal output pasted into a message — an
-               ANSI colour reset on the end of a stack-trace URL.
-  EXCLUDED     an address today's rules already refuse: a reserved or fixture
-               name (example.com, .test), infrastructure (a font CDN, DoH), an
-               asset (a badge SVG, a photo). These rows predate the rule that
-               would have stopped them; capture has not produced one in months.
+Two tiers, because they are two different claims:
+
+  HARD    proof the text cannot be an address at all. A template placeholder, a
+          control byte, a name the standards reserve, a host no resolver could
+          look up. Applied by default.
+
+  POLICY  a real address this collection chooses not to keep: a page asset, a
+          font CDN or DoH endpoint, an intranet or private name. These CAN
+          resolve — for whoever is on that network — so retiring them is a
+          product decision rather than a fact, and it needs --policy. An
+          external audit drew this distinction and it was a fair one: declining
+          to capture something going forward is a far weaker claim than reaching
+          back and trashing what is already stored.
+
+What "reversible" covers, precisely. Trashing is `deleted: 1`, recoverable from
+any Zotero client. Dropping the index row is NOT recoverable that way — Zotero's
+trash does not hold `first_seen`, `last_seen` or queued provenance tags — so
+every applied run writes the rows it removed to a JSONL journal beside the index
+before destroying anything. Earlier wording here claimed the whole operation was
+reversible from any client. Only its Zotero half is.
 
 Everything else is left alone, including rows that merely look odd. A wildcard
-or regex like "https://data\\.gramene\\.org/v69/genes.*" is NOT retired here:
-CommonMark unescapes the backslashes, "*" is a legal sub-delimiter, and deciding
-those needs the code-block judgement rather than a rule about addresses.
-
-Trashing is `deleted: 1`, recoverable from any Zotero client, never the
-permanent DELETE.
+like "https://lepanthes.example/lepanthes*.htm" is not retired for its asterisk:
+"*" is a legal sub-delimiter, and a rule keyed on it would take real URLs with
+it. Such rows qualify, if at all, on the address test instead.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from .repair import repaired_url
-from .url_processing import is_excluded
+from .url_processing import (
+    EXCLUDE_HOSTS_EXACT,
+    EXCLUDE_INFRA_HOSTS,
+    TS_NET_SUFFIX,
+    _is_asset_path,
+    _is_real_hostname,
+    _is_reserved_name,
+    is_unsafe_address,
+    parse_ip_literal,
+)
 from .zotero_client import ZoteroClient
 
 logger = logging.getLogger(__name__)
 
-# "{" or "}" anywhere, or a shell-style "${...}". A brace is illegal in a URL
-# unencoded (RFC 3986), so its presence is not ambiguous the way "*" is.
+# A brace never appears unencoded in a real address, so it means a template.
+# httpx would percent-encode it into something fetchable, which is exactly the
+# danger rather than a reason to keep it: "…/download/{ID}.pdb" becomes a URL
+# that resolves to a directory nobody cited.
 PLACEHOLDER_RE = re.compile(r"[{}]")
 
 # C0, DEL and C1. An ESC arrives as the head of an ANSI sequence.
 CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+HARD = "hard"
+POLICY = "policy"
+
+
+def classify(url: str) -> tuple[str, str]:
+    """Return (tier, reason) for a row, or ("", "") to leave it alone."""
+    if repaired_url(url):
+        return "", ""  # repair has a real address to recover; not ours to judge
+    if PLACEHOLDER_RE.search(url):
+        return HARD, "template placeholder, not an address"
+    if CONTROL_RE.search(url):
+        return HARD, "control character, from pasted terminal output"
+
+    parts = urlsplit(url)
+    host = (parts.hostname or "").lower()
+    if not host:
+        return HARD, "no host at all"
+    if _is_reserved_name(host):
+        return HARD, "a name the standards reserve (RFC 2606/6761)"
+
+    ip = parse_ip_literal(host)
+    if ip is None and not _is_real_hostname(host):
+        return HARD, "not a hostname any resolver could look up"
+
+    if _is_asset_path(parts.path or ""):
+        return POLICY, "a page asset rather than a document"
+    if host in EXCLUDE_INFRA_HOSTS:
+        return POLICY, "infrastructure (font CDN, DNS-over-HTTPS)"
+    if host in EXCLUDE_HOSTS_EXACT or host.endswith(TS_NET_SUFFIX):
+        return POLICY, "reachable only from this machine or tailnet"
+    if ip is not None and is_unsafe_address(ip):
+        return POLICY, "a private address, not globally addressable"
+    if "." not in host:
+        # Not "can never identify a document" — a local DNS zone, /etc/hosts or
+        # a corporate proxy can make "https://wiki/runbook" perfectly real for
+        # whoever is on that network. It is excluded because this collection
+        # tracks globally addressable sources: a policy, not a fact.
+        return POLICY, "a single-label name, not globally addressable"
+    return "", ""
+
+
+def retire_reason(url: str) -> str:
+    """Why this row should go, or "" to leave it alone. Tier-agnostic."""
+    return classify(url)[1]
 
 
 @dataclass
@@ -56,30 +123,10 @@ class RetireStep:
     url: str
     zotero_key: str
     reason: str
+    tier: str = HARD
 
 
-def retire_reason(url: str) -> str:
-    """Why this row can never be a source, or "" to leave it alone.
-
-    Repair gets first refusal, and this is not merely an ordering convenience.
-    "https://cloud.r-project.org\\" fails the address test — a backslash is not
-    a hostname character — yet the address in front of the backslash is real and
-    the repair pass recovers it. Deciding retirement without asking repair first
-    would trash a citation that was one character away from being correct, and it
-    would do so for a reason that sounds convincing in the log.
-    """
-    if repaired_url(url):
-        return ""
-    if PLACEHOLDER_RE.search(url):
-        return "template placeholder, not an address"
-    if CONTROL_RE.search(url):
-        return "control character, from pasted terminal output"
-    if is_excluded(url):
-        return "an address today's rules refuse (reserved, infra or asset)"
-    return ""
-
-
-def plan_retire(rows: list[dict]) -> list[RetireStep]:
+def plan_retire(rows: list[dict], *, include_policy: bool = False) -> list[RetireStep]:
     """Decide what to retire, touching nothing.
 
     A row with no Zotero key never completed its claim, so there is no item to
@@ -87,10 +134,18 @@ def plan_retire(rows: list[dict]) -> list[RetireStep]:
     """
     steps: list[RetireStep] = []
     for row in rows:
-        reason = retire_reason(row["url_canonical"])
-        if reason:
-            steps.append(RetireStep(row["url_canonical"], row["zotero_key"], reason))
+        tier, reason = classify(row["url_canonical"])
+        if not reason:
+            continue
+        if tier == POLICY and not include_policy:
+            continue
+        steps.append(RetireStep(row["url_canonical"], row["zotero_key"], reason, tier))
     return steps
+
+
+def journal_path(db_path: Path) -> Path:
+    """Where removed rows are recorded so the index half stays recoverable."""
+    return db_path.with_name(f"{db_path.name}.retired.jsonl")
 
 
 def apply_retire(
@@ -100,10 +155,39 @@ def apply_retire(
     zotero: ZoteroClient,
     connect,
 ) -> dict[str, int]:
-    """Carry out a plan: trash each item, then drop its row."""
+    """Carry out a plan: journal the row, trash the item, then drop the row."""
     counts = {"trashed": 0, "row_only": 0, "failed": 0}
+    stamp = datetime.now(timezone.utc).isoformat()
+    journal = journal_path(db_path)
     for step in steps:
         try:
+            # Journal BEFORE anything is destroyed. Zotero's trash restores the
+            # item but not the sighting history, so without this the index half
+            # of the operation is a one-way door.
+            with connect(db_path) as conn:
+                row = conn.execute(
+                    "SELECT * FROM url_index WHERE url_canonical = ?", (step.url,)
+                ).fetchone()
+                tags = [
+                    r[0]
+                    for r in conn.execute(
+                        "SELECT tag FROM pending_tags WHERE url_canonical = ?",
+                        (step.url,),
+                    )
+                ]
+            with journal.open("a", encoding="utf-8") as fh:
+                fh.write(
+                    json.dumps(
+                        {
+                            "retired_at": stamp,
+                            "reason": step.reason,
+                            "tier": step.tier,
+                            "row": dict(row) if row is not None else None,
+                            "pending_tags": tags,
+                        }
+                    )
+                    + "\n"
+                )
             if step.zotero_key:
                 zotero.trash_item(step.zotero_key)
                 counts["trashed"] += 1

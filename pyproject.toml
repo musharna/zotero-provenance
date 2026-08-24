@@ -1,9 +1,17 @@
 [project]
 name = "zotero-provenance"
-version = "0.11.5"
+version = "0.11.6"
 description = "Record the sources a Claude Code session cites into a Zotero collection"
 requires-python = ">=3.10"
-dependencies = ["httpx>=0.24", "beautifulsoup4>=4.11", "markdown-it-py>=2.2"]
+dependencies = [
+    "httpx>=0.24",
+    "beautifulsoup4>=4.11",
+    "markdown-it-py>=2.2",
+    # markdown-it-py's own linkifier. It decides where a bare URL ends in
+    # prose; three hand-rolled attempts at that boundary each shipped a
+    # silent corruption.
+    "linkify-it-py>=2.0",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=7", "respx>=0.20"]

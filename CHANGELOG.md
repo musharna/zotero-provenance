@@ -1,5 +1,91 @@
 # Changelog
 
+## 0.11.6 — 2026-08-24
+
+An external audit of 0.11.5 found nine defects, five of them silent corruption
+and three introduced by the releases immediately before it. Every one was
+reproduced against HEAD before being accepted.
+
+- **Where a bare URL ends is now linkify-it-py's judgement, not ours.** Three
+  hand-rolled attempts at that boundary each shipped a corruption:
+
+  ``https://en.wikipedia.org/wiki/People's_Republic_of_China`` was stored as
+  ``.../wiki/People`` — a DIFFERENT real Wikipedia page, so it resolved a
+  plausible title and read as a citation nobody made. The apostrophe is an RFC
+  3986 sub-delimiter; excluding it on seven corpus observations did not survive
+  one live counterexample. ``{{ID}}.pdb`` defeated the continuation guard,
+  because that guard looked exactly one character past the illegal one and the
+  next character was also illegal. And a curly quote, an em dash and U+00A0 were
+  all absorbed into the address — the IRI range began AT the non-breaking space,
+  so a match could cross a visible word boundary.
+
+  linkify-it-py is markdown-it-py's own linkifier. Matches are sliced out of the
+  original text rather than read from a token href, because going through
+  markdown-it percent-encodes the result (``München`` → ``M%C3%BCnchen``), which
+  changes the dedup key and would duplicate every non-ASCII row already stored.
+  A bracketed IPv6 literal keeps its own pattern and is taken out of the text
+  first: linkify does not recognise that form at all.
+
+  The URI grammar keeps a job, a different one — it VALIDATES what linkify
+  delimited instead of deciding the extent.
+
+  Measured over the same 1,370 real messages: **4,009 URLs before, 4,009 after,
+  one message different**, and that one is an elided URL containing a literal
+  ``...`` and an unbalanced paren, junk under both. Disabling bare matching
+  drops 852, so the comparison can see a difference.
+
+  A known cost, recorded rather than hidden: an *unpadded* table cell
+  (``|repo|https://…|``) is no longer captured, because linkify needs a boundary
+  in front of the scheme. Padded rows, which is what generators emit, work.
+  Losing a citation is loud absence; the alternative was the corruptions above.
+
+- **Repair can no longer emit what capture would reject.** It shared no
+  predicate with the tokenizer, so ``…/filter[name]|`` was "repaired" to
+  ``…/filter`` — shorter, resolvable, and something extraction would never have
+  produced. Both paths now strip the same illegal tail and ask the same
+  ``is_storable_url``. An illegal character in the MIDDLE is refused outright
+  rather than truncated into an address nobody cited.
+
+- **ANSI sequences are removed, not cut at.** An escape wraps an address rather
+  than ending one, so ``…/a\x1b[31mcontinued`` is one URL wearing a colour code;
+  cutting at the ESC invented the shorter one. CSI, OSC (including OSC 8
+  hyperlinks) and two-byte escapes are all stripped, in capture and in repair.
+
+- **A merge is refused unless the survivor is a real item.** ``plan_repair``
+  chose merge because the corrected URL was present in the index — not because
+  that row's claim had ever completed. With an empty ``zotero_key`` the tag carry
+  was skipped and the duplicate was trashed anyway, destroying the only real item
+  and leaving an orphan row. It now requires a nonempty key that ``item_exists``
+  confirms, decided at apply time, and skips otherwise. Never a downgrade to
+  rewrite: the corrected URL already holds the primary key, so the UPDATE would
+  fail after the Zotero item had already changed.
+
+- **A title counts only once its closing tag has arrived.** Making a blown
+  deadline ``break`` in 0.11.5 fixed one problem and created a worse one — the
+  partial body still went to BeautifulSoup, which accepts an unclosed
+  ``<title>``, so ``Real Tit`` was stored as resolved metadata. That is worse
+  than storing the URL: it clears ``title:unresolved`` and nothing revisits the
+  item. Matching the whole element also makes the stop case-insensitive and stops
+  a stray ``</title>`` inside a script ending the read early.
+
+- **Retirement is now two tiers, and its reversibility claim is honest.** HARD is
+  proof the text cannot be an address — a placeholder, a control byte, a reserved
+  name, a host no resolver could look up — and applies by default. POLICY is a
+  real address this collection declines to keep — an asset, a font CDN, an
+  intranet or private name — which CAN resolve for whoever is on that network, so
+  it is opt-in behind ``--policy``. Declining to capture something going forward
+  is a weaker claim than reaching back and trashing what is stored.
+
+  The docs said the pass was recoverable from any Zotero client. Only its Zotero
+  half is: the trash does not hold ``first_seen``, ``last_seen`` or queued
+  provenance. Every applied run now journals each removed row to
+  ``url_index.db.retired.jsonl`` before destroying anything.
+
+  The dotless rule is stated as what it is. Not "can never identify a document" —
+  a local DNS zone or a corporate proxy makes ``https://wiki/runbook`` perfectly
+  real for whoever is on that network — but "this collection tracks globally
+  addressable sources", which is a policy.
+
 ## 0.11.5 — 2026-08-23
 
 - **A title behind a large inline script is no longer missed.** The reader

@@ -546,3 +546,76 @@ def test_an_ordinary_page_is_unaffected_by_the_larger_cap():
     )
     with httpx.Client(transport=transport) as client:
         assert fetch_title("https://fixturehost.org/small", client=client) == "Small"
+
+
+# --- a title is only a title once its closing tag has arrived (0.11.6) ---
+
+
+class _Chunks(httpx.SyncByteStream):
+    def __init__(self, *parts: bytes):
+        self._parts = parts
+
+    def __iter__(self):
+        return iter(self._parts)
+
+
+def _serve(*parts: bytes) -> httpx.MockTransport:
+    return httpx.MockTransport(
+        lambda req: httpx.Response(
+            200, headers={"content-type": "text/html"}, stream=_Chunks(*parts)
+        )
+    )
+
+
+def test_a_deadline_inside_the_title_returns_the_url_not_half_a_title(monkeypatch):
+    """Reported by an external audit of 0.11.5 and reproduced before accepting.
+
+    Making a blown deadline `break` rather than return the URL fixed one problem
+    and created a worse one: the partial body still went to BeautifulSoup, which
+    happily accepts an unclosed <title>, so "Real Tit" was stored as resolved
+    metadata. That is worse than storing the URL, because it clears the
+    title:unresolved tag and nothing ever revisits the item.
+    """
+    import zotero_capture.title_fetcher as tf
+
+    calls = {"n": 0}
+
+    class _Clock:
+        def monotonic(self):
+            calls["n"] += 1
+            return 0.0 if calls["n"] == 1 else 999.0  # blown after the first chunk
+
+    monkeypatch.setattr(tf, "time", _Clock())
+    with httpx.Client(
+        transport=_serve(b"<html><head><title>Real Tit", b"le Rest</title></head>")
+    ) as client:
+        assert tf.fetch_title("https://fixturehost.org/x", client=client) == (
+            "https://fixturehost.org/x"
+        )
+
+
+def test_an_uppercase_closing_tag_still_stops_the_read():
+    """The byte stop was case-sensitive, so </TITLE> read the whole page."""
+    with httpx.Client(
+        transport=_serve(b"<html><head><TITLE>Shouty</TITLE></head></html>")
+    ) as client:
+        assert fetch_title("https://fixturehost.org/x", client=client) == "Shouty"
+
+
+def test_a_tag_split_across_many_tiny_chunks_is_still_found():
+    """A two-chunk lookback missed a tag dribbled across three or more."""
+    parts = tuple(
+        bytes([b]) for b in b"<html><head><title>Dribbled</title></head></html>"
+    )
+    with httpx.Client(transport=_serve(*parts)) as client:
+        assert fetch_title("https://fixturehost.org/x", client=client) == "Dribbled"
+
+
+def test_a_closing_tag_inside_a_script_does_not_win():
+    """Stopping on the first </title> byte-match can stop before the real one."""
+    body = (
+        b"<html><head><script>var s = '</title>';</script>"
+        b"<title>The Real One</title></head></html>"
+    )
+    with httpx.Client(transport=_serve(body)) as client:
+        assert fetch_title("https://fixturehost.org/x", client=client) == "The Real One"

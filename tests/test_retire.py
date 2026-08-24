@@ -18,7 +18,15 @@ from contextlib import closing
 
 import pytest
 
-from zotero_capture.retire import apply_retire, plan_retire, retire_reason
+from zotero_capture.retire import (
+    HARD,
+    POLICY,
+    apply_retire,
+    classify,
+    journal_path,
+    plan_retire,
+    retire_reason,
+)
 from zotero_capture.sqlite_cache import init_db
 
 
@@ -61,12 +69,43 @@ def test_a_control_byte_after_a_real_address_goes_to_repair_instead():
     [
         "https://cited.example",  # RFC 2606 fixture name
         "http://evil.example.com/creativecommons.org",  # another project's fixture
-        "https://cloudflare-dns.com/dns-query",  # infrastructure
-        "https://codecov.io/gh/o/r/badge.svg",  # an asset, not a document
     ],
 )
-def test_an_address_todays_rules_refuse_is_retired(url):
-    assert retire_reason(url).startswith("an address today's rules refuse")
+def test_a_reserved_name_is_a_hard_retirement(url):
+    tier, reason = classify(url)
+    assert tier == HARD
+    assert "reserve" in reason
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://cloudflare-dns.com/dns-query",  # infrastructure
+        "https://codecov.io/gh/o/r/badge.svg",  # an asset, not a document
+        "https://prometheus:9090/graph",  # single-label intranet name
+    ],
+)
+def test_a_resolvable_address_we_decline_is_only_a_POLICY_retirement(url):
+    """These CAN resolve for whoever is on that network.
+
+    An external audit made the distinction and it holds: declining to capture
+    something going forward is a weaker claim than reaching back and trashing
+    what is already stored. So the tier is different and --policy is required.
+    """
+    tier, reason = classify(url)
+    assert tier == POLICY, reason
+
+
+def test_the_default_plan_holds_policy_rows_back():
+    rows = [
+        _row("https://files.rcsb.org/download/{ID}.pdb", "HARDKEY"),
+        _row("https://codecov.io/gh/o/r/badge.svg", "POLICYKEY"),
+    ]
+    assert [s.zotero_key for s in plan_retire(rows)] == ["HARDKEY"]
+    assert sorted(s.zotero_key for s in plan_retire(rows, include_policy=True)) == [
+        "HARDKEY",
+        "POLICYKEY",
+    ]
 
 
 # --- what it must refuse: the half that keeps this pass safe ---
@@ -98,12 +137,11 @@ def test_a_regex_row_is_retired_for_its_host_not_its_asterisk():
     Repair refuses the same rows for a different and equally correct reason —
     there is no correction to make that would not invent an address.
     """
-    assert retire_reason(r"https://data\.gramene\.org/v69/genes.*").startswith(
-        "an address today's rules refuse"
+    assert classify(r"https://data\.gramene\.org/v69/genes.*") == (
+        HARD,
+        "not a hostname any resolver could look up",
     )
-    assert retire_reason("https://lepanthes.example/lepanthes*.htm").startswith(
-        "an address today's rules refuse"
-    )
+    assert classify("https://lepanthes.example/lepanthes*.htm")[0] == HARD
 
 
 def test_a_real_url_containing_an_asterisk_is_kept():
@@ -118,9 +156,8 @@ def test_a_real_url_containing_an_asterisk_is_kept():
 
 def test_a_reserved_wildcard_host_is_retired_for_the_name_not_the_star():
     """ "*.example.com" goes, but because example.com is reserved."""
-    assert retire_reason("https://*.example.com/*").startswith(
-        "an address today's rules refuse"
-    )
+    tier, reason = classify("https://*.example.com/*")
+    assert tier == HARD and "reserve" in reason
 
 
 # --- applying a plan ---
@@ -186,3 +223,55 @@ def test_a_row_whose_claim_never_completed_is_dropped_without_a_zotero_call(tmp_
     counts = apply_retire(steps, db_path=db, zotero=zotero, connect=connect)
     assert counts == {"trashed": 0, "row_only": 1, "failed": 0}
     assert zotero.trashed == []
+
+
+def test_every_removed_row_is_journalled_before_it_is_destroyed(tmp_path):
+    """Zotero's trash restores the item; it does not restore the sighting history.
+
+    An external audit caught the documentation claiming otherwise. first_seen,
+    last_seen and queued provenance tags live only in the index, so dropping the
+    row was a one-way door while the docs called the whole pass reversible.
+    """
+    import json
+    import sqlite3
+
+    from zotero_capture.sqlite_cache import init_db
+
+    db = tmp_path / "index.db"
+    init_db(db)
+
+    def connect(path):
+        conn = sqlite3.connect(path, isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    with connect(db) as conn:
+        conn.execute(
+            "INSERT INTO url_index (url_canonical, zotero_key, first_seen, last_seen)"
+            " VALUES ('https://a.example/{X}', 'JUNK', '2026-01-02', '2026-03-04')"
+        )
+        conn.execute(
+            "INSERT INTO pending_tags (url_canonical, tag)"
+            " VALUES ('https://a.example/{X}', 'project:zed')"
+        )
+        rows = [dict(r) for r in conn.execute("SELECT url_canonical, zotero_key FROM url_index")]
+
+    class _Zotero:
+        def __init__(self):
+            self.trashed = []
+
+        def trash_item(self, key):
+            self.trashed.append(key)
+
+    apply_retire(plan_retire(rows), db_path=db, zotero=_Zotero(), connect=connect)
+
+    entries = [
+        json.loads(line)
+        for line in journal_path(db).read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(entries) == 1
+    row = entries[0]["row"]
+    # The three things Zotero cannot give back are all present.
+    assert row["first_seen"] == "2026-01-02"
+    assert row["last_seen"] == "2026-03-04"
+    assert entries[0]["pending_tags"] == ["project:zed"]

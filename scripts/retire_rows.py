@@ -27,7 +27,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from zotero_capture.cli import build_client  # noqa: E402
 from zotero_capture.config import load_config  # noqa: E402
-from zotero_capture.retire import apply_retire, plan_retire  # noqa: E402
+from zotero_capture.retire import (  # noqa: E402
+    apply_retire,
+    journal_path,
+    plan_retire,
+)
 from zotero_capture.sqlite_cache import init_db  # noqa: E402
 
 
@@ -49,6 +53,11 @@ def _read_rows(db_path: Path) -> list[dict]:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="retire-rows")
     p.add_argument("--apply", action="store_true", help="carry out the plan")
+    p.add_argument(
+        "--policy",
+        action="store_true",
+        help="also retire rows excluded by policy rather than by proof — page\nassets, infrastructure, intranet and private names. These CAN resolve for\nwhoever is on that network, so reaching back and trashing them is a product\ndecision and is opt-in.",
+    )
     p.add_argument("--db-path", default=None)
     p.add_argument("--limit", type=int, default=None, help="only the first N steps")
     args = p.parse_args(argv)
@@ -57,11 +66,15 @@ def main(argv: list[str] | None = None) -> int:
     db_path = Path(args.db_path) if args.db_path else config.db_path
     init_db(db_path)
     rows = _read_rows(db_path)
-    steps = plan_retire(rows)
+    steps = plan_retire(rows, include_policy=args.policy)
     if args.limit:
         steps = steps[: args.limit]
 
     by_reason = Counter(s.reason for s in steps)
+    if not args.policy:
+        held = len(plan_retire(rows, include_policy=True)) - len(steps)
+        if held:
+            print(f"({held} more are policy exclusions; pass --policy to include them)")
     print(f"index rows: {len(rows)}")
     print(f"to retire:  {len(steps)}  ({len(rows) - len(steps)} left alone)")
     for reason, n in by_reason.most_common():
@@ -76,6 +89,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.apply:
         print("\nDry run. Nothing was changed. Re-run with --apply to carry this out.")
+        print("Applied runs journal every removed row to "
+              f"{journal_path(db_path).name} first: Zotero's trash restores the item, "
+              "not the sighting history.")
         return 0
 
     with build_client(config, timeout=30.0) as zotero:

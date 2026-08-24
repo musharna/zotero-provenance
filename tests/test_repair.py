@@ -231,6 +231,9 @@ def test_a_merge_does_not_carry_the_duplicate_s_unresolved_title_tag(tmp_path):
             self.added: dict[str, list[str]] = {}
             self.trashed: list[str] = []
 
+        def item_exists(self, key):
+            return True
+
         def get_item_tags(self, key):
             return ["project:x", "seen:2026-08-23", "title:unresolved"]
 
@@ -253,3 +256,118 @@ def test_a_merge_does_not_carry_the_duplicate_s_unresolved_title_tag(tmp_path):
     assert "project:x" in z.added["SURVIVOR"]
     assert "seen:2026-08-23" in z.added["SURVIVOR"]
     assert "title:unresolved" not in z.added["SURVIVOR"]
+
+
+def test_a_merge_is_refused_when_the_survivor_has_no_item(tmp_path):
+    """The bad row's item must not be trashed to make way for a claim that never completed.
+
+    Found by an external audit of 0.11.3 and reproduced before being accepted.
+    plan_repair() chose "merge" purely because the corrected URL was present in
+    the index — but that row's claim had never completed, so its zotero_key was
+    empty. apply_repair() skipped the tag carry (correctly) and then trashed the
+    duplicate anyway, which was the ONLY real item. What survived was an orphan
+    row pointing at nothing.
+
+    Skip is the answer rather than a downgrade to rewrite: the clean URL already
+    occupies the primary key, so the rewrite's UPDATE would fail after the Zotero
+    item had already been changed, leaving remote and local disagreeing.
+    """
+    import sqlite3
+
+    from zotero_capture.repair import apply_repair, plan_repair
+    from zotero_capture.sqlite_cache import init_db
+
+    db = tmp_path / "index.db"
+    init_db(db)
+
+    def connect(path):
+        conn = sqlite3.connect(path, isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    with connect(db) as conn:
+        conn.execute(
+            "INSERT INTO url_index (url_canonical, zotero_key, first_seen, last_seen)"
+            " VALUES ('https://h.example/path', '', '2026-01-01', '2026-01-01')"
+        )
+        conn.execute(
+            "INSERT INTO url_index (url_canonical, zotero_key, first_seen, last_seen)"
+            " VALUES ('https://h.example/path|', 'BADITEM', '2026-01-01', '2026-01-01')"
+        )
+        rows = [dict(r) for r in conn.execute("SELECT url_canonical, zotero_key FROM url_index")]
+
+    class _Zotero:
+        def __init__(self):
+            self.trashed: list[str] = []
+
+        def item_exists(self, key):
+            return False
+
+        def get_item_tags(self, key):
+            return ["project:x"]
+
+        def add_tags(self, key, tags, **kw):
+            return True
+
+        def trash_item(self, key):
+            self.trashed.append(key)
+
+    z = _Zotero()
+    counts = apply_repair(plan_repair(rows), db_path=db, zotero=z, connect=connect)
+
+    assert z.trashed == [], "the only real item must survive"
+    assert counts["merge"] == 0
+    with connect(db) as conn:
+        surviving = sorted(r[0] for r in conn.execute("SELECT url_canonical FROM url_index"))
+    assert surviving == ["https://h.example/path", "https://h.example/path|"]
+
+
+def test_a_merge_still_happens_when_the_survivor_is_a_real_item(tmp_path):
+    """Positive control: the guard must not turn every merge into a skip."""
+    import sqlite3
+
+    from zotero_capture.repair import apply_repair, plan_repair
+    from zotero_capture.sqlite_cache import init_db
+
+    db = tmp_path / "index.db"
+    init_db(db)
+
+    def connect(path):
+        conn = sqlite3.connect(path, isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    with connect(db) as conn:
+        conn.execute(
+            "INSERT INTO url_index (url_canonical, zotero_key, first_seen, last_seen)"
+            " VALUES ('https://h.example/path', 'GOODITEM', '2026-01-01', '2026-01-01')"
+        )
+        conn.execute(
+            "INSERT INTO url_index (url_canonical, zotero_key, first_seen, last_seen)"
+            " VALUES ('https://h.example/path|', 'BADITEM', '2026-01-01', '2026-01-01')"
+        )
+        rows = [dict(r) for r in conn.execute("SELECT url_canonical, zotero_key FROM url_index")]
+
+    class _Zotero:
+        def __init__(self):
+            self.trashed: list[str] = []
+            self.added: dict[str, list[str]] = {}
+
+        def item_exists(self, key):
+            return True
+
+        def get_item_tags(self, key):
+            return ["project:x"]
+
+        def add_tags(self, key, tags, **kw):
+            self.added[key] = list(tags)
+            return True
+
+        def trash_item(self, key):
+            self.trashed.append(key)
+
+    z = _Zotero()
+    counts = apply_repair(plan_repair(rows), db_path=db, zotero=z, connect=connect)
+    assert counts["merge"] == 1
+    assert z.trashed == ["BADITEM"]
+    assert z.added["GOODITEM"] == ["project:x"]
