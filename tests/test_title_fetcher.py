@@ -5,7 +5,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from zotero_capture.title_fetcher import fetch_title
+from zotero_capture.title_fetcher import MAX_BYTES, fetch_title
 
 
 def test_fetch_title_extracts_title_tag():
@@ -92,12 +92,13 @@ def test_fetch_title_handles_nested_tags_in_title():
 
 
 def test_fetch_title_truncates_large_body():
-    """Body > MAX_BYTES with <title> placed past truncation boundary should fall back to URL.
+    """A <title> past the read cap falls back to the URL. The cap is still a cap.
 
-    Proves MAX_BYTES bound is enforced (C1).
+    Written against MAX_BYTES rather than a literal, because it was written
+    against a literal 32 KiB and silently became a test of the old cap when the
+    ceiling was raised to 256 KiB for experian.com.
     """
-    # 40 KB padding before the title tag — past the 32 KB MAX_BYTES window
-    padding = b"<p>x</p>" * 5000  # 40_000 bytes
+    padding = b"<p>x</p>" * ((MAX_BYTES // 8) + 2000)
     body = b"<html><body>" + padding + b"<title>NeverSeen</title></body></html>"
     transport = httpx.MockTransport(
         lambda req: httpx.Response(
@@ -491,3 +492,57 @@ def test_fetch_title_still_returns_the_url_unchanged_on_failure():
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         assert fetch_title(url, client=client) == url
+
+
+# --- a title behind a large inline script (0.11.5) ---
+
+
+def test_a_title_past_the_old_32k_cap_is_still_found():
+    """Measured live: experian.com puts <title> at byte 167,895.
+
+    The page opens with a long inline script blob, so the whole <head> sits well
+    past where the reader used to stop. It returns 200 with a perfectly good
+    title and the fetcher gave up on it anyway, leaving three rows in the live
+    index storing their URL as the title — the exact junk this plugin removes.
+    The cap was the cause, not the time budget: 32 KiB arrived in 0.49s and the
+    entire 271 KB page in 0.63s, against a 1s deadline.
+    """
+    padding = b"<script>" + b"x" * 200_000 + b"</script>"
+    body = b"<html><head>" + padding + b"<title>Late Title</title></head></html>"
+    transport = httpx.MockTransport(
+        lambda req: httpx.Response(
+            200, headers={"content-type": "text/html"}, content=body
+        )
+    )
+    with httpx.Client(transport=transport) as client:
+        assert fetch_title("https://fixturehost.org/late", client=client) == "Late Title"
+
+
+def test_a_title_beyond_even_the_new_cap_gives_up_cleanly():
+    """The cap still exists; it is larger, not gone."""
+    body = (
+        b"<html><head><script>" + b"x" * 400_000 + b"</script>"
+        b"<title>Too Late</title></head></html>"
+    )
+    transport = httpx.MockTransport(
+        lambda req: httpx.Response(
+            200, headers={"content-type": "text/html"}, content=body
+        )
+    )
+    with httpx.Client(transport=transport) as client:
+        assert (
+            fetch_title("https://fixturehost.org/verylate", client=client)
+            == "https://fixturehost.org/verylate"
+        )
+
+
+def test_an_ordinary_page_is_unaffected_by_the_larger_cap():
+    """Control: the common case must not start reading more than it needs."""
+    body = b"<html><head><title>Small</title></head><body>" + b"y" * 500_000 + b"</body></html>"
+    transport = httpx.MockTransport(
+        lambda req: httpx.Response(
+            200, headers={"content-type": "text/html"}, content=body
+        )
+    )
+    with httpx.Client(transport=transport) as client:
+        assert fetch_title("https://fixturehost.org/small", client=client) == "Small"

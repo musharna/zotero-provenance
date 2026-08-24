@@ -1,4 +1,4 @@
-"""HTTP GET first ~32KB, parse <title>, 1s budget. URL-as-fallback on any failure."""
+"""HTTP GET until </title>, parse it, 1s budget. URL-as-fallback on any failure."""
 
 from __future__ import annotations
 
@@ -22,7 +22,11 @@ from .url_processing import IPAddress, is_unsafe_address, parse_ip_literal
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_S = 1.0
-MAX_BYTES = 32 * 1024
+# Raised from 32 KiB after experian.com was measured putting <title> at byte
+# 167,895, behind a long inline script. The read stops as soon as </title>
+# arrives, so an ordinary page still reads about a kilobyte; only a page that
+# buries its head pays for the larger ceiling.
+MAX_BYTES = 256 * 1024
 
 
 class UnsafeHostError(Exception):
@@ -333,11 +337,24 @@ def _fetch_title_raw(url: str, *, client: httpx.Client | None = None) -> str:
             chunks: list[bytes] = []
             received = 0
             for chunk in resp.iter_bytes():
-                if time.monotonic() > deadline:
-                    return url
                 chunks.append(chunk)
                 received += len(chunk)
+                # Stop the moment the title is complete. Most pages carry it in
+                # the first kilobyte, so raising the cap costs them nothing —
+                # only a page that buries <title> behind a large inline script
+                # is read further, and that is exactly the page that needs it.
+                if b"</title>" in chunks[-1] or (
+                    len(chunks) > 1 and b"</title>" in chunks[-2] + chunks[-1]
+                ):
+                    break
                 if received >= MAX_BYTES:
+                    break
+                # A blown deadline stops the read; it does not discard what
+                # arrived. Returning the URL here threw away a title that was
+                # already in hand, which mattered more once the cap went up:
+                # a slow page would stream past the old 32 KiB, hit the clock,
+                # and lose a title the smaller cap would have found.
+                if time.monotonic() > deadline:
                     break
             body = b"".join(chunks)[:MAX_BYTES]
         try:
