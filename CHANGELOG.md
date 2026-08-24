@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.11.7 — 2026-08-24
+
+- **A stale plugin root refuses to write to the library.** Every URL defect
+  fixed in the six releases before this one was still reaching the collection,
+  because the code fixing them was not the code running. The capture hook
+  executes a cache entry keyed by version, and a session holds whichever entry
+  it resolved at its own start — so a session still on **v0.3.0** wrote eight
+  junk URLs on 2026-08-23, ``https://example.org/bar`` among them. Every release
+  since v0.8 refuses that address; v0.3.0 predates the rule, so nothing stopped
+  it, and nothing reported a problem either. The index gained rows and the log
+  recorded a successful capture.
+
+  Capture now compares the version it is executing against the installed clone's
+  manifest and declines, with a log line naming both, when it is behind. Loud
+  absence beats quiet corruption.
+
+  Two deliberate choices. The comparison is numeric, so 1.10.0 is newer than
+  1.2.3 rather than the reverse. And an unreadable version fails **open** — the
+  opposite of this plugin's usual rule — because a false positive silently
+  switches capture off for someone whose install layout could not be read, which
+  is worse than the rare stale write it would have caught.
+
+  Its limit, stated rather than discovered later: **a guard cannot fix a version
+  that predates it.** v0.3.0 will never refuse itself. This closes the door from
+  here forward; older roots have to be removed from disk, because there is no
+  way to reason with them.
+
 ## 0.11.6 — 2026-08-24
 
 An external audit of 0.11.5 found nine defects, five of them silent corruption

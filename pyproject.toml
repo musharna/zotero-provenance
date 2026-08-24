@@ -1,6 +1,6 @@
 [project]
 name = "zotero-provenance"
-version = "0.11.6"
+version = "0.11.7"
 description = "Record the sources a Claude Code session cites into a Zotero collection"
 requires-python = ">=3.10"
 dependencies = [
