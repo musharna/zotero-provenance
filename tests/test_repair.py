@@ -197,3 +197,59 @@ def test_a_template_is_not_cut_into_a_real_directory():
 def test_a_cut_that_leaves_no_host_is_not_a_repair():
     """Replacing junk with "https://" would report success and store worse junk."""
     assert repaired_url("https://\x1b[0m") == ""
+
+
+def test_a_merge_does_not_carry_the_duplicate_s_unresolved_title_tag(tmp_path):
+    """Provenance moves across a merge; the duplicate's title state does not.
+
+    Observed live: repairing "…/ARFDSynInt.git|" merged it into the clean row,
+    and the survivor — which had a perfectly good title — came out tagged
+    title:unresolved. That sticks, because title_is_unresolved() trusts the tag
+    over the title in front of it, so the item reads as junk forever.
+    """
+    import sqlite3
+
+    from zotero_capture.repair import RepairStep, apply_repair
+    from zotero_capture.sqlite_cache import init_db
+
+    db = tmp_path / "index.db"
+    init_db(db)
+
+    def connect(path):
+        conn = sqlite3.connect(path, isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    with connect(db) as conn:
+        conn.execute(
+            "INSERT INTO url_index (url_canonical, zotero_key, first_seen, last_seen)"
+            " VALUES ('https://h.example/repo', 'SURVIVOR', '2026-01-01', '2026-01-01')"
+        )
+
+    class _Zotero:
+        def __init__(self):
+            self.added: dict[str, list[str]] = {}
+            self.trashed: list[str] = []
+
+        def get_item_tags(self, key):
+            return ["project:x", "seen:2026-08-23", "title:unresolved"]
+
+        def add_tags(self, key, tags, **kw):
+            self.added[key] = list(tags)
+            return True
+
+        def trash_item(self, key):
+            self.trashed.append(key)
+
+    z = _Zotero()
+    step = RepairStep(
+        "https://h.example/repo|", "DUPLICATE", "merge", "https://h.example/repo"
+    )
+    counts = apply_repair([step], db_path=db, zotero=z, connect=connect)
+
+    assert counts["merge"] == 1
+    assert z.trashed == ["DUPLICATE"]
+    # Positive and negative in one assertion set: provenance arrived, state did not.
+    assert "project:x" in z.added["SURVIVOR"]
+    assert "seen:2026-08-23" in z.added["SURVIVOR"]
+    assert "title:unresolved" not in z.added["SURVIVOR"]

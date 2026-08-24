@@ -406,7 +406,19 @@ def is_excluded(url: str) -> bool:
         return True
     ip = parse_ip_literal(host)
     if ip is None:
-        # Not an address, so it has to be a name a resolver could look up.
+        # Not an address, so it has to be a name a resolver could look up —
+        # and a name with no dot in it can only be looked up from inside a
+        # network that already knows it, so it cannot identify a document
+        # anyone else can read. 19 rows in the live index had one and not one
+        # was a source: "prometheus:9090", "homelab:3000", Ollama on
+        # "host:11434", a machine name, and this project's own test fixtures.
+        #
+        # This runs AFTER the IP literal is ruled out, deliberately. A bracketed
+        # IPv6 host has no dot either, and catching it here would exclude every
+        # IPv6 URL — the same damage as the "]" truncation that once stored them
+        # all as an unparseable "https://[::1".
+        if "." not in host:
+            return True
         return not _is_real_hostname(host)
     return is_unsafe_address(ip)
 

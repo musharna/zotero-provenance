@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.11.4 — 2026-08-23
+
+- **A host with no dot is never a public document.** 19 rows in the live index
+  had one and not one was a source: intranet services (``prometheus:9090``,
+  ``homelab:3000``, Ollama on ``host:11434``), a machine name, and this repo's
+  own test fixtures (``https://h/R&D``, ``https://a``). A single-label name
+  resolves only inside a network that already knows it, so it cannot identify a
+  document anyone else can read — the same thing the localhost, tailnet and
+  reserved-name rules already say. It goes with them rather than becoming a new
+  kind of check, which also means ``prune`` sweeps the backlog with it.
+
+  The rule runs only after an IP literal has been ruled out. A bracketed IPv6
+  host has no dot either, and catching it here would exclude every IPv6 URL —
+  the same damage as the ``]`` truncation that once stored them all as
+  ``https://[::1``. There is a test for exactly that.
+
+- **A merge no longer carries the duplicate's title state onto the survivor.**
+  Repairing ``…/ARFDSynInt.git|`` merged it into the clean row and tagged that
+  row ``title:unresolved`` — although its title was perfectly good — because the
+  merge carried every tag across. Provenance (``project:``, ``seen:``,
+  ``context:``) belongs to the sighting and should move; ``title:unresolved``
+  describes the duplicate's own title and should not. It sticks, too:
+  ``title_is_unresolved()`` trusts the tag over the title in front of it, so one
+  bad carry marks a healthy item as junk permanently.
+
+- **An indented code block is not a citation, and there is now a test saying so.**
+  This is how six of this repo's test fixtures reached the live library on
+  2026-08-22: an audit message demonstrated malformed CommonMark inside a
+  four-space indent, and the pre-AST scanner had no notion of an indented block —
+  its comment said as much, reasoning that an indented line is usually a list
+  item. The stray backtick then left the URL exposed as prose. The AST fixed this
+  in 0.11.0 as a side effect and nothing has been captured that way since; the
+  test pins it shut. The companion test records the honest limit: unindented,
+  the same fragment IS a citation, and the parser is right to take it.
+
 ## 0.11.3 — 2026-08-23
 
 Cleaning up what the old tokenizer left in the library. The grammar fix stopped

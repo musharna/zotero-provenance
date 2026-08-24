@@ -123,3 +123,37 @@ def test_a_link_destination_has_its_entity_decoded():
     assert extract_urls("[x](https://fixturehost.org/?x=a&amp;b)") == [
         "https://fixturehost.org/?x=a&b"
     ]
+
+
+def test_an_indented_code_block_is_not_a_citation():
+    """The leak that put this repo's own fixtures in the live library.
+
+    An audit message demonstrated malformed CommonMark inside a four-space
+    indent. The old line-oriented scanner had no notion of an indented code
+    block — its comment said so explicitly, on the reasoning that an indented
+    line is usually a list item — so it read the fragment as prose, the stray
+    backtick left the URL exposed, and six fixture URLs were captured as real
+    sources on 2026-08-22.
+
+    A parser gets this for free: an indented code block is block-level, so it
+    never reaches the inline walk at all. Nothing has been captured that way
+    since. This pins that shut.
+    """
+    msg = (
+        "This report fragment is genuinely malformed CommonMark:\n\n"
+        "    **Title with ` stray** — `https://fixturehost.org/report`\n\n"
+        "CommonMark pairs the first two backticks, leaving the URL as text.\n"
+    )
+    assert extract_urls(msg) == []
+
+
+def test_the_same_fragment_in_running_prose_is_still_a_citation():
+    """Control, and an honest limit.
+
+    Unindented there is no code block, the stray backtick genuinely does leave
+    the URL as ordinary text, and a reader would see it as prose. The parser is
+    right to take it — so the indent is doing the work, not a rule about
+    fixtures, and this test says which.
+    """
+    flat = "**Title with ` stray** — `https://fixturehost.org/report` and more"
+    assert extract_urls(flat) == ["https://fixturehost.org/report"]

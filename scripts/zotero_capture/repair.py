@@ -44,7 +44,7 @@ from .sqlite_cache import lookup_url
 from urllib.parse import urlsplit
 
 from .url_processing import _URL_CHAR_RE, _stopped_mid_literal, canonicalize
-from .zotero_client import ZoteroClient
+from .zotero_client import UNRESOLVED_TITLE_TAG, ZoteroClient
 
 logger = logging.getLogger(__name__)
 
@@ -196,7 +196,16 @@ def apply_repair(
                 # or the merge would throw away exactly the sighting history
                 # this plugin exists to keep.
                 if survivor and survivor["zotero_key"]:
-                    tags = zotero.get_item_tags(step.zotero_key)
+                    # Provenance moves; state does not. "title:unresolved"
+                    # describes the DUPLICATE's own title, and carrying it onto a
+                    # survivor that already has a real one marks a healthy item
+                    # as junk — and permanently, because title_is_unresolved()
+                    # trusts the tag over the title it can see.
+                    tags = [
+                        t
+                        for t in zotero.get_item_tags(step.zotero_key)
+                        if t != UNRESOLVED_TITLE_TAG
+                    ]
                     if tags:
                         zotero.add_tags(survivor["zotero_key"], tags)
                 zotero.trash_item(step.zotero_key)
