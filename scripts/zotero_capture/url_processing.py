@@ -60,6 +60,13 @@ URL_RE = re.compile(
     re.IGNORECASE,
 )
 
+# One legal URL character, for asking why a match stopped where it did.
+_URL_CHAR_RE = re.compile(f"[{_URL_CHARS}]")
+
+# Illegal characters that can only CLOSE something, so a match ending at one is
+# a URL that was wrapped, not a URL cut in half. See _stopped_mid_literal.
+_LITERAL_CLOSERS = "]}>\"'`"
+
 # Strict CommonMark: no linkification of bare URLs, so a URL in prose stays in a
 # text token and URL_RE still has a job. What the parser buys is that the text it
 # hands over has already had the markdown taken out of it.
@@ -296,8 +303,40 @@ def extract_urls(text: str) -> list[str]:
                 # Inside a link the label is decoration — `[displayed](cited)`
                 # cites only the destination, which link_open already emitted.
                 for match in URL_RE.finditer(child.content):
+                    if _stopped_mid_literal(child.content, match.end()):
+                        continue
                     emit(_trim_prose_url(match.group(0)))
     return seen
+
+
+def _stopped_mid_literal(text: str, end: int) -> bool:
+    """True when the match ended inside a template rather than at the URL's end.
+
+    Narrowing the tokenizer to the URI grammar changed how a template fails. A
+    prose "https://files.rcsb.org/download/{ID}.pdb" used to be stored whole:
+    no exclusion rule caught it, but it could never resolve, so it failed loudly
+    as the URL-as-title junk this plugin removes. Stopping at "{" instead stores
+    "https://files.rcsb.org/download/" — a real, fetchable directory that will
+    acquire a genuine title and read as a citation nobody made. Quiet wrong data
+    is worse than loud junk, so the prefix is dropped rather than kept.
+
+    The signal is that URL text RESUMES after the illegal character: "{" followed
+    by "ID}.pdb" means the run was one literal. Whitespace is never suspicious —
+    it is how a URL normally ends.
+
+    A *closing* delimiter is not suspicious either, and the distinction is not a
+    taste call: a closer can only appear after the thing it closes, so the URL
+    had already ended. Without that, "[https://example.org/bar]." lost a real
+    citation — the match stops at "]", a legal "." follows, and the sentence
+    period reads as resumed URL text. An *opening* brace or a separator has no
+    such reading; the run simply continues.
+    """
+    if end + 1 >= len(text):
+        return False
+    stopper = text[end]
+    if stopper.isspace() or stopper in _LITERAL_CLOSERS:
+        return False
+    return _URL_CHAR_RE.match(text[end + 1]) is not None
 
 
 def _trim_prose_url(url: str) -> str:
