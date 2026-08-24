@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.11.3 — 2026-08-23
+
+Cleaning up what the old tokenizer left in the library. The grammar fix stopped
+new damage; these two passes deal with the 96 rows already there.
+
+- **Repair now recovers a URL from an illegal tail.** Rows exist ending in a
+  shell backslash, an unpadded table pipe, or an ANSI reset from pasted terminal
+  output. RFC 3986 permits none of them unencoded, so the address ends where the
+  tail begins and cutting there recovers it rather than inventing it. Four rows
+  in the live index qualify, all as merges into the clean URL already present.
+
+  It refuses the case that looks identical and is not: if URL text *resumes*
+  after the illegal character, the run was one literal.
+  ``https://files.rcsb.org/download/{ID}.pdb`` cut at ``{`` would manufacture
+  ``https://files.rcsb.org/download/`` — a real, fetchable directory nobody
+  cited. So would a cut that leaves no host at all. Both return "no repair".
+
+  The blanket "a backslash means a regex" rule is gone with it. That was too
+  broad: it also skipped ``https://cloud.r-project.org\``, where the backslash is
+  a shell line-continuation and the address in front of it is real.
+
+- **A new retirement pass removes rows that can never be a source.**
+  ``scripts/retire_rows.py``, dry run by default. Repair corrects a URL that has
+  a right answer; retirement removes one that has none, and the two deliberately
+  do not share a predicate. 92 rows qualify: 31 API templates
+  (``{locus}``, ``${VERSION}``), and 61 addresses today's rules already refuse —
+  fixture names, font CDNs, DNS-over-HTTPS endpoints, badge SVGs, image files —
+  captured before those rules existed.
+
+  The predicate is "can never resolve to a document", **not** "contains a
+  character RFC 3986 forbids". The two overlap and are not the same test, and
+  using the character test to decide deletion is how a real row eventually gets
+  thrown away. Retirement also asks repair first: ``https://cloud.r-project.org\``
+  fails the address test, yet the citation behind it is recoverable, and judging
+  it without asking would have trashed it for a reason that reads convincingly in
+  a log.
+
+  Trashing is ``deleted: 1``, recoverable from any Zotero client, never the
+  permanent DELETE.
+
 ## 0.11.2 — 2026-08-23
 
 - **A URL cut short by a template is dropped, not stored as its prefix.** The

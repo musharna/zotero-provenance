@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pytest
 
-from zotero_capture.repair import correct_url, plan_repair
+from zotero_capture.repair import correct_url, plan_repair, repaired_url
 
 
 def _row(url: str, key: str = "KEY1") -> dict:
@@ -159,3 +159,41 @@ def test_the_repair_runs_against_an_index_written_by_an_older_release(tmp_path):
     row = lookup_url(db, "https://h.example/p")
     assert row is not None and row["zotero_key"] == "K1"
     assert row["pending_key"] == "" and row["claimed_at"] == ""
+
+
+# --- tails the old blacklist tokenizer swallowed (0.11.3) ---
+
+
+@pytest.mark.parametrize(
+    "damaged, expected",
+    [
+        # A shell line-continuation, swept up because "\" was in no exclusion.
+        ("https://cloud.r-project.org\\", "https://cloud.r-project.org"),
+        # An unpadded table cell.
+        (
+            "https://github.com/musharna/ARFDSynInt.git|",
+            "https://github.com/musharna/ARFDSynInt.git",
+        ),
+        # An ANSI reset from a stack trace pasted into a message.
+        ("https://sqlalche.me/e/20/e3q8\x1b[0m\x1b[4;94m", "https://sqlalche.me/e/20/e3q8"),
+    ],
+)
+def test_an_illegal_tail_is_cut(damaged, expected):
+    assert correct_url(damaged) == expected
+
+
+def test_a_template_is_not_cut_into_a_real_directory():
+    """The refusal that keeps this from manufacturing citations.
+
+    Cutting at "{" yields "https://files.rcsb.org/download/", which resolves and
+    would acquire a genuine title — a source nobody cited. URL text resumes after
+    the brace, so there is no address to recover and the row goes to retirement.
+    """
+    url = "https://files.rcsb.org/download/{ID}.pdb"
+    assert correct_url(url) == url
+    assert repaired_url(url) == ""
+
+
+def test_a_cut_that_leaves_no_host_is_not_a_repair():
+    """Replacing junk with "https://" would report success and store worse junk."""
+    assert repaired_url("https://\x1b[0m") == ""
