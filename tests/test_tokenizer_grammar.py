@@ -33,11 +33,27 @@ def test_a_trailing_pipe_in_prose_is_not_part_of_the_url():
     assert extract_urls("see https://example.org/a| next") == ["https://example.org/a"]
 
 
-def test_an_unpadded_table_cell_does_not_leak_its_delimiters():
-    """A padded row was clean only because whitespace stopped the match."""
-    assert extract_urls("|repo|https://github.com/musharna/ARFDSynInt.git|") == [
+def test_a_padded_table_cell_yields_the_url_without_its_delimiters():
+    assert extract_urls("| repo | https://github.com/musharna/ARFDSynInt.git |") == [
         "https://github.com/musharna/ARFDSynInt.git"
     ]
+
+
+def test_an_unpadded_table_cell_yields_nothing_and_that_is_the_accepted_cost():
+    """A known limit of delegating boundaries to linkify, recorded not hidden.
+
+    linkify needs a boundary in front of the scheme, and "|repo|https://…" gives
+    it none, so the row is not captured at all. The hand-rolled tokenizer did
+    capture it — along with the apostrophe truncation, the {{ID}} bypass and the
+    NBSP absorption that came with hand-rolling the boundary in the first place.
+
+    Losing a citation is the better failure: it is loud absence, not a plausible
+    wrong address stored as though someone had cited it. Strict CommonMark does
+    not parse tables anyway, so the surrounding text is genuinely ambiguous —
+    the letters after the URL belong to the next cell, not the address. Padded
+    rows, which is what almost every generator emits, work.
+    """
+    assert extract_urls("|repo|https://github.com/musharna/ARFDSynInt.git|") == []
 
 
 def test_a_brace_placeholder_is_dropped_rather_than_absorbed():

@@ -125,6 +125,10 @@ def build_fetch_client(*, timeout: float = DEFAULT_TIMEOUT_S) -> httpx.Client:
 
 _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 
+# The same pattern over bytes, used as the streaming stop condition: it is the
+# test for "a whole title has arrived", not merely "some closing tag has".
+_TITLE_BYTES_RE = re.compile(rb"<title[^>]*>.*?</title>", re.IGNORECASE | re.DOTALL)
+
 # Wikimedia (and Crossref/NCBI as a courtesy) reject a User-Agent that carries no
 # way to contact the operator: verified 2026-08-21, both "zotero-provenance/0.1"
 # and a plain "Mozilla/5.0" get 403 from en.wikipedia.org while the shared string
@@ -334,29 +338,35 @@ def _fetch_title_raw(url: str, *, client: httpx.Client | None = None) -> str:
             ctype = resp.headers.get("content-type", "")
             if "html" not in ctype.lower():
                 return url
-            chunks: list[bytes] = []
-            received = 0
+            buffer = bytearray()
+            complete = False
             for chunk in resp.iter_bytes():
-                chunks.append(chunk)
-                received += len(chunk)
-                # Stop the moment the title is complete. Most pages carry it in
-                # the first kilobyte, so raising the cap costs them nothing —
-                # only a page that buries <title> behind a large inline script
-                # is read further, and that is exactly the page that needs it.
-                if b"</title>" in chunks[-1] or (
-                    len(chunks) > 1 and b"</title>" in chunks[-2] + chunks[-1]
-                ):
+                buffer += chunk
+                # A title counts only once its CLOSING tag has arrived. Anything
+                # short of that is a fragment, and BeautifulSoup will hand back
+                # an unclosed <title> as though it were the real thing — so
+                # "Real Tit" got stored as resolved metadata, which is worse
+                # than storing the URL: it clears title:unresolved, and nothing
+                # revisits the item afterwards.
+                #
+                # Matching the whole element rather than the closing bytes also
+                # settles two smaller bugs: the search is case-insensitive, so
+                # </TITLE> stops the read, and a stray "</title>" inside a script
+                # cannot stop it early, because there is no opening tag in front
+                # of it to complete the pattern.
+                if _TITLE_BYTES_RE.search(buffer):
+                    complete = True
                     break
-                if received >= MAX_BYTES:
+                if len(buffer) >= MAX_BYTES:
                     break
-                # A blown deadline stops the read; it does not discard what
-                # arrived. Returning the URL here threw away a title that was
-                # already in hand, which mattered more once the cap went up:
-                # a slow page would stream past the old 32 KiB, hit the clock,
-                # and lose a title the smaller cap would have found.
+                # A blown deadline stops the read rather than discarding what
+                # arrived — but what arrived is only used if the title in it is
+                # whole, which the flag above decides.
                 if time.monotonic() > deadline:
                     break
-            body = b"".join(chunks)[:MAX_BYTES]
+            if not complete:
+                return url
+            body = bytes(buffer[:MAX_BYTES])
         try:
             soup = BeautifulSoup(body, "html.parser")
             tag = soup.find("title")

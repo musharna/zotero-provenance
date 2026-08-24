@@ -41,9 +41,10 @@ from pathlib import Path
 from typing import Literal
 
 from .sqlite_cache import lookup_url
+from .url_processing import _TEMPLATE_RE
 from urllib.parse import urlsplit
 
-from .url_processing import _URL_CHAR_RE, _stopped_mid_literal, canonicalize
+from .url_processing import canonicalize, is_storable_url, strip_ansi, strip_illegal_tail
 from .zotero_client import UNRESOLVED_TITLE_TAG, ZoteroClient
 
 logger = logging.getLogger(__name__)
@@ -91,23 +92,23 @@ def correct_url(url: str) -> str:
 def _cut_at_illegal_tail(url: str) -> str:
     """Drop a tail the old blacklist tokenizer swallowed, when there is one.
 
-    Rows exist ending in a shell backslash, a table pipe, or an ANSI reset from
-    pasted terminal output. RFC 3986 permits none of those unencoded, so the
-    address ends where the first one begins and cutting there recovers it rather
-    than inventing it.
+    Only the TAIL, and only via the same helper capture uses. Cutting at the
+    first illegal character wherever it sits manufactures an address: repair
+    turned "…/filter[name]|" into "…/filter", a shorter URL that resolves and
+    that nobody cited. An illegal character in the middle means the row is a
+    literal, and repaired_url() then refuses it rather than inventing something.
 
-    The exception is the whole point of the guard in extract_urls, and it must
-    hold here too: if URL text RESUMES after the illegal character, the run was
-    one literal and there is no address to recover. Cutting
-    "https://files.rcsb.org/download/{ID}.pdb" at "{" would manufacture
-    "https://files.rcsb.org/download/", a real fetchable directory nobody cited.
-    Those rows are left for the retirement pass, which removes them instead.
+    Escape sequences are removed rather than cut at, because they wrap a URL
+    instead of ending one: "…/a\x1b[31mcontinued" is a single address wearing a
+    colour code.
+
+    A template is refused outright — cutting "…/download/{ID}.pdb" at the brace
+    manufactures "…/download/", a real fetchable directory nobody cited.
     """
-    for i, ch in enumerate(url):
-        if _URL_CHAR_RE.match(ch) or ch == "[" or ch == "]":
-            continue
-        return url if _stopped_mid_literal(url, i) else url[:i]
-    return url
+    url = strip_ansi(url)
+    if _TEMPLATE_RE.search(url):
+        return url
+    return strip_illegal_tail(url)
 
 
 def repaired_url(url: str) -> str:
@@ -122,6 +123,11 @@ def repaired_url(url: str) -> str:
         return ""
     out = correct_url(url)
     if out == url or not urlsplit(out).hostname:
+        return ""
+    # The same question capture asks. Repair used to emit addresses the
+    # tokenizer would have rejected — "…/filter[name]" among them — so a
+    # "successful" repair could store something capture would never accept.
+    if not is_storable_url(out):
         return ""
     return out
 
@@ -192,22 +198,40 @@ def apply_repair(
                 counts["rewrite"] += 1
             else:
                 survivor = lookup_url(db_path, step.corrected)
-                # Carry the duplicate's provenance across before trashing it,
-                # or the merge would throw away exactly the sighting history
-                # this plugin exists to keep.
-                if survivor and survivor["zotero_key"]:
-                    # Provenance moves; state does not. "title:unresolved"
-                    # describes the DUPLICATE's own title, and carrying it onto a
-                    # survivor that already has a real one marks a healthy item
-                    # as junk — and permanently, because title_is_unresolved()
-                    # trusts the tag over the title it can see.
-                    tags = [
-                        t
-                        for t in zotero.get_item_tags(step.zotero_key)
-                        if t != UNRESOLVED_TITLE_TAG
-                    ]
-                    if tags:
-                        zotero.add_tags(survivor["zotero_key"], tags)
+                survivor_key = survivor["zotero_key"] if survivor else ""
+                # A merge trashes this row's item on the promise that the
+                # corrected URL already has one. If it does not, that promise is
+                # false and the trash destroys the only real item, leaving an
+                # orphan row pointing at nothing. plan_repair() cannot settle
+                # this, because it only sees that the corrected URL is present
+                # in the index — not whether that row's claim ever completed —
+                # and a plan can go stale between the dry run and the apply.
+                #
+                # Skip, never fall back to a rewrite: the corrected URL already
+                # occupies the primary key, so the UPDATE would fail AFTER the
+                # Zotero item had been changed, leaving remote and local
+                # disagreeing. An unfinished claim is the reservation protocol's
+                # to settle, not this pass's.
+                if not survivor_key or not zotero.item_exists(survivor_key):
+                    logger.warning(
+                        "skipping merge of %s: %s has no item to merge into",
+                        step.url,
+                        step.corrected,
+                    )
+                    counts["skip"] += 1
+                    continue
+                # Provenance moves; state does not. "title:unresolved" describes
+                # the DUPLICATE's own title, and carrying it onto a survivor that
+                # already has a real one marks a healthy item as junk — and
+                # permanently, because title_is_unresolved() trusts the tag over
+                # the title it can see.
+                tags = [
+                    t
+                    for t in zotero.get_item_tags(step.zotero_key)
+                    if t != UNRESOLVED_TITLE_TAG
+                ]
+                if tags:
+                    zotero.add_tags(survivor_key, tags)
                 zotero.trash_item(step.zotero_key)
                 with connect(db_path) as conn:
                     conn.execute(

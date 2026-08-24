@@ -7,69 +7,95 @@ import re
 import socket
 
 import idna
+from linkify_it import LinkifyIt
 from markdown_it import MarkdownIt
 from urllib.parse import unquote_plus, urlsplit, urlunsplit
 
 IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
-# What a URL may contain is decided by the grammar, not by a list of characters
-# someone remembered to exclude. This was a blacklist — [^\s<>"'`\]]+ — so every
-# character nobody had thought of was taken as URL data: a trailing "|" from an
-# unpadded table cell, "{ID}" from a template, a raw ANSI escape from pasted
-# terminal output. Those addresses can never resolve a title, so they decay into
-# the URL-as-title junk this plugin exists to remove. Lengthening TRAILING_PUNCT
-# does not fix it: that is the consumer of the bad boundary, not its producer,
-# and it only ever sees the trailing position.
+# Where a bare URL ENDS in prose is decided by linkify-it-py, not by a character
+# class of ours. Three hand-rolled attempts at that boundary each shipped a
+# silent corruption, found by an external audit of 0.11.5:
 #
-# Two deliberate departures from RFC 3986, both narrowing:
+#   "…/wiki/People's_Republic_of_China" was stored as "…/wiki/People" — a
+#   DIFFERENT real Wikipedia page, so it resolved a plausible title and looked
+#   fine. The apostrophe is a legal sub-delimiter; excluding it on the evidence
+#   of seven corpus observations was not enough against a live counterexample.
 #
-#   "[" and "]" are gen-delims, but legal only inside an IPv6 host — which is
-#   matched by its own branch first and keeps its brackets. Admitting them to
-#   the general branch would let a "filter[name]" template through.
+#   "{{ID}}.pdb" defeated the continuation guard, because that guard looked at
+#   exactly one character past the illegal one and the next character was also
+#   illegal.
 #
-#   "'" is a sub-delimiter and therefore legal, but in 1,370 real assistant
-#   messages all 7 apostrophes adjacent to a URL were delimiters — a shell
-#   quote, a Python string, an English possessive — and none was URL data. A
-#   URL that genuinely needs one writes %27.
+#   A curly quote, an em dash and U+00A0 were all absorbed into the address —
+#   the IRI range began AT the non-breaking space, so a match could cross a
+#   visible word boundary.
 #
-# Non-ASCII is admitted (RFC 3987): a real URL may carry UTF-8 unencoded, and a
-# strict-ASCII class truncated ".../wiki/München" to ".../wiki/M" — the same
-# damage as the "]" truncation that once left every IPv6 URL as "https://[::1".
+# linkify-it-py is markdown-it-py's own linkifier and has the boundary rules
+# that a decade of real prose produced. Matches are sliced out of the ORIGINAL
+# text rather than read from the token href: going through markdown-it would
+# percent-encode the result ("München" -> "M%C3%BCnchen"), which changes the
+# dedup key and would duplicate every non-ASCII row already in the index.
 #
-# A closing paren stays in: Cell Press PII links and the DOIs behind them carry
-# one (10.1016/s0092-8674(00)80876-3), as do Wikipedia disambiguation pages.
-# Whether a trailing one belongs to the URL or to the prose is the balance rule's
-# call in extract_urls, and excluding it here would pre-empt that rule.
-#
-# Measured over those 1,370 messages / 4,009 extracted URLs, the switch from
-# blacklist to whitelist changes nothing: every illegal character in that corpus
-# already sat inside a code span or fence, which the AST skips. It removes the
-# mechanism, not a measured defect rate. (A variant admitting a space, used as
-# the control, changed 218 of the messages.)
+# The RFC grammar keeps a job, but a different one — it VALIDATES what linkify
+# delimited instead of deciding the extent. That ordering is what makes repair
+# and capture agree, since both now ask the same question of a finished URL.
 _URL_CHARS = (
     "A-Za-z0-9"  # unreserved: ALPHA / DIGIT
     r"\-._~"  # unreserved: the rest
-    "!$&()*+,;="  # sub-delims, less "'"
+    "!$&'()*+,;="  # sub-delims, apostrophe included: RFC 3986 says it is data
     ":/?#@"  # gen-delims that may follow the authority
     "%"  # pct-encoded
-    "\u00a0-\U0010ffff"  # RFC 3987, above the C0/C1 control blocks
+    "\u00a1-\U0010ffff"  # RFC 3987, above the C1 block AND above U+00A0
 )
-URL_RE = re.compile(
-    rf"https?://\[[0-9A-Fa-f:.]+\](?::\d+)?[{_URL_CHARS}]*"
-    rf"|https?://[{_URL_CHARS}]+",
-    re.IGNORECASE,
-)
-
-# One legal URL character, for asking why a match stopped where it did.
 _URL_CHAR_RE = re.compile(f"[{_URL_CHARS}]")
 
-# Illegal characters that can only CLOSE something, so a match ending at one is
-# a URL that was wrapped, not a URL cut in half. See _stopped_mid_literal.
-_LITERAL_CLOSERS = "]}>\"'`"
+# linkify cannot see a bracketed IPv6 literal at all — it returns no match for
+# "https://[2001:db8::1]:8443/x" — so that form keeps its own pattern and is
+# taken out of the text before linkify runs.
+IPV6_URL_RE = re.compile(
+    rf"https?://\[[0-9A-Fa-f:.]+\](?::\d+)?[{_URL_CHARS}]*", re.IGNORECASE
+)
 
-# Strict CommonMark: no linkification of bare URLs, so a URL in prose stays in a
-# text token and URL_RE still has a job. What the parser buys is that the text it
-# hands over has already had the markdown taken out of it.
+# Kept for callers and tests that still ask "what shape is a URL": it is no
+# longer the tokenizer.
+URL_RE = re.compile(
+    rf"{IPV6_URL_RE.pattern}|https?://[{_URL_CHARS}]+", re.IGNORECASE
+)
+
+# Terminal output pasted into a message carries escape sequences, and they are
+# not URL data: "https://example.org/a\x1b[31mcontinued" is one address wearing a
+# colour code, not an address that ends at "a". Removing them reconstructs the
+# visible URL instead of truncating it. CSI, OSC (including OSC 8 hyperlinks) and
+# the two-byte escapes are all covered.
+_ANSI_RE = re.compile(
+    r"\x1b\[[0-?]*[ -/]*[@-~]"
+    r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"
+    r"|\x1b[@-Z\\-_]"
+)
+
+
+def strip_ansi(text: str) -> str:
+    """Remove terminal escape sequences so they cannot end a URL early."""
+    return _ANSI_RE.sub("", text)
+
+
+_LINKIFY = LinkifyIt()
+# Only real schemes. Fuzzy matching would linkify "example.com" and bare emails,
+# which are not citations and would flood the collection.
+_LINKIFY.set({"fuzzy_link": False, "fuzzy_email": False, "fuzzy_ip": False})
+
+# A closer is evidence that the URL ended only when its OPENER sits immediately
+# in front of the match. An unmatched quote or bracket proves nothing, which is
+# why the previous unconditional closer list mis-handled
+# "https://example.org/path}suffix".
+_QUOTE_PAIRS = {"'": "'", '"': '"', "\u2018": "\u2019", "\u201c": "\u201d",
+                "\u00ab": "\u00bb", "\u300c": "\u300d"}
+
+# A brace never appears unencoded in a real address; it means a template. Such a
+# row can never resolve, and — worse — cutting it at the brace manufactures a
+# parent directory that CAN resolve and reads as a citation nobody made.
+_TEMPLATE_RE = re.compile(r"[{}]")
+
 _MD = MarkdownIt("commonmark")
 
 # Inline tokens that are showing a literal rather than citing a source. Block
@@ -302,41 +328,106 @@ def extract_urls(text: str) -> list[str]:
             elif child.type == "text" and not in_link:
                 # Inside a link the label is decoration — `[displayed](cited)`
                 # cites only the destination, which link_open already emitted.
-                for match in URL_RE.finditer(child.content):
-                    if _stopped_mid_literal(child.content, match.end()):
-                        continue
-                    emit(_trim_prose_url(match.group(0)))
+                for url in bare_urls(child.content):
+                    emit(url)
     return seen
 
 
-def _stopped_mid_literal(text: str, end: int) -> bool:
-    """True when the match ended inside a template rather than at the URL's end.
+def bare_urls(text: str) -> list[str]:
+    """Every URL this text CITES in prose, with its extent decided by linkify.
 
-    Narrowing the tokenizer to the URI grammar changed how a template fails. A
-    prose "https://files.rcsb.org/download/{ID}.pdb" used to be stored whole:
-    no exclusion rule caught it, but it could never resolve, so it failed loudly
-    as the URL-as-title junk this plugin removes. Stopping at "{" instead stores
-    "https://files.rcsb.org/download/" — a real, fetchable directory that will
-    acquire a genuine title and read as a citation nobody made. Quiet wrong data
-    is worse than loud junk, so the prefix is dropped rather than kept.
+    Order matters. A bracketed IPv6 literal is taken first and blanked out,
+    because linkify does not recognise that form at all and would otherwise
+    leave the URL uncaptured — the same class of loss as the "]" truncation that
+    once stored every IPv6 URL as "https://[::1".
 
-    The signal is that URL text RESUMES after the illegal character: "{" followed
-    by "ID}.pdb" means the run was one literal. Whitespace is never suspicious —
-    it is how a URL normally ends.
-
-    A *closing* delimiter is not suspicious either, and the distinction is not a
-    taste call: a closer can only appear after the thing it closes, so the URL
-    had already ended. Without that, "[https://example.org/bar]." lost a real
-    citation — the match stops at "]", a legal "." follows, and the sentence
-    period reads as resumed URL text. An *opening* brace or a separator has no
-    such reading; the run simply continues.
+    Each match is then sliced out of the ORIGINAL text, so nothing is
+    re-encoded, and put through three steps that linkify does not do:
+    a paired closing quote is dropped, sentence punctuation is trimmed, and the
+    result must pass the URI grammar or it is discarded rather than stored.
     """
-    if end + 1 >= len(text):
+    text = strip_ansi(text)
+    found: list[str] = []
+    masked = list(text)
+    for match in IPV6_URL_RE.finditer(text):
+        found.append(_trim_prose_url(match.group(0)))
+        masked[match.start() : match.end()] = " " * (match.end() - match.start())
+    scan = "".join(masked)
+
+    for match in _LINKIFY.match(scan) or []:
+        raw = scan[match.index : match.last_index]
+        if not raw.lower().startswith(("http://", "https://")):
+            continue
+        # A brace touching the boundary means linkify stopped INSIDE a template,
+        # so the match is a prefix of a literal rather than an address. Keeping
+        # it would store "https://example.org/path" out of "…/path}suffix" — a
+        # shorter URL that resolves and that nobody cited. This is deliberately
+        # about braces and not about closers in general: an unmatched "]" or
+        # quote proves nothing, which is why the old unconditional closer list
+        # was wrong, but a brace is never URL data in any position.
+        if _TEMPLATE_RE.match(scan[match.last_index : match.last_index + 1] or ""):
+            continue
+        raw = _strip_paired_closer(scan, match.index, raw)
+        raw = _trim_prose_url(strip_illegal_tail(raw))
+        if is_storable_url(raw):
+            found.append(raw)
+    return found
+
+
+def strip_illegal_tail(url: str) -> str:
+    """Drop trailing characters the URI grammar does not permit unencoded.
+
+    linkify decides where the run of URL-ish text ends; it does not promise that
+    every character in it is legal. A pipe from a table cell or a stray backtick
+    can survive at the end, and those are punctuation, not address. Only the TAIL
+    is touched — an illegal character in the middle means the whole thing is a
+    literal, which is_storable_url() then refuses outright rather than truncating
+    into an address nobody cited.
+    """
+    while url and _URL_CHAR_RE.match(url[-1]) is None:
+        url = url[:-1]
+    return url
+
+
+def _strip_paired_closer(text: str, index: int, url: str) -> str:
+    """Drop a closing quote whose OPENER sits immediately before the match.
+
+    Pairing is the whole test. An unmatched quote or bracket is not evidence
+    that a URL ended — treating one as evidence unconditionally is what made
+    "https://example.org/path}suffix" resolve to the prefix. But when the text
+    reads 'https://…/People\'s_Republic_of_China', the leading quote proves the
+    trailing one is syntax, and the apostrophe in the middle is data.
+    """
+    opener = text[index - 1] if index > 0 else ""
+    closer = _QUOTE_PAIRS.get(opener)
+    if closer and url.endswith(closer) and len(url) > 1:
+        return url[:-1]
+    return url
+
+
+def is_storable_url(url: str) -> bool:
+    """True when this is an address worth keeping, by the URI grammar.
+
+    Capture and repair both ask this, which is the point: repair used to emit
+    URLs the tokenizer would have rejected, so a "successful" repair could store
+    something capture would never have accepted.
+
+    A brace is refused outright rather than trimmed. It means a template, and
+    cutting "…/download/{ID}.pdb" at the brace manufactures "…/download/" — a
+    real, fetchable directory that acquires a genuine title and reads as a
+    citation nobody made. Loud absence beats quiet invention.
+    """
+    if not url.lower().startswith(("http://", "https://")):
         return False
-    stopper = text[end]
-    if stopper.isspace() or stopper in _LITERAL_CLOSERS:
+    if _TEMPLATE_RE.search(url):
         return False
-    return _URL_CHAR_RE.match(text[end + 1]) is not None
+    rest = url.split("://", 1)[1]
+    if not rest:
+        return False
+    # The IPv6 form carries the only brackets a URL may hold unencoded.
+    if rest.startswith("["):
+        rest = rest.partition("]")[2]
+    return not any(_URL_CHAR_RE.match(ch) is None for ch in rest)
 
 
 def _trim_prose_url(url: str) -> str:
