@@ -25,16 +25,31 @@
 
 ### Triage of what remains
 
-16 items were left carrying ``title:unresolved``. Fetching every one of them,
-against a positive control so that "they all failed" could not be the harness
-lying, gives four causes and only one was ours:
+16 items carried ``title:unresolved``. Every one was fetched, against a positive
+control — ten straight failures is also what a broken fetcher looks like, and
+four of the five controls resolved, including the same hosts as some failures.
 
-- the read cap above (fixed);
-- HTTP 404 — a Fortune article that is gone, a private repo's pull request, and
-  a Wikipedia page that never existed (a test fixture);
-- authentication — Google account pages cannot resolve without a login;
+**10 of the 16 now resolve** and were rewritten in place: the three experian.com
+pages the read cap had been losing, two Yahoo Finance articles, Fortune,
+tradingkey, fxleaders, and two Google MyActivity pages.
+
+Two causes were ours. The read cap above, and one marginal case: fxleaders.com
+completes in 0.99s against the 1s budget, so it missed on a loaded pass and
+resolved on the next. Nothing was changed for that — a retry is the right answer
+to a page that is simply slow, and widening the budget would cost every capture.
+
+The remaining 6 cannot resolve, for reasons that are not the plugin's:
+
+- HTTP 404 — a private repository's pull request, and a Wikipedia page that never
+  existed (one of this repo's own test fixtures, still in the library);
+- authentication — ``myaccount.google.com`` and ``myadcenter.google.com``;
+- HTTP 403 — ``tradersunion.com`` refuses non-browser clients;
 - a broken certificate chain on ``mirror.oit.ncsu.edu``, which fails identically
-  under plain ``httpx``, so it is the host's, not the guard's.
+  under plain ``httpx``, so it is the host's and not the guard's.
+
+An earlier note here recorded Fortune as a dead 404. That was wrong: the probe
+that produced it used a URL truncated by the terminal listing it came from, not
+the URL actually stored. Fetched properly, it resolves.
 
 ## 0.11.4 — 2026-08-23
 
