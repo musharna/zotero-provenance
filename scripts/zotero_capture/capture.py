@@ -163,25 +163,43 @@ def _incident_kind(running_root: str | None, pinned_root: str | None) -> str | N
 
 
 def _record_intent(
-    *, ledger_path, incident_id, url, running_root, pinned_root, ts,
+    *,
+    ledger_path,
+    incident_id,
+    url,
+    running_root,
+    pinned_root,
+    ts,
 ) -> None:
     """Write the incident BEFORE the mutation it describes.
 
     An intent for a mutation that never happens is a false positive someone can
     close in one command. A mutation with no intent is corruption nobody can
-    find. Best-effort: bookkeeping must never break a capture, and a failure
-    here is strictly better than the write it was about to describe failing.
+    find.
+
+    So this does NOT swallow failures. Letting the write proceed when the
+    incident could not be recorded — a read-only state directory, a full disk, a
+    permission error — reproduces exactly the condition this journal exists to
+    prevent, and does so silently. The exception is caught by the per-URL
+    handler, which releases the reservation and records the failure, so the
+    citation is skipped rather than written blind. A skipped citation is
+    recoverable; an unrecorded mutation is not.
+
+    A healthy capture opens no incident and never reaches the write below, so a
+    broken ledger cannot stop ordinary work.
     """
     kind = _incident_kind(running_root, pinned_root)
     if not (kind and ledger_path and incident_id and running_root):
         return
-    try:
-        open_incident(
-            ledger_path, incident_id=incident_id, url=url, root=running_root,
-            pinned_root=pinned_root, kind=kind, ts=ts,
-        )
-    except Exception:
-        logger.exception("could not record incident intent for %s", url)
+    open_incident(
+        ledger_path,
+        incident_id=incident_id,
+        url=url,
+        root=running_root,
+        pinned_root=pinned_root,
+        kind=kind,
+        ts=ts,
+    )
 
 
 def capture_message(
@@ -293,9 +311,12 @@ def capture_message(
                             tags.append(UNRESOLVED_TITLE_TAG)
                         issued = True
                         _record_intent(
-                            ledger_path=ledger_path, incident_id=incident_id,
-                            url=url, running_root=running_root,
-                            pinned_root=pinned_root, ts=today_iso,
+                            ledger_path=ledger_path,
+                            incident_id=incident_id,
+                            url=url,
+                            running_root=running_root,
+                            pinned_root=pinned_root,
+                            ts=today_iso,
                         )
                         key = zotero.post_webpage_item(
                             url_canonical=url,
@@ -340,8 +361,12 @@ def capture_message(
             # at-least-once is the right trade for provenance.
             queued = peek_pending_tags(db_path, url)
             _record_intent(
-                ledger_path=ledger_path, incident_id=incident_id, url=url,
-                running_root=running_root, pinned_root=pinned_root, ts=today_iso,
+                ledger_path=ledger_path,
+                incident_id=incident_id,
+                url=url,
+                running_root=running_root,
+                pinned_root=pinned_root,
+                ts=today_iso,
             )
             zotero.add_tags(
                 key,
