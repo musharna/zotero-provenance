@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.19.0 — 2026-08-25
+
+Fifth audit. Both High findings were in `--ack` — the mechanism added one
+release earlier to replace the acknowledgement cursor removed the release
+before that. This is the first round where the answer was to build the thing
+properly rather than to remove it, because suppression here is genuinely
+necessary: without it a repaired incident nags forever, and with the previous
+design it silenced incidents nobody was ever shown.
+
+- **Incidents are identified by their writer.** The key was
+  `timestamp-to-the-second | root`, which aliased distinct incidents: a stale
+  write and an unverifiable write from one root in one second produced ONE key,
+  so acknowledging either silenced both — permanently, and without the second
+  ever being displayed. Every capture now carries a unique `incident_id`
+  written at capture time. A record without one is not classified, the same
+  rule already applied to records with no pin evidence.
+
+- **`--ack` was an undocumented `--ack-all`.** It cleared every incident in the
+  log, while the report shows only aggregate counts and the newest incident.
+  There is now `--list-incidents` (ids, kind, root, acknowledged state),
+  `--ack ID...` for named incidents, and an explicit `--ack-all`. Arguments go
+  through `argparse`, so a typo like `--akc` exits 2 instead of silently
+  performing a normal run.
+
+- **A capture that wrote nothing is not an integrity incident.** `urls_seen: 0`
+  with an unverifiable pin produced a permanent warning demanding
+  acknowledgement — a nag about an event that never happened. Integrity now
+  requires evidence of an actual write.
+
+- **A readable log with no parseable records is not healthy.** It returned exit
+  0 and printed nothing, so format-incompatible was indistinguishable from
+  fine — the same blindness as an unreadable log, one layer up.
+
+- **Reading is streaming end to end.** `evaluate()` was made flat-memory last
+  release, but the reader still called `read().splitlines()` first — about
+  120 MB for half a million lines, defeating the evaluator behind it. A 56 MB
+  log now streams at 0.02 MB peak.
+
+- **Future-dated records are a clock problem, not a recent fault.** A record
+  dated 2099 sat inside every recency window and would have reported for
+  seventy-three years.
+
+- **`registry.py` refuses malformed entries**, matching what the shell
+  trampolines already did. Two resolvers claiming one policy and quietly
+  disagreeing is how the original first-prefix-match bug survived so long.
+
 ## 0.18.0 — 2026-08-25
 
 The fourth audit found the same bug class it had found in the first, in a

@@ -39,6 +39,10 @@ def _capture(
             "ts": ts,
             "version": "0.13.0",
             "root": root,
+            # A record needs writer identity to be an acknowledgeable incident,
+            # and evidence of a write to be an integrity incident at all.
+            "incident_id": f"{ts}|{root}",
+            "urls_recurring": 0,
             **({"pinned_root": pinned} if pinned else {}),
             "project": "demo",
             "urls_seen": 1,
@@ -367,6 +371,8 @@ def test_a_self_describing_record_is_read_without_the_registry() -> None:
             "pinned_root": "/c/0.15.0",
             "urls_seen": 1,
             "urls_new": 1,
+            "urls_recurring": 0,
+            "incident_id": "inline-8814",
             "errors": [],
         }
     )
@@ -426,6 +432,8 @@ def test_a_capture_that_could_not_verify_its_pin_is_its_own_warning() -> None:
             "pin_observation": "unknown",
             "urls_seen": 1,
             "urls_new": 1,
+            "urls_recurring": 0,
+            "incident_id": "inline-8478",
             "errors": [],
         }
     )

@@ -226,3 +226,36 @@ def test_entries_that_are_not_a_list_are_ignored(tmp_path: Path) -> None:
     reg.write_text(json.dumps({"plugins": {f"{PLUGIN}@{MARKET}": "not-a-list"}}))
 
     assert resolve_pinned(own_root=mine, registry_path=reg) == (None, None)
+
+
+def test_a_malformed_entry_refuses_like_the_shell_does(tmp_path: Path) -> None:
+    """The shell trampolines refuse `{}`; Python accepted the valid sibling.
+
+    Not an exec path — managed hooks go through the shell — but two resolvers
+    claiming one policy and disagreeing is how the first-prefix-match bug
+    survived as long as it did.
+    """
+    home = tmp_path / "home"
+    mine = _root(home, "0.9.0")
+    good = _root(home, "1.0.0")
+    reg = _registry(
+        home,
+        {f"{PLUGIN}@{MARKET}": [{"scope": "user", "installPath": str(good)}, {}]},
+    )
+
+    assert resolve_pinned(own_root=mine, registry_path=reg) == (None, None)
+
+
+def test_a_non_string_install_path_refuses(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    mine = _root(home, "0.9.0")
+    good = _root(home, "1.0.0")
+    reg = _registry(
+        home,
+        {f"{PLUGIN}@{MARKET}": [
+            {"scope": "user", "installPath": str(good)},
+            {"scope": "project", "installPath": 7},
+        ]},
+    )
+
+    assert resolve_pinned(own_root=mine, registry_path=reg) == (None, None)

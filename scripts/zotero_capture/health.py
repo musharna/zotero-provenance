@@ -59,12 +59,22 @@ def _parse_ts(raw: Any) -> datetime | None:
     return parsed if parsed.tzinfo is not None else None
 
 
-def _each(lines: Iterable[str]):
-    """Yield (record, ts) one at a time. One corrupt line must not blind the rest."""
+MAX_FUTURE_SKEW = timedelta(hours=1)
+
+
+def _each(lines: Iterable[str], stats: dict | None = None):
+    """Yield (record, ts) one at a time. One corrupt line must not blind the rest.
+
+    `stats` counts what was seen and what was discarded. A readable log made
+    entirely of plaintext parsed to nothing and reported perfect health, which
+    is the same blindness as an unreadable one.
+    """
     for line in lines:
         text = line.strip() if isinstance(line, str) else ""
         if not text:
             continue
+        if stats is not None:
+            stats["lines"] = stats.get("lines", 0) + 1
         try:
             record = json.loads(text)
         except (ValueError, TypeError):
@@ -74,7 +84,23 @@ def _each(lines: Iterable[str]):
         ts = _parse_ts(record.get("ts"))
         if ts is None:
             continue
+        if stats is not None:
+            stats["records"] = stats.get("records", 0) + 1
         yield record, ts
+
+
+def _wrote(record: dict) -> bool:
+    """Did this run actually touch the library?
+
+    "Capture-shaped" is not "wrote a row". A record that captured nothing became
+    a permanent integrity incident needing acknowledgement — a nag about an
+    event that never happened. A recurring write counts: re-tagging an existing
+    row still touched it.
+    """
+    try:
+        return int(record.get("urls_new") or 0) + int(record.get("urls_recurring") or 0) > 0
+    except (TypeError, ValueError):
+        return False
 
 
 def _is_capture(record: dict) -> bool:
@@ -89,9 +115,18 @@ def _version_of(root: str) -> str:
 
 
 def _integrity_kind(record: dict, pinned_root: str | None) -> str | None:
-    """"stale", "unverified", or None — decided by THIS record alone."""
+    """"stale", "unverified", or None — decided by THIS record alone.
+
+    Requires an `incident_id`. Without one the incident cannot be acknowledged
+    individually, and an unclearable nag is worse than silence — the same
+    reasoning that leaves records with no pin evidence unclassified.
+    """
     root = record.get("root")
     if not isinstance(root, str) or not root:
+        return None
+    if not record.get("incident_id"):
+        return None
+    if not _wrote(record):
         return None
     if record.get("pin_observation") == "unknown":
         return "unverified"
@@ -108,17 +143,42 @@ def _integrity_kind(record: dict, pinned_root: str | None) -> str | None:
 
 
 def incident_key(record: dict, ts: datetime) -> str:
-    """A stable name for one integrity incident, for acknowledgement."""
-    return f"{ts.isoformat()}|{record.get('root') or '?'}"
+    """The writer's own id for this incident.
+
+    Was `timestamp-to-the-second|root`, which aliased distinct incidents: a
+    stale write and an unverifiable write from one root in one second produced
+    ONE key, so acknowledging either silenced both — permanently, and without
+    the second ever being shown.
+    """
+    return str(record.get("incident_id"))
+
+
+def incidents(lines: Iterable[str], *, pinned_root: str | None) -> list[dict]:
+    """Every acknowledgeable incident, in full, so a person can see what they clear."""
+    out: list[dict] = []
+    for record, ts in _each(lines):
+        if not _is_capture(record):
+            continue
+        kind = _integrity_kind(record, pinned_root)
+        if not kind:
+            continue
+        out.append(
+            {
+                "id": incident_key(record, ts),
+                "ts": ts.isoformat(),
+                "kind": kind,
+                "root": str(record.get("root")),
+                "project": str(record.get("project") or "?"),
+            }
+        )
+    return out
 
 
 def incident_keys(lines: Iterable[str], *, pinned_root: str | None) -> frozenset[str]:
-    """Every acknowledgeable incident in the log."""
-    return frozenset(
-        incident_key(record, ts)
-        for record, ts in _each(lines)
-        if _is_capture(record) and _integrity_kind(record, pinned_root)
-    )
+    return frozenset(item["id"] for item in incidents(lines, pinned_root=pinned_root))
+
+
+MAX_DISTINCT_KINDS = 16
 
 
 def evaluate(
@@ -129,17 +189,47 @@ def evaluate(
     window: timedelta,
     acknowledged: frozenset[str] | set[str] = frozenset(),
 ) -> list[str]:
-    """Human-readable warnings, or an empty list when there is nothing to say."""
-    cutoff = now - window
-    stale: list[tuple[datetime, str]] = []
-    unverified: list[datetime] = []
-    refusals: list[tuple[datetime, str]] = []
-    errors: list[tuple[datetime, dict]] = []
+    """Human-readable warnings, or an empty list when there is nothing to say.
 
-    for record, ts in _each(lines):
+    Aggregates as it goes rather than collecting matches. Collecting them was
+    streaming only while nothing matched: with every record stale, half a
+    million of them held 110 MB and took 10.5 s — past the hook's own timeout,
+    which would have left the monitor able to report nothing but its own
+    failure. The worst case is exactly when the log is longest.
+    """
+    cutoff = now - window
+    horizon = now + MAX_FUTURE_SKEW
+    stats: dict = {}
+    future_n = 0
+
+    stale_n = 0
+    stale_newest: tuple[datetime, str] | None = None
+    stale_roots: set[str] = set()
+
+    unverified_n = 0
+    unverified_newest: datetime | None = None
+
+    refusal_n = 0
+    refusal_newest: datetime | None = None
+    refusal_kinds: set[str] = set()
+
+    error_n = 0
+    error_newest: tuple[datetime, dict] | None = None
+
+    for record, ts in _each(lines, stats):
+        if ts > horizon:
+            # A future-dated record is inside every recency window forever: one
+            # dated 2099 would have reported for seventy-three years. It is a
+            # clock or evidence problem, not a recent operational fault.
+            future_n += 1
+            continue
         if record.get("event") in REFUSAL_EVENTS or record.get("refused"):
             if ts >= cutoff:
-                refusals.append((ts, str(record.get("event") or record.get("refused"))))
+                refusal_n += 1
+                if refusal_newest is None or ts > refusal_newest:
+                    refusal_newest = ts
+                if len(refusal_kinds) < MAX_DISTINCT_KINDS:
+                    refusal_kinds.add(str(record.get("event") or record.get("refused")))
             continue
         if not _is_capture(record):
             continue
@@ -147,48 +237,68 @@ def evaluate(
         kind = _integrity_kind(record, pinned_root)
         if kind and incident_key(record, ts) not in acknowledged:
             if kind == "stale":
-                stale.append((ts, str(record.get("root"))))
+                stale_n += 1
+                root = str(record.get("root"))
+                if stale_newest is None or ts > stale_newest[0]:
+                    stale_newest = (ts, root)
+                if len(stale_roots) < MAX_DISTINCT_KINDS:
+                    stale_roots.add(_version_of(root))
             else:
-                unverified.append(ts)
+                unverified_n += 1
+                if unverified_newest is None or ts > unverified_newest:
+                    unverified_newest = ts
 
         found = record.get("errors")
         if ts >= cutoff and isinstance(found, list) and found:
             for item in found:
                 if isinstance(item, dict):
-                    errors.append((ts, item))
+                    error_n += 1
+                    if error_newest is None or ts > error_newest[0]:
+                        error_newest = (ts, item)
 
     warnings: list[str] = []
 
-    if stale:
-        newest_ts, newest_root = max(stale)
-        roots = sorted({_version_of(root) for _, root in stale})
+    if stats.get("lines") and not stats.get("records"):
         warnings.append(
-            f"{len(stale)} capture(s) ran from plugin {', '.join(roots)}, which was "
-            f"not the installed version at the time (most recent "
+            f"the capture log has {stats['lines']} line(s) but no readable "
+            f"records — it cannot be assessed, which is not the same as healthy"
+        )
+
+    if future_n:
+        warnings.append(
+            f"{future_n} record(s) are dated in the future — a clock is wrong, "
+            f"and they would otherwise be treated as recent faults indefinitely"
+        )
+
+    if stale_n and stale_newest is not None:
+        newest_ts, newest_root = stale_newest
+        warnings.append(
+            f"{stale_n} capture(s) ran from plugin {', '.join(sorted(stale_roots))}, "
+            f"which was not the installed version at the time (most recent "
             f"{newest_ts.isoformat()}, {newest_root}) — acknowledge with --ack "
             f"once the rows are checked"
         )
 
-    if unverified:
+    if unverified_n and unverified_newest is not None:
         warnings.append(
-            f"{len(unverified)} capture(s) wrote while the installed plugin root "
-            f"could not be verified (most recent {max(unverified).isoformat()})"
+            f"{unverified_n} capture(s) wrote while the installed plugin root "
+            f"could not be verified (most recent {unverified_newest.isoformat()})"
         )
 
-    if refusals:
-        kinds = sorted({kind for _, kind in refusals})[:MAX_KINDS_SHOWN]
+    if refusal_n and refusal_newest is not None:
+        kinds = sorted(refusal_kinds)[:MAX_KINDS_SHOWN]
         warnings.append(
-            f"{len(refusals)} refusal(s) recorded in the last {_hours(window)} "
+            f"{refusal_n} refusal(s) recorded in the last {_hours(window)} "
             f"({', '.join(k[:60] for k in kinds)}; newest "
-            f"{max(ts for ts, _ in refusals).isoformat()}) — capture declined to "
-            f"write rather than writing"
+            f"{refusal_newest.isoformat()}) — capture declined to write rather "
+            f"than writing"
         )
 
-    if errors:
-        newest_ts, first = max(errors, key=lambda pair: pair[0])
+    if error_n and error_newest is not None:
+        first = error_newest[1]
         detail = f"{first.get('code')} ({first.get('message')}) for {first.get('url')}"
         warnings.append(
-            f"{len(errors)} capture error(s) in the last {_hours(window)}: {detail}"
+            f"{error_n} capture error(s) in the last {_hours(window)}: {detail}"
         )
 
     return warnings

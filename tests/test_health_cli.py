@@ -30,17 +30,21 @@ def _run(state: Path, *args: str, home: Path | None = None):
     )
 
 
+def _record(ts: str, root: str, incident_id: str) -> str:
+    return json.dumps(
+        {
+            "ts": ts, "version": "0.3.0", "root": root,
+            "pinned_root": "/c/0.19.0", "project": "p",
+            "urls_seen": 1, "urls_new": 1, "urls_recurring": 0,
+            "errors": [], "incident_id": incident_id,
+        }
+    )
+
+
 def _stale_log(state: Path) -> None:
     state.mkdir(parents=True, exist_ok=True)
     (state / "capture.log").write_text(
-        json.dumps(
-            {
-                "ts": "2026-08-25T11:40:00-0400", "version": "0.3.0",
-                "root": "/c/0.3.0", "pinned_root": "/c/0.18.0",
-                "urls_seen": 1, "urls_new": 1, "errors": [],
-            }
-        )
-        + "\n"
+        _record("2026-08-25T11:40:00-0400", "/c/0.3.0", "aaa") + "\n"
     )
 
 
@@ -72,39 +76,68 @@ def test_a_log_that_is_a_directory_is_not_healthy_silence(tmp_path: Path) -> Non
     assert proc.returncode != 0, "a directory in place of the log reported success"
 
 
-def test_ack_silences_the_incident_it_was_shown(tmp_path: Path) -> None:
+def test_list_incidents_shows_the_ids_that_can_be_acknowledged(tmp_path: Path) -> None:
+    """The report aggregates; acknowledgement is per incident. Something has to
+    show the individual ids, or --ack silences things nobody was shown."""
     state = tmp_path / "state"
     _stale_log(state)
 
-    before = _run(state)
-    assert before.returncode == 0 and before.stdout, before.stdout
+    proc = _run(state, "--list-incidents")
 
-    acked = _run(state, "--ack")
-    assert acked.returncode == 0, acked.stderr
+    assert proc.returncode == 0, proc.stderr
+    assert "aaa" in proc.stdout, proc.stdout
+
+
+def test_ack_by_id_silences_only_that_incident(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    state.mkdir(parents=True, exist_ok=True)
+    (state / "capture.log").write_text(
+        _record("2026-08-25T11:40:00-0400", "/c/0.3.0", "aaa") + "\n"
+        + _record("2026-08-25T11:41:00-0400", "/c/0.9.0", "bbb") + "\n"
+    )
+
+    assert _run(state, "--ack", "aaa").returncode == 0
 
     after = _run(state)
-    assert after.returncode == 0, after.stderr
-    assert after.stdout == "", f"--ack did not silence it: {after.stdout!r}"
+    assert after.stdout, "acking one id silenced everything"
+    assert "0.9.0" in after.stdout, after.stdout
+    assert "0.3.0" not in after.stdout, after.stdout
 
 
-def test_ack_does_not_silence_an_incident_it_never_saw(tmp_path: Path) -> None:
-    """Acknowledgement is per incident, not a global mute."""
+def test_bare_ack_is_not_a_silent_ack_all(tmp_path: Path) -> None:
+    """`--ack` with no ids used to clear every incident in the database."""
     state = tmp_path / "state"
     _stale_log(state)
-    _run(state, "--ack")
 
-    with (state / "capture.log").open("a") as handle:
-        handle.write(
-            json.dumps(
-                {
-                    "ts": "2026-08-25T13:00:00-0400", "version": "0.9.0",
-                    "root": "/c/0.9.0", "pinned_root": "/c/0.18.0",
-                    "urls_seen": 1, "urls_new": 1, "errors": [],
-                }
-            )
-            + "\n"
-        )
+    proc = _run(state, "--ack")
+
+    assert proc.returncode != 0, "bare --ack silently acknowledged everything"
+
+
+def test_ack_all_is_explicit_and_works(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    _stale_log(state)
+
+    assert _run(state, "--ack-all").returncode == 0
+    assert _run(state).stdout == ""
+
+
+def test_a_mistyped_flag_does_not_perform_a_normal_run(tmp_path: Path) -> None:
+    """`"--ack" in sys.argv` meant --akc silently did something else entirely."""
+    state = tmp_path / "state"
+    _stale_log(state)
+
+    proc = _run(state, "--akc")
+
+    assert proc.returncode == 2, (proc.returncode, proc.stdout, proc.stderr)
+
+
+def test_a_log_of_pure_plaintext_is_not_healthy_silence(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    state.mkdir(parents=True, exist_ok=True)
+    (state / "capture.log").write_text("Traceback (most recent call last):\nnot json\n")
 
     proc = _run(state)
-    assert proc.stdout, "a new incident was muted by an earlier acknowledgement"
-    assert "0.9.0" in proc.stdout
+
+    assert proc.stdout, "a readable but unparseable log reported perfect health"
+    assert "no readable records" in proc.stdout, proc.stdout

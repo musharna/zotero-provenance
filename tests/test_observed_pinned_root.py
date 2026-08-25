@@ -36,7 +36,9 @@ def _line(ts: str, root: str, pinned: str | None) -> str:
         "project": "demo",
         "urls_seen": 1,
         "urls_new": 1,
+        "urls_recurring": 0,
         "errors": [],
+        "incident_id": f"{ts}|{root}",
     }
     if pinned is not None:
         obj["pinned_root"] = pinned
@@ -151,6 +153,8 @@ def test_a_record_that_disclaims_the_pin_is_not_called_stale() -> None:
             "pin_observation": "unknown",
             "urls_seen": 1,
             "urls_new": 1,
+            "urls_recurring": 0,
+            "incident_id": "inline-8478",
             "errors": [],
         }
     )
@@ -177,6 +181,8 @@ def test_a_resolved_pin_still_decides_normally() -> None:
             "pinned_root": "/c/0.16.0",
             "urls_seen": 1,
             "urls_new": 1,
+            "urls_recurring": 0,
+            "incident_id": "inline-7097",
             "errors": [],
         }
     )
