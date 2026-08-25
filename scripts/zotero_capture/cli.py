@@ -252,6 +252,7 @@ def run_capture(
     log_path: Path,
     origin: str = "assistant",
     identity: dict[str, str] | None = None,
+    ledger_path: Path | None = None,
 ) -> CaptureResult:
     text: str = sys.stdin.read() if message is None else message
     # Read the authorisation state BEFORE the work it authorises.
@@ -261,10 +262,12 @@ def run_capture(
     # in the library from a superseded root with no record that it happened.
     incident_id = uuid.uuid4().hex
     running_root = str(Path(__file__).resolve().parent.parent.parent)
-    # Derived from the STATE directory, like the health checker does. Deriving
-    # it from log_path.parent meant a --log-path pointing elsewhere put
-    # incidents where the checker would never look for them.
-    ledger_path = _state_dir(os.environ) / "health.db"
+    # Handed in by the caller, never read from the environment here. Deriving
+    # it from log_path.parent put incidents where the checker never looked;
+    # deriving it from os.environ was worse — a function given explicit paths
+    # reaching for a sibling meant the test suite wrote real incidents into the
+    # developer's live ledger. main() owns the environment and passes both.
+    ledger_path = ledger_path or (log_path.parent / "health.db")
     started = time.monotonic()
     result = capture_message(
         message=text,
@@ -331,6 +334,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.triage:
                 return run_triage(url=args.triage, db_path=db_path, zotero=zotero)
             run_capture(
+                ledger_path=_state_dir(os.environ) / "health.db",
                 message=args.message,
                 project=project,
                 context=args.context,

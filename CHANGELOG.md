@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.20.2 — 2026-08-25
+
+The 0.20.1 fix caused a worse problem than the one it fixed, and the live ledger
+is what showed it.
+
+0.20.1 corrected a real divergence — the capture path derived the ledger from
+`log_path.parent` while the health checker derived it from the state directory —
+by making the capture path read `_state_dir(os.environ)`. But `run_capture` is
+given its paths explicitly, and reaching into the environment for a sibling of
+them meant the TEST SUITE wrote two genuine integrity incidents into the
+developer's live ledger, against a fixture URL, from the repo checkout.
+
+The caller now owns the path: `main()` resolves the state directory, which it
+already does for the log, and passes both down together — so writer and reader
+still agree, and nothing given explicit paths consults the environment behind
+them.
+
+Verified by deleting the live ledger, running all 617 tests, and confirming it
+stays absent.
+
 ## 0.20.1 — 2026-08-25
 
 Two holes in 0.20.0's own journal, both found by asking where it could still
