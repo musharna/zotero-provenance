@@ -96,11 +96,15 @@ def resolve_pinned(
         elif key.rsplit("@", 1)[0] != plugin or "@" not in key:
             continue
         for entry in entries:
+            # Every entry must be well-formed. Skipping malformed ones let this
+            # resolver accept a registry the shell trampolines refuse — two
+            # implementations claiming one policy and quietly disagreeing, which
+            # is how the original first-prefix-match bug survived so long.
             if not isinstance(entry, dict):
-                continue
+                return None, None
             raw = entry.get("installPath")
             if not isinstance(raw, str) or not raw:
-                continue
+                return None, None
             try:
                 path = Path(raw).resolve()
             except OSError:

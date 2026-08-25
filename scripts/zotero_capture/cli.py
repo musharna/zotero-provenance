@@ -9,6 +9,7 @@ import os
 import signal
 import sys
 import time
+import uuid
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
@@ -208,6 +209,10 @@ def _emit_log(
         "urls_new": result.urls_new,
         "urls_recurring": result.urls_recurring,
         "urls_excluded": result.urls_excluded,
+        # Identity comes from the writer. Reconstructing it afterwards from
+        # timestamp+root aliased distinct incidents that happened in the same
+        # second, so acknowledging one silenced another that was never shown.
+        "incident_id": uuid.uuid4().hex,
         # Observed BEFORE the capture, not after: reading it afterwards let a
         # registry change mid-capture record a pin the write never ran under,
         # fabricating a stale write that never happened (and, reversed, hiding a

@@ -29,10 +29,14 @@ PINNED = "/c/0.18.0"
 WINDOW = timedelta(hours=24)
 
 
-def _cap(ts: str, *, root: str = PINNED, pinned: str | None = PINNED, errors=None) -> str:
+def _cap(ts: str, *, root: str = PINNED, pinned: str | None = PINNED, errors=None,
+         incident_id: str | None = None) -> str:
+    """A capture record. Carries an `incident_id` by default — without one a
+    record cannot be acknowledged individually, so it is not classified."""
     obj = {
         "ts": ts, "version": "x", "root": root, "project": "p",
-        "urls_seen": 1, "urls_new": 1, "errors": errors or [],
+        "urls_seen": 1, "urls_new": 1, "urls_recurring": 0, "errors": errors or [],
+        "incident_id": incident_id or f"{ts}:{root}",
     }
     if pinned is not None:
         obj["pinned_root"] = pinned
@@ -153,3 +157,33 @@ def test_a_record_with_pin_evidence_is_still_classified() -> None:
     """Positive control: the fix above must not disable the signal."""
     current = _cap("2026-08-25T08:00:00-04:00", root="/c/0.3.0", pinned=PINNED)
     assert _check([current]), "the stale signal stopped working"
+
+
+def test_memory_is_bounded_when_everything_is_broken() -> None:
+    """Streaming that only streams on the happy path is not streaming.
+
+    The first measurement of this used all-healthy records, so nothing
+    accumulated and it reported a flat peak. With every record stale the same
+    call held 110 MB and took 10.5 s at half a million records — past the hook's
+    own ten-second timeout, leaving the monitor able to report nothing but its
+    own failure. The worst case is exactly when the log is longest.
+    """
+    import tracemalloc
+
+    def gen(n):
+        for i in range(n):
+            yield _cap("2026-08-25T11:00:00-04:00", root="/c/OLD", pinned=PINNED,
+                       incident_id=f"i{i}")
+
+    tracemalloc.start()
+    try:
+        warnings = evaluate(
+            gen(100_000), pinned_root=PINNED, now=NOW, window=WINDOW
+        )
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+    assert warnings, "positive control: the records should have been reported"
+    assert "100000" in warnings[0], warnings
+    assert peak < 8 * 1024 * 1024, f"held {peak / 1024 / 1024:.1f} MB for 100k records"

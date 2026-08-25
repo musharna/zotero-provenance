@@ -11,6 +11,8 @@ that can break a session start is a worse bug than the ones it looks for.
 
 from __future__ import annotations
 
+import argparse
+import contextlib
 import os
 import sys
 from datetime import datetime, timedelta
@@ -19,7 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from zotero_capture.config import _state_dir  # noqa: E402
-from zotero_capture.health import evaluate, incident_keys  # noqa: E402
+from zotero_capture.health import evaluate, incidents  # noqa: E402
 from zotero_capture.registry import resolve_pinned  # noqa: E402
 
 ACK_FILE = "health-acknowledged"
@@ -60,51 +62,99 @@ def _acknowledged(state: Path) -> frozenset[str]:
         )
     except FileNotFoundError:
         return frozenset()
-    except OSError:
-        # Unreadable is not empty. Saying "nothing acknowledged" would re-report
-        # incidents the user has already handled, which trains them to ignore it.
-        raise
 
 
-def _read_log(state: Path) -> list[str]:
-    """The log's lines, or [] only when there is genuinely no log yet.
+@contextlib.contextmanager
+def _log_lines(state: Path):
+    """Stream the log. Only a MISSING log is healthy silence.
 
-    Every OSError used to mean "return 0 and print nothing", which made a
-    permission error, a directory in place of the file, or a failing disk
-    indistinguishable from a clean bill of health. A monitor that cannot reach
-    its evidence is not healthy; only a missing file is.
+    Every other OSError used to mean exit 0 and nothing printed, so a permission
+    error, a directory in place of the file, or a failing disk was
+    indistinguishable from a clean bill of health. And this used to call
+    `read().splitlines()`, which held the whole file before parsing began —
+    about 120 MB for half a million lines, defeating the streaming evaluator
+    behind it.
     """
     try:
-        with (state / "capture.log").open("r", errors="replace") as handle:
-            return handle.read().splitlines()
+        handle = (state / "capture.log").open("r", errors="replace")
     except FileNotFoundError:
-        return []
+        yield iter(())
+        return
+    try:
+        yield handle
+    finally:
+        handle.close()
 
 
-def main() -> int:
+def _parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="zotero_capture_health",
+        description="Report capture faults. Silent when there is nothing to say.",
+    )
+    parser.add_argument(
+        "--list-incidents", action="store_true",
+        help="show each integrity incident and its id",
+    )
+    parser.add_argument(
+        "--ack", nargs="+", metavar="ID", default=None,
+        help="acknowledge the named incident(s); see --list-incidents",
+    )
+    parser.add_argument(
+        "--ack-all", action="store_true",
+        help="acknowledge EVERY incident in the log, including any not shown",
+    )
+    return parser.parse_args(argv)
+
+
+def _write_ack(state: Path, keys: set[str]) -> None:
+    state.mkdir(parents=True, exist_ok=True)
+    (state / ACK_FILE).write_text("".join(f"{key}\n" for key in sorted(keys)))
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(sys.argv[1:] if argv is None else argv)
     state = _state_dir(os.environ)
-    ack_mode = "--ack" in sys.argv[1:]
-    lines = _read_log(state)
     pinned, _installed_at = _installed()
 
-    if ack_mode:
-        keys = incident_keys(lines, pinned_root=pinned)
-        state.mkdir(parents=True, exist_ok=True)
-        (state / ACK_FILE).write_text("".join(f"{key}\n" for key in sorted(keys)))
-        print(f"zotero-provenance: acknowledged {len(keys)} integrity incident(s)")
+    if args.list_incidents:
+        with _log_lines(state) as lines:
+            found = incidents(lines, pinned_root=pinned)
+        if not found:
+            print("zotero-provenance: no integrity incidents recorded")
+            return 0
+        acked = _acknowledged(state)
+        for item in found:
+            mark = "acknowledged" if item["id"] in acked else "OPEN"
+            print(f"{item['id']}  {item['ts']}  {item['kind']:<10} {mark}  {item['root']}")
         return 0
 
-    warnings = evaluate(
-        lines,
-        pinned_root=pinned,
-        now=datetime.now().astimezone(),
-        window=_window(),
-        acknowledged=_acknowledged(state),
-    )
+    if args.ack_all:
+        with _log_lines(state) as lines:
+            keys = {item["id"] for item in incidents(lines, pinned_root=pinned)}
+        _write_ack(state, keys | set(_acknowledged(state)))
+        print(f"zotero-provenance: acknowledged all {len(keys)} incident(s)")
+        return 0
+
+    if args.ack is not None:
+        # Only the ids named. Acknowledging everything used to be what a bare
+        # --ack did, silently, including incidents the aggregated report never
+        # displayed — it was an undocumented --ack-all.
+        _write_ack(state, set(args.ack) | set(_acknowledged(state)))
+        print(f"zotero-provenance: acknowledged {len(set(args.ack))} incident(s)")
+        return 0
+
+    with _log_lines(state) as lines:
+        warnings = evaluate(
+            lines,
+            pinned_root=pinned,
+            now=datetime.now().astimezone(),
+            window=_window(),
+            acknowledged=_acknowledged(state),
+        )
     if not warnings:
         return 0
 
-    print("zotero-provenance: capture may not be working")
+    print("zotero-provenance: capture faults were recorded")
     for warning in warnings:
         print(f"  - {warning}")
     return 0

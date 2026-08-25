@@ -143,32 +143,36 @@ credentials come from the secrets file.
 
 Every serious failure this plugin has had was silent. A `SessionStart` hook
 reads the capture log and speaks only when something in it says so — and no
-record's meaning depends on any other record. Four audits found four defects in
-this check, and all four came from one record being interpreted in light of
-another: a later capture "cleared" an earlier refusal, an install timestamp
-scoped away a stale write, a cursor suppressed by second-precision timestamps.
+record's meaning depends on any other record. Five audits found defects in this
+check, and nearly all came from one record being interpreted in light of
+another, or from an incident being suppressed by something reconstructed after
+the fact.
 
-Two rules replace all of that:
+Two rules:
 
 - **Operational faults decay.** Refusals, configuration errors and capture
   errors are reported within a recency window (24 h,
-  `ZOTERO_CAPTURE_HEALTH_WINDOW_HOURS`). Timing a *presence* is sound — "three
-  refusals in the last day" is checkable and ages out on its own. Timing an
-  *absence* is what failed twice, and nothing here does it.
-- **Integrity incidents do not decay.** A capture that ran from a root which was
-  not the installed one, or that could not verify which root was installed, is
-  reported until you acknowledge it:
+  `ZOTERO_CAPTURE_HEALTH_WINDOW_HOURS`). Timing a *presence* is sound; timing an
+  *absence* is not, and nothing here does it. Records dated in the future are
+  reported as a clock problem rather than treated as perpetually recent.
+- **Integrity incidents do not decay.** A capture that actually wrote a row from
+  a root which was not the installed one — or that could not verify which root
+  was installed — stands until you acknowledge it. Every capture carries a
+  unique `incident_id` written at capture time, so incidents are identified by
+  their writer rather than reconstructed from a timestamp:
 
-      python3 scripts/zotero_capture_health.py --ack
+      python3 scripts/zotero_capture_health.py --list-incidents
+      python3 scripts/zotero_capture_health.py --ack <id> [<id> ...]
+      python3 scripts/zotero_capture_health.py --ack-all
 
-  Nothing clears it automatically, because nothing automatic can know whether
-  the affected rows were checked. A record written before the pin was recorded
-  carries no evidence either way and is not classified at all.
+  `--ack-all` is spelled out because it clears incidents the aggregated report
+  never displayed. A record with no incident id, no pin evidence, or no evidence
+  that it wrote anything is not classified at all.
 
 On a healthy session it prints nothing. If the check cannot run — no `jq`, no
 `lib.sh`, no interpreter, an unreadable log, or an internal crash — it says so
-and writes the detail to `health-errors.log`. Only a *missing* log counts as
-healthy silence; a monitor that cannot reach its evidence is not healthy.
+and writes the detail to `health-errors.log`. A log that is readable but
+contains no parseable records also says so: unassessable is not healthy.
 
 ## What is not captured
 
