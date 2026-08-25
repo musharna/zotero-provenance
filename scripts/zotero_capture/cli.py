@@ -19,7 +19,7 @@ from .project_slug import derive_slug
 from .sqlite_cache import lookup_url
 from .title_fetcher import fetch_title
 from .url_processing import canonicalize
-from .zotero_client import ZoteroClient
+from .zotero_client import api_base, ZoteroClient
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +147,7 @@ def run_capture(
     title_fetcher: Callable[..., str],
     log_path: Path,
     origin: str = "assistant",
+    identity: dict[str, str] | None = None,
 ) -> CaptureResult:
     text: str = sys.stdin.read() if message is None else message
     started = time.monotonic()
@@ -159,6 +160,7 @@ def run_capture(
         zotero=zotero,
         title_fetcher=title_fetcher,
         origin=origin,
+        identity=identity,
     )
     # Failures are NOT enqueued: _retry_handler is a stub that never drains, so
     # enqueuing would grow the file forever. Errors are surfaced in the log below.
@@ -215,6 +217,12 @@ def main(argv: list[str] | None = None) -> int:
                 title_fetcher=fetch_title,
                 log_path=log_path,
                 origin=args.origin,
+                identity={
+                    "api_origin": api_base(),
+                    "library_type": config.library_type,
+                    "library_id": config.library_id,
+                    "collection_key": config.collection_key,
+                },
             )
         return 0
     except Exception:

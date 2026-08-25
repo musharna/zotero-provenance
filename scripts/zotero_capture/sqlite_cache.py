@@ -17,6 +17,14 @@ CREATE TABLE IF NOT EXISTS url_index (
     first_seen    TEXT NOT NULL,
     last_seen     TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS index_identity (
+    id             INTEGER PRIMARY KEY CHECK (id = 1),
+    api_origin     TEXT NOT NULL,
+    library_type   TEXT NOT NULL,
+    library_id     TEXT NOT NULL,
+    collection_key TEXT NOT NULL,
+    bound_at       TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS pending_tags (
     url_canonical TEXT NOT NULL,
     tag           TEXT NOT NULL,
@@ -76,6 +84,89 @@ def init_db(db_path: Path) -> None:
                 # Already applied. Anything else is a real problem and re-raises.
                 if "duplicate column name" not in str(e):
                     raise
+
+
+IDENTITY_FIELDS = ("api_origin", "library_type", "library_id", "collection_key")
+
+
+class IndexIdentityMismatch(RuntimeError):
+    """This index is an index of a DIFFERENT library or collection."""
+
+
+def read_identity(db_path: Path) -> dict[str, str] | None:
+    """What library this index describes, or None if it has never been told."""
+    with closing(_connect(db_path)) as conn:
+        row = conn.execute(
+            "SELECT api_origin, library_type, library_id, collection_key"
+            " FROM index_identity WHERE id = 1"
+        ).fetchone()
+    return {k: row[k] for k in IDENTITY_FIELDS} if row else None
+
+
+def bind_identity(
+    db_path: Path,
+    *,
+    api_origin: str,
+    library_type: str,
+    library_id: str,
+    collection_key: str,
+) -> None:
+    """Record which library this index is OF, or refuse if it is another's.
+
+    The index is a cache of one Zotero collection, keyed by URL alone, and it
+    stored nothing about what its rows referred to. Three ordinary changes were
+    therefore silent corruption:
+
+      * a different COLLECTION — new URLs land in the new one, but a recurring
+        URL is only TAGGED, and tagging does not move an item. The sources split
+        in half and both halves report success.
+      * a different LIBRARY — every stored key belongs to the old one, so each
+        recurrence 404s, and the row blocks that URL from ever being recreated.
+      * two state dirs against one library — two indexes, each certain a URL is
+        new, producing duplicate items neither can see.
+
+    An index with no identity ADOPTS the one it is opened with rather than
+    refusing: the deployed index holds thousands of rows written before this
+    existed, and refusing them would break the working case to guard a
+    hypothetical one. That is a real assumption — it trusts the upgrader is
+    still pointing at the library those rows came from — and it is why the
+    binding is written on first open rather than inferred later.
+
+    An EMPTY index rebinds freely. With no rows there is nothing to protect,
+    and refusing would make a state dir unusable after a single mistaken run.
+    """
+    incoming = {
+        "api_origin": api_origin.rstrip("/"),
+        "library_type": library_type,
+        "library_id": library_id,
+        "collection_key": collection_key,
+    }
+    current = read_identity(db_path)
+    if current is not None and current != incoming:
+        with closing(_connect(db_path)) as conn:
+            rows = conn.execute("SELECT COUNT(*) AS n FROM url_index").fetchone()["n"]
+        if rows:
+            differing = [k for k in IDENTITY_FIELDS if current[k] != incoming[k]]
+            raise IndexIdentityMismatch(
+                f"{db_path} indexes {current} but capture is configured for "
+                f"{incoming} (differs on: {', '.join(differing)}). Its "
+                f"{rows} rows describe the other target, so reusing it would "
+                f"split sources or strand every key. Point "
+                f"ZOTERO_CAPTURE_STATE_DIR at a separate directory for this "
+                f"target, or delete this index to rebuild it."
+            )
+    stamp = datetime.now(timezone.utc).isoformat()
+    with closing(_connect(db_path)) as conn:
+        conn.execute(
+            "INSERT INTO index_identity"
+            " (id, api_origin, library_type, library_id, collection_key, bound_at)"
+            " VALUES (1, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(id) DO UPDATE SET"
+            " api_origin=excluded.api_origin, library_type=excluded.library_type,"
+            " library_id=excluded.library_id, collection_key=excluded.collection_key,"
+            " bound_at=excluded.bound_at",
+            (*[incoming[k] for k in IDENTITY_FIELDS], stamp),
+        )
 
 
 def lookup_url(db_path: Path, url_canonical: str) -> URLCacheRow | None:

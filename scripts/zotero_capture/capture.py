@@ -12,6 +12,8 @@ from urllib.parse import urlsplit
 from . import __version__
 from .staleness import installed_version, stale_reason
 from .sqlite_cache import (
+    IndexIdentityMismatch,
+    bind_identity,
     drop_row,
     init_db,
     new_zotero_key,
@@ -152,6 +154,7 @@ def capture_message(
     title_fetcher: Callable[[str], str],
     origin: str = "assistant",
     now: datetime | None = None,
+    identity: dict[str, str] | None = None,
 ) -> CaptureResult:
     """Process one message: extract URLs, then create or re-tag each in Zotero."""
     result = CaptureResult()
@@ -164,6 +167,16 @@ def capture_message(
         logger.error("%s", reason)
         return result
     init_db(db_path)
+    # Before any row is read or written: is this index an index of the library
+    # we are about to write to? Keyed by URL alone, it cannot tell otherwise,
+    # and pointing it at a different collection splits the sources in half while
+    # reporting success for both.
+    if identity is not None:
+        try:
+            bind_identity(db_path, **identity)
+        except IndexIdentityMismatch as e:
+            logger.error("%s", e)
+            return result
     now = now or datetime.now(timezone.utc)
     if _is_generated_report(message, origin):
         return result
