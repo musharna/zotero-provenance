@@ -139,6 +139,7 @@ def _emit_log(
     result: CaptureResult,
     latency_ms: int,
     identity: dict[str, str] | None = None,
+    pinned_root: str | None = None,
 ) -> None:
     """Append one JSON line per capture, including WHO captured.
 
@@ -152,7 +153,6 @@ def _emit_log(
     With `version` and `root` on every line the same question is one grep.
     """
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    _pinned = _observed_pinned_root()
     obj = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "version": __version__,
@@ -163,7 +163,17 @@ def _emit_log(
         "urls_new": result.urls_new,
         "urls_recurring": result.urls_recurring,
         "urls_excluded": result.urls_excluded,
-        **({"pinned_root": _pinned} if _pinned else {}),
+        # Observed BEFORE the capture, not after: reading it afterwards let a
+        # registry change mid-capture record a pin the write never ran under,
+        # fabricating a stale write that never happened (and, reversed, hiding a
+        # real one). When it cannot be resolved, say so explicitly — silently
+        # omitting the field downgraded a fresh record to the legacy timestamp
+        # comparison it was meant to replace.
+        **(
+            {"pinned_root": pinned_root}
+            if pinned_root
+            else {"pin_observation": "unknown"}
+        ),
         # Only present when the run refused; absent on ordinary captures so the
         # healthy line keeps its existing shape.
         **({"refused": result.refused} if result.refused else {}),
@@ -192,6 +202,8 @@ def run_capture(
     identity: dict[str, str] | None = None,
 ) -> CaptureResult:
     text: str = sys.stdin.read() if message is None else message
+    # Read the authorisation state BEFORE the work it authorises.
+    pinned_root = _observed_pinned_root()
     started = time.monotonic()
     result = capture_message(
         message=text,
@@ -214,6 +226,7 @@ def run_capture(
         identity=identity,
         result=result,
         latency_ms=latency_ms,
+        pinned_root=pinned_root,
     )
     return result
 

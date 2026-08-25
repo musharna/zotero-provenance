@@ -79,8 +79,15 @@ def resolve_pinned(
     plugin, marketplace, subtree = _identity(own_root)
     wanted = f"{plugin}@{marketplace}" if marketplace else None
 
+    # `{"plugins": [1]}` is valid JSON. Calling .items() on it raised, the health
+    # checker caught the traceback and wrote it to a stderr the hook discards —
+    # a crashed monitor that looked exactly like a healthy one.
+    plugins = data.get("plugins")
+    if not isinstance(plugins, dict):
+        return None, None
+
     candidates: list[tuple[Path, datetime | None]] = []
-    for key, entries in (data.get("plugins") or {}).items():
+    for key, entries in plugins.items():
         if not isinstance(key, str) or not isinstance(entries, list):
             continue
         if wanted is not None:

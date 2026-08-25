@@ -329,3 +329,78 @@ def test_two_scopes_disagreeing_refuses_instead_of_guessing(
     assert proc.returncode == 0, proc.stderr
     assert _stays_absent(setup["marker"]), "guessed between two candidates"
     assert _stays_absent(argv_out), "captured from a superseded root"
+
+
+@requires_jq
+@pytest.mark.parametrize("hook", HOOKS)
+def test_a_symlinked_home_still_forwards(tmp_path: Path, hook: str) -> None:
+    """A symlinked $HOME silently switched the whole trampoline off.
+
+    ZP_MINE is canonicalised with `pwd -P`, but the cache prefix it was compared
+    against came from a raw $HOME. With /home/alice -> /srv/users/alice the two
+    never match, so a superseded root was classified as a development checkout
+    and ran its own stale Python — the v0.3.0 failure, reintroduced by the fix
+    that was supposed to prevent it.
+    """
+    physical = tmp_path / "physical"
+    physical.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(physical)
+
+    setup = _install(tmp_path, mine="0.9.0", pinned="1.0.0", hook=hook)
+    # Rebuild the same layout under the physical dir, reached via the symlink.
+    shutil.copytree(setup["home"], physical / "home", dirs_exist_ok=True)
+    home_via_link = link / "home"
+
+    argv_out = _fake_python(tmp_path)
+    env = _env(tmp_path, home_via_link)
+    marker = tmp_path / "marker.txt"
+    target_hook = physical / "home" / CACHE_REL / "1.0.0" / "hooks" / hook
+    _marker_hook(target_hook, marker)
+    reg = physical / "home" / ".claude" / "plugins" / "installed_plugins.json"
+    reg.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "plugins": {
+                    "zotero-provenance@zotero-provenance": [
+                        {
+                            "scope": "user",
+                            "installPath": str(physical / "home" / CACHE_REL / "1.0.0"),
+                        }
+                    ]
+                },
+            }
+        )
+    )
+
+    proc = _run(home_via_link / CACHE_REL / "0.9.0" / "hooks" / hook, env, _payload())
+
+    assert proc.returncode == 0, proc.stderr
+    assert _appears(marker), "a symlinked HOME switched the trampoline off"
+    assert _stays_absent(argv_out), "the stale root captured anyway"
+
+
+@requires_jq
+@pytest.mark.parametrize("hook", HOOKS)
+def test_equivalent_spellings_are_one_candidate_not_two(tmp_path: Path, hook: str) -> None:
+    """Python canonicalises before deduping; the shell did not, so two spellings
+    of one root read as ambiguous and refused every capture."""
+    setup = _install(tmp_path, mine="1.0.0", pinned="1.0.0", hook=hook)
+    home = setup["home"]
+    argv_out = _fake_python(tmp_path)
+    root = home / CACHE_REL / "1.0.0"
+    _write_registry(
+        home,
+        {
+            "zotero-provenance@zotero-provenance": [
+                {"scope": "user", "installPath": str(root)},
+                {"scope": "project", "installPath": str(root / ".." / "1.0.0")},
+            ]
+        },
+    )
+
+    proc = _run(setup["hook"], _env(tmp_path, home), _payload())
+
+    assert proc.returncode == 0, proc.stderr
+    assert _appears(argv_out), f"two spellings of one root refused; {proc.stderr!r}"

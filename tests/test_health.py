@@ -49,11 +49,11 @@ def _event(ts: str, event: str) -> str:
 
 def _check(
     lines, *, pinned: str | None = PINNED, now=NOW, installed_at=None,
-    fires=(), max_fires=200,
+    acknowledged_before=None,
 ):
     return evaluate(
         lines, pinned_root=pinned, now=now, installed_at=installed_at,
-        fires=fires, max_fires=max_fires,
+        acknowledged_before=acknowledged_before,
     )
 
 
@@ -88,7 +88,7 @@ def test_reports_a_capture_written_from_an_unpinned_root() -> None:
     warnings = _check([_capture("2026-08-25T11:30:00-04:00", root=stale)])
 
     assert len(warnings) == 1
-    assert "0.3.0" in warnings[0] and "0.13.0" in warnings[0], warnings
+    assert "0.3.0" in warnings[0], warnings
 
 
 def test_a_stale_root_capture_from_before_the_upgrade_is_not_reported() -> None:
@@ -190,25 +190,7 @@ def test_a_long_quiet_stretch_alone_is_not_reported() -> None:
     assert _check([_capture("2026-08-20T11:00:00-04:00")]) == []
 
 
-def test_reports_many_hook_fires_with_no_capture() -> None:
-    """Activity without capture IS evidence: the hooks ran and wrote nothing."""
-    fires = [f"2026-08-25T11:{m:02d}:00-04:00" for m in range(0, 60)]
-    warnings = _check(
-        [_capture("2026-08-25T09:00:00-04:00")], fires=fires, max_fires=30
-    )
 
-    assert len(warnings) == 1
-    assert "60" in warnings[0], warnings
-
-
-def test_fires_before_the_last_capture_do_not_count() -> None:
-    fires = [f"2026-08-25T09:{m:02d}:00-04:00" for m in range(0, 60)]
-    assert _check([_capture("2026-08-25T11:00:00-04:00")], fires=fires, max_fires=30) == []
-
-
-def test_ordinary_activity_below_the_threshold_is_quiet() -> None:
-    fires = [f"2026-08-25T11:{m:02d}:00-04:00" for m in range(0, 10)]
-    assert _check([_capture("2026-08-25T09:00:00-04:00")], fires=fires, max_fires=30) == []
 
 
 def test_reports_capture_errors_from_the_most_recent_run() -> None:
@@ -359,3 +341,92 @@ def test_the_hook_script_is_actually_registered() -> None:
     ]
     assert any("session-health.sh" in c for c in commands), commands
     assert shutil.which("bash") and HEALTH_HOOK.exists()
+
+
+# --- cut back to an incident, after the second audit -------------------------
+#
+# Scanning every record fixed "a later good capture hides a stale one" and
+# immediately created its mirror image: one stale record in an unbounded log
+# warned forever, long after the session that wrote it had gone. The record
+# proves a stale WRITE happened; it never proved a session is still live.
+#
+# So the claim shrank to what the evidence supports, and it is reported once.
+
+
+def test_the_warning_does_not_claim_a_session_is_live() -> None:
+    stale = "/home/u/.claude/plugins/cache/zotero-provenance/zotero-provenance/0.3.0"
+    warnings = _check(
+        [_capture("2026-08-25T11:40:00-04:00", root=stale)],
+        installed_at=datetime(2026, 8, 25, 11, 30, tzinfo=timezone(timedelta(hours=-4))),
+    )
+
+    assert warnings
+    assert "live session" not in warnings[0].lower(), warnings
+    assert "occurred" in warnings[0], warnings
+
+
+def test_an_acknowledged_incident_is_not_repeated() -> None:
+    """Otherwise the first stale write in production complains at every start."""
+    stale = "/home/u/.claude/plugins/cache/zotero-provenance/zotero-provenance/0.3.0"
+    tz = timezone(timedelta(hours=-4))
+    lines = [_capture("2026-08-25T11:40:00-04:00", root=stale)]
+    ack = datetime(2026, 8, 25, 11, 45, tzinfo=tz)
+
+    assert _check(lines, installed_at=datetime(2026, 8, 25, 11, 30, tzinfo=tz)) != []
+    assert _check(
+        lines, installed_at=datetime(2026, 8, 25, 11, 30, tzinfo=tz),
+        acknowledged_before=ack,
+    ) == []
+
+
+def test_a_newer_incident_after_an_acknowledgement_is_reported() -> None:
+    stale = "/home/u/.claude/plugins/cache/zotero-provenance/zotero-provenance/0.3.0"
+    tz = timezone(timedelta(hours=-4))
+    lines = [
+        _capture("2026-08-25T11:40:00-04:00", root=stale),
+        _capture("2026-08-25T11:50:00-04:00", root=stale),
+    ]
+
+    warnings = _check(
+        lines,
+        installed_at=datetime(2026, 8, 25, 11, 30, tzinfo=tz),
+        acknowledged_before=datetime(2026, 8, 25, 11, 45, tzinfo=tz),
+    )
+
+    assert warnings, "a new stale write after the acknowledgement was swallowed"
+
+
+def test_a_self_describing_record_is_read_without_the_registry() -> None:
+    """The record already proves it: gating on a readable registry threw that away."""
+    line = json.dumps(
+        {
+            "ts": "2026-08-25T11:40:00-04:00",
+            "version": "0.3.0",
+            "root": "/c/0.3.0",
+            "pinned_root": "/c/0.15.0",
+            "urls_seen": 1,
+            "urls_new": 1,
+            "errors": [],
+        }
+    )
+
+    assert _check([line], pinned=None) != [], "self-contained evidence was ignored"
+
+
+def test_refusals_are_reported_with_no_successful_capture_at_all() -> None:
+    """A fresh, wholly broken install has no capture record to anchor to."""
+    lines = [_event(f"2026-08-25T11:{m:02d}:00-04:00", "stale-root-refused") for m in range(5)]
+
+    warnings = _check(lines)
+
+    assert warnings, "refusals with zero captures produced silence"
+    assert "5" in warnings[0], warnings
+
+
+def test_a_huge_refusal_count_is_capped_in_the_message() -> None:
+    lines = [_event(f"2026-08-25T11:{m // 60:02d}:{m % 60:02d}:00-04:00", "stale-root-refused")
+             for m in range(0, 50)]
+    warnings = _check(lines)
+
+    assert warnings
+    assert len(warnings[0]) < 400, warnings

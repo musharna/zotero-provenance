@@ -1,5 +1,67 @@
 # Changelog
 
+## 0.16.0 — 2026-08-25
+
+A second audit, of the fixes from the first. Seven findings; the health check
+failed again, and this time the fix for the previous round's worst bug had
+created its mirror image. So the detector was cut back rather than built out.
+
+**The capture path — two real bypasses.**
+
+- **A symlinked `$HOME` switched the trampoline off entirely.** `ZP_MINE` was
+  canonicalised with `pwd -P` and then compared against a prefix built from a
+  raw `$HOME`. With `/home/alice -> /srv/users/alice` the two never match, so
+  every superseded root was classified as a development checkout and ran its own
+  stale code — the v0.3.0 failure, reintroduced by the guard written to prevent
+  it. Reproduced against a real symlinked home before fixing.
+- **Two spellings of one root refused every capture.** The shell deduplicated
+  registry entries as strings before canonicalising them, so `/p/1` and
+  `/p/1/../1` looked like two candidates and the ambiguity rule declined. Each
+  candidate is now canonicalised before they are compared, matching what the
+  Python resolver already did.
+- A malformed `{"plugins": [1]}` crashed the resolver. Valid JSON, and the
+  traceback went to a stderr the hook discarded.
+
+**The health check — cut back to what a log can prove.**
+
+Scanning every record fixed "a later good capture hides a stale one" and
+immediately created the opposite fault: one stale record in an unbounded log
+warned at every session start, forever, long after the session that wrote it had
+exited. A record proves a **write** happened; it never proved a session is still
+live.
+
+- The claim shrank to "a capture occurred from a version that was not installed
+  at the time", and it is reported **once**, against an acknowledgement cursor.
+- **Hook-fire counting is gone**, and with it the heartbeat file. It could not
+  see the case it was added for — with no valid capture record the checker
+  returned before ever reading it — and it would have chattered after about a
+  hundred URL-free turns anyway. Two designs that lied in opposite directions
+  were enough; the third is smaller than both.
+- A record carrying `pinned_root` is now read **without** the current registry.
+  It was already proof, and gating it on a readable registry threw that away.
+- Refusal counts are capped in the message rather than printed in full.
+
+**Honesty about the instrument itself.**
+
+- **The checker exits non-zero when it fails**, and the hook turns that into one
+  stable sentence plus a `health-errors.log`. It used to exit 0 after writing to
+  a discarded stderr, so an internal crash was byte-identical to a clean bill of
+  health — the exact failure class this feature exists to report, reproduced
+  inside the feature.
+- **The health hook now delegates like the capture hooks do.** The previous
+  version argued it need not, because its inputs are global. That confused
+  global inputs with version-independent logic: 0.14.0, 0.14.1 and 0.15.0 all
+  disagree on identical input.
+- **The pinned root is observed before the capture, not after.** Reading it
+  afterwards let a registry change mid-capture record a pin the write never ran
+  under, fabricating a stale write that never happened — and, reversed, hiding a
+  real one. When it cannot be resolved the record says `pin_observation:
+  "unknown"` rather than silently omitting the field.
+
+Hook cost fell from about 37 ms to about 26 ms per fire, measured interleaved,
+by replacing four `basename`/`dirname` subshells with parameter expansion and
+dropping the heartbeat write.
+
 ## 0.15.0 — 2026-08-25
 
 An external audit of yesterday's three releases. Six findings, four of them

@@ -134,7 +134,6 @@ Sources get bucketed by their `seen:` history:
 | `ZOTERO_PROVENANCE_PYTHON`         | Interpreter to use, if the default `python3` lacks the deps.             |
 | `ZOTERO_API_BASE`                  | Alternate API root, for tests or an API-compatible server.               |
 | `ZOTERO_CAPTURE_HEALTH_DISABLE=1`  | Turn off the session-start health check only.                            |
-| `ZOTERO_CAPTURE_MAX_FIRES_WITHOUT_CAPTURE` | Hook fires with no capture before the check says so. Default 200. |
 
 Hooks do not inherit MCP-scoped environment from `~/.claude.json`, which is why
 credentials come from the secrets file.
@@ -144,36 +143,27 @@ credentials come from the secrets file.
 Every serious failure this plugin has had was silent: a superseded root wrote
 junk for weeks, and capture stopped dead for 29 hours. Both were found by an
 audit rather than by the plugin noticing. A `SessionStart` hook now reads the
-capture log and says something when — and only when — one of four things is
+capture log and says something when — and only when — one of three things is
 true:
 
-- any capture since the current version was installed ran from a plugin root
-  that was not the pinned one at the time it wrote
-- refusal events have been recorded since the last successful capture, whether
-  from the hooks or from a capture that declined to write
-- the hooks have fired many times with no successful capture between them
+- a capture ran from a plugin root that was not the installed one **at the time
+  it wrote** (each record carries the pin it observed, so this survives later
+  upgrades and needs no registry to interpret)
+- refusals have been recorded since the last successful capture, whether from
+  the hooks or from a capture that declined to write
 - the last capture reported errors
 
-It counts hook fires rather than elapsed time on purpose. Wall-clock silence
-measures your habits, not the plugin's health: a Friday capture and a Monday
-session is a 70-hour gap with nothing wrong.
+The first is reported **once**, against an acknowledgement cursor, and it claims
+only that a stale write occurred — not that a session is still executing, which
+a log line cannot prove. Two earlier designs were removed for lying in opposite
+directions: elapsed-time silence warned after any ordinary weekend, and counting
+hook fires chattered after roughly a hundred turns that happened to cite nothing.
 
 On a healthy session it prints nothing at all. That is the point: a check that
-speaks when things are fine gets tuned out, and a tuned-out check is worse than
-none. Run it by hand with `python3 scripts/zotero_capture_health.py`.
-
-### How the `project:` tag is chosen
-
-In order: `ZOTERO_CAPTURE_PROJECT`; the basename of the nearest enclosing git repository;
-the first path segment under `$HOME` or a configured root; the basename of the working
-directory; `home`.
-
-### Labelling a context
-
-By default items are tagged `context:general`, and links you paste are tagged
-`context:user-shared`. Put `[SOURCE-CONTEXT: some-label]` in an assistant message to
-label everything captured from that turn — useful for keeping a literature review
-separate from ordinary browsing.
+speaks when things are fine gets tuned out. If the check itself fails, it says
+so in one line and writes the detail to `health-errors.log` — a crashed monitor
+is unhealthy, and must not be mistaken for a quiet one. Run it by hand with
+`python3 scripts/zotero_capture_health.py`.
 
 ## What is not captured
 

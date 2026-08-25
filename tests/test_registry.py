@@ -203,3 +203,26 @@ def test_a_checkout_refuses_when_marketplaces_disagree(tmp_path: Path) -> None:
     resolved, _ = resolve_pinned(own_root=tmp_path / "checkout", registry_path=reg)
 
     assert resolved is None
+
+
+def test_a_malformed_plugins_value_does_not_crash(tmp_path: Path) -> None:
+    """`{"plugins": [1]}` is valid JSON. It used to raise AttributeError, which
+    the health checker caught and printed to a stderr the hook discards —
+    silence indistinguishable from health."""
+    home = tmp_path / "home"
+    mine = _root(home, "0.9.0")
+    reg = home / ".claude" / "plugins" / "installed_plugins.json"
+    reg.parent.mkdir(parents=True, exist_ok=True)
+    reg.write_text(json.dumps({"plugins": [1]}))
+
+    assert resolve_pinned(own_root=mine, registry_path=reg) == (None, None)
+
+
+def test_entries_that_are_not_a_list_are_ignored(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    mine = _root(home, "0.9.0")
+    reg = home / ".claude" / "plugins" / "installed_plugins.json"
+    reg.parent.mkdir(parents=True, exist_ok=True)
+    reg.write_text(json.dumps({"plugins": {f"{PLUGIN}@{MARKET}": "not-a-list"}}))
+
+    assert resolve_pinned(own_root=mine, registry_path=reg) == (None, None)

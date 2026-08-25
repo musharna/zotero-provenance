@@ -77,6 +77,17 @@ def _is_capture(record: dict) -> bool:
     return "event" not in record and ("urls_seen" in record or "version" in record)
 
 
+def latest_record_ts(lines: Iterable[str]) -> datetime | None:
+    """The newest timestamp in the log the caller just read.
+
+    Used as the acknowledgement cursor. Acknowledging "now" would swallow any
+    record written between reading and acknowledging; acknowledging the newest
+    record actually examined cannot.
+    """
+    records = _records(lines)
+    return max((r["_ts"] for r in records), default=None)
+
+
 def _version_of(root: str) -> str:
     return root.rstrip("/").rsplit("/", 1)[-1] or root
 
@@ -87,10 +98,16 @@ def evaluate(
     pinned_root: str | None,
     now: datetime,
     installed_at: datetime | None = None,
-    fires: Iterable[str] = (),
-    max_fires: int = 200,
+    acknowledged_before: datetime | None = None,
 ) -> list[str]:
-    """Human-readable warnings, or an empty list when there is nothing to say."""
+    """Human-readable warnings, or an empty list when there is nothing to say.
+
+    Three signals, deliberately fewer than before. Two rounds of audit killed
+    the others: counting hook fires chattered after about a hundred URL-free
+    turns, and elapsed time measured the user's habits rather than the plugin.
+
+    What survives is what the log can actually prove.
+    """
     records = _records(lines)
     if not records:
         return []
@@ -99,27 +116,20 @@ def evaluate(
     last = max(captures, key=lambda r: r["_ts"]) if captures else None
     warnings: list[str] = []
 
-    # 1. Executing code that is not the installed code. This is the shape of both
-    #    the junk-writing root and the 29-hour outage, and it is the one signal
-    #    that identifies them on the first session after they begin.
+    # 1. A write happened from a root that was not the pinned one AT THE TIME.
     #
-    #    `installed_at` is what keeps this from crying wolf on every release. For
-    #    a few minutes after an upgrade the newest capture legitimately came from
-    #    the PREVIOUS root, because it happened before the new one was pinned —
-    #    which is not stale code, just a clock ordering. The real question is
-    #    whether anything has captured from an unpinned root SINCE the upgrade.
-    #    Caught by running the check against the live log right after shipping
-    #    0.14.0, where it fired on a capture 30 seconds too old to be a fault.
-    #    EVERY capture since the upgrade is examined, not just the newest. Taking
-    #    only the newest let one good write erase the evidence of a bad one: two
-    #    sessions run concurrently, the lingering stale one captures at 11:40 and
-    #    the current one at 11:41, and the stale write became invisible for good
-    #    while that session was still alive and still writing. That made the
-    #    check decorative against the precise failure it exists to find.
-    #    A record that carries `pinned_root` decides its own staleness: it says
-    #    what the registry pinned at the moment it wrote, so an upgrade cannot
-    #    retroactively forgive a write that was ALREADY stale when it happened.
-    #    `installed_at` remains the fallback for lines written before 0.15.0.
+    #    This claim used to be "a live session is executing superseded code",
+    #    which the evidence never supported: a record proves a write occurred,
+    #    not that its author still exists. One stale record in an unbounded log
+    #    then warned at every session start, forever, long after the session
+    #    that wrote it had gone — the false negative traded for a false
+    #    positive. So the claim shrank to what is provable, and an
+    #    acknowledgement cursor means it is said once rather than repeatedly.
+    #
+    #    A record carrying `pinned_root` decides its own staleness and is read
+    #    WITHOUT the current registry: it was already proof, and gating it on a
+    #    readable registry threw that proof away. `installed_at` remains the
+    #    fallback for lines written before that field existed.
     def _was_stale(record: dict) -> bool:
         root = record.get("root")
         if not isinstance(root, str) or not root:
@@ -127,24 +137,26 @@ def evaluate(
         observed = record.get("pinned_root")
         if isinstance(observed, str) and observed:
             return root != observed
-        if root == pinned_root:
+        if pinned_root is None or root == pinned_root:
             return False
         return not (installed_at is not None and record["_ts"] <= installed_at)
 
-    if pinned_root:
-        stale = [r for r in captures if _was_stale(r)]
-        if stale:
-            roots = sorted({_version_of(r["root"]) for r in stale})
-            latest = max(stale, key=lambda r: r["_ts"])
-            warnings.append(
-                f"{len(stale)} capture(s) since the current version was installed "
-                f"ran from plugin {', '.join(roots)}, but {_version_of(pinned_root)} "
-                f"is installed — a live session is executing superseded code "
-                f"(most recent {latest['_ts'].isoformat()}, {latest['root']})"
-            )
+    stale = [r for r in captures if _was_stale(r)]
+    if acknowledged_before is not None:
+        stale = [r for r in stale if r["_ts"] > acknowledged_before]
+    if stale:
+        latest = max(stale, key=lambda r: r["_ts"])
+        roots = sorted({_version_of(r["root"]) for r in stale})
+        warnings.append(
+            f"{len(stale)} capture(s) occurred from plugin {', '.join(roots)}, "
+            f"which was not the installed version at the time "
+            f"(most recent {latest['_ts'].isoformat()}, {latest['root']})"
+        )
 
-    # 2. Hooks are firing and declining. Only refusals AFTER the last successful
-    #    capture count; older ones describe a problem that has since resolved.
+    # 2. Hooks fired and declined. A successful capture clears these, so unlike
+    #    the incident above they need no cursor: if they persist, capture really
+    #    is still off. The count is capped in the message because a long-broken
+    #    install produces an absurd number that says nothing extra.
     since = last["_ts"] if last else None
     refusals = [
         r
@@ -153,44 +165,15 @@ def evaluate(
         and (since is None or r["_ts"] > since)
     ]
     if refusals:
-        kinds = sorted(
-            {str(r.get("event") or r.get("refused")) for r in refusals}
-        )
+        kinds = sorted({str(r.get("event") or r.get("refused")) for r in refusals})[:3]
+        newest = max(refusals, key=lambda r: r["_ts"])
         warnings.append(
-            f"{len(refusals)} refusal event(s) since the last successful capture: "
-            f"{', '.join(kinds)} — capture is declining rather than writing"
+            f"{len(refusals)} refusal(s) since the last successful capture "
+            f"({', '.join(k[:60] for k in kinds)}; newest "
+            f"{newest['_ts'].isoformat()}) — capture is declining, not writing"
         )
 
-    # 3. The hooks are running and nothing is being captured.
-    #
-    #    This replaces a wall-clock threshold, which could not tell a broken
-    #    plugin from a quiet weekend: a Friday capture and a Monday session is a
-    #    60-70 hour gap with nothing whatsoever wrong, and SessionStart fires on
-    #    resume/clear/compact/fork as well as startup, so the same false alarm
-    #    repeated. Elapsed time measures the user's habits, not the plugin's
-    #    health.
-    #
-    #    Hook fires do measure the plugin. Many fires with no successful capture
-    #    between them means the entry point is running and producing nothing,
-    #    which is a fault; few fires means nobody was working, which is not.
-    since_fires = last["_ts"] if last else None
-    recent = [
-        t
-        for t in (_parse_ts(raw) for raw in fires)
-        if t is not None and (since_fires is None or t > since_fires)
-    ]
-    if len(recent) > max_fires:
-        tail = (
-            f" (last capture {last['_ts'].isoformat()})"
-            if last
-            else " and nothing has ever been captured"
-        )
-        warnings.append(
-            f"the hooks have run {len(recent)} times with no successful capture"
-            f"{tail} — they are firing but writing nothing"
-        )
-
-    # 4. The last run did capture, but something inside it failed.
+    # 3. The last run did capture, but something inside it failed.
     if last:
         errors = last.get("errors")
         if isinstance(errors, list) and errors:
