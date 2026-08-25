@@ -19,26 +19,20 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from zotero_capture.config import _state_dir  # noqa: E402
-from zotero_capture.health import evaluate  # noqa: E402
+from zotero_capture.health import evaluate, latest_record_ts  # noqa: E402
 from zotero_capture.registry import resolve_pinned  # noqa: E402
 
-DEFAULT_MAX_FIRES = 200
-# Keep the heartbeat bounded without needing a lock: trim only when it grows
-# well past what the check reads, and replace atomically.
-TRIM_ABOVE, TRIM_TO = 4000, 1000
+ACK_FILE = "health-ack"
 
 
 def _installed() -> tuple[str | None, datetime | None]:
     """Where the plugin manager points, and when it last pointed somewhere new.
 
     Delegated to `registry.resolve_pinned`, which matches the qualified plugin
-    id exactly rather than the first key with the right prefix. The prefix match
-    this used to do resolved to whichever entry was serialised first, so an
-    ordinary registry holding the plugin from two marketplaces or two scopes
-    could name the wrong root.
-
-    None means "do not guess": an unreadable or ambiguous registry must never be
-    reported as a version mismatch.
+    id exactly rather than the first key with the right prefix. None means "do
+    not guess": an unreadable or ambiguous registry must never be reported as a
+    version mismatch. Records that carry their own `pinned_root` no longer
+    depend on this at all — they were already proof.
     """
     registry = Path.home() / ".claude" / "plugins" / "installed_plugins.json"
     root, when = resolve_pinned(
@@ -47,31 +41,27 @@ def _installed() -> tuple[str | None, datetime | None]:
     return (str(root) if root else None), when
 
 
-def _max_fires() -> int:
-    raw = os.environ.get("ZOTERO_CAPTURE_MAX_FIRES_WITHOUT_CAPTURE")
+def _acknowledged_before(state: Path) -> datetime | None:
+    """The newest record already reported, so an incident is said once."""
     try:
-        return max(int(raw), 1) if raw else DEFAULT_MAX_FIRES
-    except ValueError:
-        return DEFAULT_MAX_FIRES
-
-
-def _hook_fires(state: Path) -> list[str]:
-    """Timestamps of recent hook fires, trimming the file if it has grown."""
-    path = state / "hook-fires.log"
-    try:
-        lines = path.read_text(errors="replace").splitlines()
+        raw = (state / ACK_FILE).read_text().strip()
     except OSError:
-        return []
-    if len(lines) > TRIM_ABOVE:
-        keep = lines[-TRIM_TO:]
-        tmp = path.with_suffix(".trim")
-        try:
-            tmp.write_text("".join(f"{line}\n" for line in keep))
-            tmp.replace(path)
-            lines = keep
-        except OSError:
-            pass
-    return lines
+        return None
+    try:
+        when = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return when if when.tzinfo is not None else None
+
+
+def _acknowledge(state: Path, when: datetime | None) -> None:
+    if when is None:
+        return
+    try:
+        state.mkdir(parents=True, exist_ok=True)
+        (state / ACK_FILE).write_text(when.isoformat())
+    except OSError:
+        pass
 
 
 def main() -> int:
@@ -81,14 +71,14 @@ def main() -> int:
     except OSError:
         return 0
 
+    state = _state_dir(os.environ)
     pinned, installed_at = _installed()
     warnings = evaluate(
         lines,
         pinned_root=pinned,
         now=datetime.now().astimezone(),
         installed_at=installed_at,
-        fires=_hook_fires(_state_dir(os.environ)),
-        max_fires=_max_fires(),
+        acknowledged_before=_acknowledged_before(state),
     )
     if not warnings:
         return 0
@@ -96,6 +86,9 @@ def main() -> int:
     print("zotero-provenance: capture may not be working")
     for warning in warnings:
         print(f"  - {warning}")
+    # Everything examined is now reported. A record written after this point is
+    # newer than the cursor and will still be raised.
+    _acknowledge(state, latest_record_ts(lines))
     return 0
 
 
@@ -104,6 +97,14 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except SystemExit:
         raise
-    except Exception as exc:  # never break a session start
-        print(f"zotero-provenance: health check failed to run ({exc})", file=sys.stderr)
-        raise SystemExit(0) from None
+    except Exception:
+        # A crashed monitor is UNHEALTHY, and must not look like a quiet one.
+        # This used to exit 0 after writing to a stderr the hook discards, so an
+        # internal fault was byte-identical to a clean bill of health — the very
+        # failure class this check exists to report. The traceback goes to the
+        # caller's stderr, which the hook diverts to a log; the hook turns the
+        # non-zero exit into one stable sentence.
+        import traceback
+
+        traceback.print_exc()
+        raise SystemExit(3) from None

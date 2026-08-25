@@ -43,12 +43,16 @@ def _line(ts: str, root: str, pinned: str | None) -> str:
     return json.dumps(obj)
 
 
-def test_the_log_line_carries_the_pinned_root(tmp_path: Path, monkeypatch) -> None:
-    import zotero_capture.cli as cli
-
-    monkeypatch.setattr(cli, "_observed_pinned_root", lambda: "/c/0.15.0")
+def test_the_log_line_carries_the_pinned_root(tmp_path: Path) -> None:
     log = tmp_path / "capture.log"
-    _emit_log(log, project="demo", context=None, result=CaptureResult(), latency_ms=1)
+    _emit_log(
+        log,
+        project="demo",
+        context=None,
+        result=CaptureResult(),
+        latency_ms=1,
+        pinned_root="/c/0.15.0",
+    )
 
     record = json.loads(log.read_text().splitlines()[-1])
     assert record.get("pinned_root") == "/c/0.15.0", record
@@ -92,3 +96,64 @@ def test_records_without_the_field_fall_back_to_the_install_clock() -> None:
     )
 
     assert warnings == [], warnings
+
+
+def test_the_pin_is_observed_before_the_capture_not_after(tmp_path: Path) -> None:
+    """A registry change during a capture must not fabricate a stale write.
+
+    _emit_log resolved the pin AFTER capture_message finished, so:
+
+        A is pinned; A starts capturing
+        A writes the Zotero item
+        the registry moves to B
+        A emits its log line and records pinned_root=B
+
+    which reads as "A wrote while B was pinned" — a stale write that never
+    happened. The inverse ordering hides a real one. The authorisation state has
+    to be read before the work it authorises.
+    """
+    import zotero_capture.cli as cli
+
+    observed: list[str] = []
+
+    def _moving_target() -> str:
+        # Different answer each call: only a single, early read is stable.
+        observed.append(f"/c/{len(observed)}")
+        return observed[-1]
+
+    monkeypatch_target = getattr(cli, "_observed_pinned_root")
+    assert callable(monkeypatch_target)
+
+    cli._observed_pinned_root = _moving_target  # type: ignore[assignment]
+    try:
+        log = tmp_path / "capture.log"
+        pin = cli._observed_pinned_root()          # what the capture would see
+        _emit_log(
+            log,
+            project="demo",
+            context=None,
+            result=CaptureResult(),
+            latency_ms=1,
+            pinned_root=pin,
+        )
+    finally:
+        cli._observed_pinned_root = monkeypatch_target  # type: ignore[assignment]
+
+    record = json.loads(log.read_text().splitlines()[-1])
+    assert record["pinned_root"] == "/c/0", record
+
+
+def test_an_unresolvable_pin_is_recorded_as_unknown(tmp_path: Path) -> None:
+    """Omitting the field silently downgraded a new record to legacy semantics."""
+    log = tmp_path / "capture.log"
+    _emit_log(
+        log,
+        project="demo",
+        context=None,
+        result=CaptureResult(),
+        latency_ms=1,
+        pinned_root=None,
+    )
+
+    record = json.loads(log.read_text().splitlines()[-1])
+    assert record.get("pin_observation") == "unknown", record

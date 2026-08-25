@@ -37,8 +37,15 @@ zp_tramp_log() {
 
 # Only a managed cache root can be superseded. A development checkout runs its
 # own code, or debugging from one would silently exercise whatever is deployed.
+#
+# The cache prefix is canonicalised too, not just ZP_MINE. Comparing a physical
+# ZP_MINE against a raw $HOME meant a symlinked home directory
+# (/home/alice -> /srv/users/alice) never matched, so every superseded root was
+# classified as a checkout and ran its own stale code — the v0.3.0 failure,
+# reintroduced by the guard meant to prevent it.
+ZP_CACHE="$(cd "$HOME/.claude/plugins/cache" 2>/dev/null && pwd -P)"
 case "$ZP_MINE" in
-"$HOME/.claude/plugins/cache/"*)
+"${ZP_CACHE:-/nonexistent-cache}"/*)
 	ZP_REG="$HOME/.claude/plugins/installed_plugins.json"
 	# Identity is EXACT and derived from where this root lives:
 	# .../cache/<marketplace>/<plugin>/<version>. Asking for any key starting
@@ -46,27 +53,37 @@ case "$ZP_MINE" in
 	# was serialised first, so a registry legitimately holding this plugin from
 	# two marketplaces, or at two scopes, could put the wrong path on the exec
 	# line below. Nothing adversarial is needed for that; scopes are ordinary.
-	ZP_PLUGIN="$(basename "$(dirname "$ZP_MINE")")"
-	ZP_MARKET="$(basename "$(dirname "$(dirname "$ZP_MINE")")")"
-	ZP_SUBTREE="$(dirname "$ZP_MINE")"
+	#
+	# Parameter expansion rather than basename/dirname: this runs on every hook
+	# fire, and four forks cost more than the work.
+	ZP_SUBTREE="${ZP_MINE%/*}"
+	ZP_PLUGIN="${ZP_SUBTREE##*/}"
+	ZP_MARKET_DIR="${ZP_SUBTREE%/*}"
+	ZP_MARKET="${ZP_MARKET_DIR##*/}"
 	ZP_TARGET=""
 	if [[ -r "$ZP_REG" ]] && command -v jq >/dev/null 2>&1; then
-		# One unambiguous installPath, or nothing. Two entries that disagree
-		# refuse rather than guess.
-		ZP_TARGET="$(jq -r --arg k "${ZP_PLUGIN}@${ZP_MARKET}" '
-			[ (.plugins // {})[$k]? // [] | .[]?
-			  | .installPath // empty | select(. != "") | sub("/+$"; "") ]
-			| unique
-			| if length == 1 then .[0] else empty end' "$ZP_REG" 2>/dev/null)"
+		# Each candidate is canonicalised BEFORE they are compared. Deduping raw
+		# strings made two spellings of one root ("/p/1" and "/p/1/../1") look
+		# like two candidates, and the ambiguity rule then refused every capture.
+		ZP_SEEN="" ZP_COUNT=0
+		while IFS= read -r ZP_CAND; do
+			[[ -n "$ZP_CAND" ]] || continue
+			ZP_CAND="$(cd "$ZP_CAND" 2>/dev/null && pwd -P)" || continue
+			[[ -n "$ZP_CAND" ]] || continue
+			case "$ZP_SEEN" in
+			*"|$ZP_CAND|"*) continue ;;
+			esac
+			ZP_SEEN="$ZP_SEEN|$ZP_CAND|"
+			ZP_TARGET="$ZP_CAND"
+			ZP_COUNT=$((ZP_COUNT + 1))
+		done < <(jq -r --arg k "${ZP_PLUGIN}@${ZP_MARKET}" '
+			((.plugins // {}) | if type == "object" then .[$k] else null end) // []
+			| .[]? | .installPath // empty | select(. != "")' "$ZP_REG" 2>/dev/null)
+		# One unambiguous root, or nothing. Two that disagree refuse rather than
+		# guess: guessing is what put an unverified path on the exec line.
+		((ZP_COUNT == 1)) || ZP_TARGET=""
 	fi
-	# Canonicalise before comparing. A symlink or ".." spelling would otherwise
-	# make a root unequal to ITSELF: it would forward to itself, hit the
-	# recursion guard, and lose not one capture but every capture for the life
-	# of the session — the 29-hour outage again, reached by a spelling.
-	if [[ -n "$ZP_TARGET" ]]; then
-		ZP_TARGET="$(cd "$ZP_TARGET" 2>/dev/null && pwd -P || true)"
-	fi
-	# And only ever forward inside this root's own marketplace/plugin subtree.
+	# Only ever forward inside this root's own marketplace/plugin subtree.
 	case "${ZP_TARGET:-}" in
 	"$ZP_SUBTREE"/*) ;;
 	*) ZP_TARGET="" ;;
@@ -90,11 +107,6 @@ case "$ZP_MINE" in
 	;;
 esac
 
-# Heartbeat: one line per fire, so health can tell "nobody was working" from
-# "the hooks are running and writing nothing". Elapsed time cannot separate
-# those — a Friday capture and a Monday session is a 70-hour gap with nothing
-# wrong — but fire count can. Append-only, so concurrent sessions need no lock.
-printf '%s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" >>"${ZP_LOG%/*}/hook-fires.log" 2>/dev/null || true
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
