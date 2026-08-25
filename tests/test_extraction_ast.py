@@ -102,9 +102,26 @@ def test_an_image_is_not_a_source():
     assert extract_urls(text) == ["https://fixturehost.org/p"]
 
 
-def test_a_url_inside_inline_html_is_not_cited():
+def test_a_url_inside_an_inline_html_anchor_IS_cited():
+    """Reversed 2026-08-25: an anchor renders as a hyperlink, so it cites.
+
+    This previously asserted the opposite, grouping html_inline with code spans
+    because both are "raw". That conflated how a token is spelled with what it
+    means: a code span SHOWS a URL, an anchor LINKS to one. Skipping it silently
+    dropped genuine citations from any message written in HTML.
+
+    Only the href is taken; the tag's other attributes are markup.
+    """
     text = '<a href="https://fixturehost.org/raw">x</a> and https://fixturehost.org/p'
-    assert extract_urls(text) == ["https://fixturehost.org/p"]
+    assert extract_urls(text) == [
+        "https://fixturehost.org/raw",
+        "https://fixturehost.org/p",
+    ]
+
+
+def test_a_url_shown_in_a_code_span_is_still_not_cited():
+    """The distinction the reversal above rests on: showing is not citing."""
+    assert extract_urls("`https://fixturehost.org/shown`") == []
 
 
 def test_an_autolink_keeps_its_entity_unchanged():

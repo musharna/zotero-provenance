@@ -152,17 +152,43 @@ def queue_pending_tags(db_path: Path, url_canonical: str, tags: list[str]) -> No
         )
 
 
-def take_pending_tags(db_path: Path, url_canonical: str) -> list[str]:
-    """Remove and return the tags queued for a URL. Empty if there were none."""
+def peek_pending_tags(db_path: Path, url_canonical: str) -> list[str]:
+    """The tags queued for a URL, WITHOUT consuming them."""
     with closing(_connect(db_path)) as conn:
         rows = conn.execute(
             "SELECT tag FROM pending_tags WHERE url_canonical = ? ORDER BY tag",
             (url_canonical,),
         ).fetchall()
-        conn.execute(
-            "DELETE FROM pending_tags WHERE url_canonical = ?", (url_canonical,)
-        )
     return [r["tag"] for r in rows]
+
+
+def clear_pending_tags(db_path: Path, url_canonical: str, tags: list[str]) -> None:
+    """Drop exactly the tags that were successfully applied.
+
+    Named tags rather than "everything for this URL": between the peek and the
+    write, another session may have queued a sighting of its own, and a blanket
+    DELETE would discard a tag that was never applied to anything.
+    """
+    if not tags:
+        return
+    with closing(_connect(db_path)) as conn:
+        conn.executemany(
+            "DELETE FROM pending_tags WHERE url_canonical = ? AND tag = ?",
+            [(url_canonical, tag) for tag in tags],
+        )
+
+
+def take_pending_tags(db_path: Path, url_canonical: str) -> list[str]:
+    """Remove and return the tags queued for a URL. Empty if there were none.
+
+    Destructive, so it must NOT be used to feed a write that can fail: the
+    DELETE commits on this autocommit connection before the caller's request is
+    issued, and a Zotero error then loses the sighting for good. Capture uses
+    peek + clear for that reason. Kept for callers that only need to drain.
+    """
+    tags = peek_pending_tags(db_path, url_canonical)
+    clear_pending_tags(db_path, url_canonical, tags)
+    return tags
 
 
 def set_zotero_key(db_path: Path, url_canonical: str, zotero_key: str) -> None:

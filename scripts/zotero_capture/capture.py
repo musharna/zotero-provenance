@@ -19,7 +19,8 @@ from .sqlite_cache import (
     release_url,
     reserve_url,
     set_zotero_key,
-    take_pending_tags,
+    clear_pending_tags,
+    peek_pending_tags,
     update_last_seen,
 )
 from .url_processing import (
@@ -243,11 +244,18 @@ def capture_message(
                 logger.debug("%s is claimed by another session; deferring", url)
                 queue_pending_tags(db_path, url, [seen_tag, context_tag, project_tag])
                 continue
+            # Peek, write, THEN clear. take_pending_tags() commits its DELETE
+            # before add_tags is even called, so a transient Zotero error used
+            # to destroy the very sighting queue_pending_tags exists to keep.
+            # Applying a tag twice is harmless -- add_tags is idempotent -- so
+            # at-least-once is the right trade for provenance.
+            queued = peek_pending_tags(db_path, url)
             zotero.add_tags(
                 key,
-                [seen_tag, context_tag, project_tag, *take_pending_tags(db_path, url)],
+                [seen_tag, context_tag, project_tag, *queued],
                 title_resolver=make_title_resolver(url),
             )
+            clear_pending_tags(db_path, url, queued)
             result.urls_recurring += 1
             update_last_seen(db_path, url, today)
         except ZoteroError as e:
