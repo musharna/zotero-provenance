@@ -116,11 +116,28 @@ def _resolve_claim(
         return row
     if zotero.item_exists(pending_key):
         logger.info("recovered %s: item %s exists, completing claim", url, pending_key)
-        set_zotero_key(db_path, url, pending_key)
+        set_zotero_key(db_path, url, pending_key, pending_key=pending_key)
         return lookup_url(db_path, url)
     logger.info("releasing stale claim on %s: %s was never created", url, pending_key)
-    release_url(db_path, url)
+    # Scoped to the key we just asked Zotero about. Between the lookup and here
+    # another session may have taken the claim over, and releasing by URL alone
+    # would delete a live reservation on the strength of a stale reading.
+    release_url(db_path, url, pending_key=pending_key)
     return None
+
+
+def _flush_pending(db_path: Path, url: str, key: str, zotero) -> None:
+    """Apply any tags another session queued against this URL, then clear them.
+
+    Peek, write, THEN clear — a destructive read would lose the sighting to a
+    transient error, which is the same defect this pass fixed in the recurring
+    branch.
+    """
+    queued = peek_pending_tags(db_path, url)
+    if not queued:
+        return
+    zotero.add_tags(key, queued)
+    clear_pending_tags(db_path, url, queued)
 
 
 def capture_message(
@@ -228,9 +245,15 @@ def capture_message(
                         # is what produced duplicates: the claim stays, and
                         # _resolve_claim settles it later by asking Zotero.
                         if not issued:
-                            release_url(db_path, url)
+                            release_url(db_path, url, pending_key=pending_key)
                         raise
-                    set_zotero_key(db_path, url, key)
+                    set_zotero_key(db_path, url, key, pending_key=pending_key)
+                    # Another session may have queued its own sighting against
+                    # this claim while the POST was in flight. Nothing else will
+                    # ever come back for it: the recurring branch only runs on a
+                    # LATER citation, and a URL cited once, simultaneously, by
+                    # two sessions would silently lose one session's record.
+                    _flush_pending(db_path, url, key, zotero)
                     result.urls_new += 1
                     continue
                 existing = lookup_url(db_path, url)

@@ -191,27 +191,54 @@ def take_pending_tags(db_path: Path, url_canonical: str) -> list[str]:
     return tags
 
 
-def set_zotero_key(db_path: Path, url_canonical: str, zotero_key: str) -> None:
-    """Complete a reservation once the Zotero item exists."""
+def set_zotero_key(
+    db_path: Path,
+    url_canonical: str,
+    zotero_key: str,
+    *,
+    pending_key: str | None = None,
+) -> bool:
+    """Complete a reservation once the Zotero item exists. True if it took.
+
+    Pass `pending_key` to make this a compare-and-swap. Matching on the URL
+    alone is not enough once a claim can be reaped: A claims and stalls, B
+    judges A abandoned and claims the URL with its own key, then A wakes and
+    stamps ITS key over B's completed row. The index then points at an item
+    that may not exist while B's real item is invisible to dedup forever.
+    """
+    sql = "UPDATE url_index SET zotero_key = ? WHERE url_canonical = ?"
+    params: tuple[str, ...] = (zotero_key, url_canonical)
+    if pending_key is not None:
+        sql += " AND pending_key = ?"
+        params += (pending_key,)
     with closing(_connect(db_path)) as conn:
-        conn.execute(
-            "UPDATE url_index SET zotero_key = ? WHERE url_canonical = ?",
-            (zotero_key, url_canonical),
-        )
+        cursor = conn.execute(sql, params)
+    return cursor.rowcount == 1
 
 
-def release_url(db_path: Path, url_canonical: str) -> None:
-    """Drop an unfulfilled reservation so a later run can retry.
+def release_url(
+    db_path: Path, url_canonical: str, *, pending_key: str | None = None
+) -> bool:
+    """Drop an unfulfilled reservation so a later run can retry. True if it did.
 
     Only removes a row that never got a key. A completed row belongs to a real
     Zotero item, and deleting its index entry would strand that item exactly the
     way the un-reserved race did.
+
+    Pass `pending_key` to release only YOUR OWN claim. Without it a stalled
+    owner, waking after its claim was reaped and re-taken, deletes the
+    successor's live reservation — and the successor's POST becomes an orphan
+    item that dedup can never see again. That is the very outcome the
+    reservation protocol exists to prevent, reintroduced by the reaper.
     """
+    sql = "DELETE FROM url_index WHERE url_canonical = ? AND zotero_key = ''"
+    params: tuple[str, ...] = (url_canonical,)
+    if pending_key is not None:
+        sql += " AND pending_key = ?"
+        params += (pending_key,)
     with closing(_connect(db_path)) as conn:
-        conn.execute(
-            "DELETE FROM url_index WHERE url_canonical = ? AND zotero_key = ''",
-            (url_canonical,),
-        )
+        cursor = conn.execute(sql, params)
+    return cursor.rowcount == 1
 
 
 def update_last_seen(db_path: Path, url_canonical: str, seen: date) -> None:
