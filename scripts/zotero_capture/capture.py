@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 from . import __version__
 from .staleness import installed_version, stale_reason
 from .sqlite_cache import (
+    drop_row,
     init_db,
     new_zotero_key,
     queue_pending_tags,
@@ -29,7 +30,7 @@ from .url_processing import (
     extract_urls,
     is_excluded,
 )
-from .zotero_client import UNRESOLVED_TITLE_TAG, ZoteroClient, ZoteroError
+from .zotero_client import ItemGone, UNRESOLVED_TITLE_TAG, ZoteroClient, ZoteroError
 
 logger = logging.getLogger(__name__)
 
@@ -281,6 +282,22 @@ def capture_message(
             clear_pending_tags(db_path, url, queued)
             result.urls_recurring += 1
             update_last_seen(db_path, url, today)
+        except ItemGone as e:
+            # A person trashed or deleted the item. The row now points at
+            # nothing, and leaving it there made every future citation of this
+            # URL repeat the same 404 forever — the source silently stopped
+            # being recorded, with no way to notice.
+            #
+            # The row is dropped rather than tombstoned, so the index says only
+            # what the library actually holds. The cost is honest and worth
+            # stating: citing that URL again recreates the item. Someone who
+            # wants a source gone for good should exclude its host, not rely on
+            # a deletion that capture is designed to undo.
+            logger.warning("item for %s is gone (%s); dropping the stale row", url, e)
+            drop_row(db_path, url)
+            result.errors.append(
+                CaptureFailure(url=url, code="item_gone", message=str(e))
+            )
         except ZoteroError as e:
             logger.error("Zotero API error for %s: %s", url, e)
             result.errors.append(

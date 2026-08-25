@@ -189,7 +189,17 @@ def apply_repair(
             continue
         try:
             if step.action == "rewrite":
-                zotero.update_url(step.zotero_key, step.corrected)
+                if not zotero.update_url(step.zotero_key, step.corrected):
+                    # The item is gone. Rewriting the index row anyway would
+                    # leave it claiming a corrected URL with nothing behind it,
+                    # and the pass would report a repair that did not happen.
+                    logger.warning(
+                        "skipping rewrite of %s: item %s no longer exists",
+                        step.url,
+                        step.zotero_key,
+                    )
+                    counts["skip"] += 1
+                    continue
                 with connect(db_path) as conn:
                     conn.execute(
                         "UPDATE url_index SET url_canonical = ? WHERE url_canonical = ?",

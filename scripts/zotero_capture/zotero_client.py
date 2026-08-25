@@ -32,6 +32,17 @@ class ZoteroError(Exception):
     """Surfaced for any unrecoverable Zotero API failure."""
 
 
+class ItemGone(ZoteroError):
+    """The item this index row points at no longer exists.
+
+    Distinct from a plain ZoteroError on purpose. "The API is down" is
+    transient and the right response is to fail and retry later; "a person
+    trashed this item" is permanent, and retrying reproduces the same 404 on
+    every future citation forever. Only the caller can tell those apart, and it
+    could not while both arrived as the same exception.
+    """
+
+
 class ZoteroClient:
     def __init__(
         self,
@@ -257,12 +268,19 @@ class ZoteroClient:
     ) -> bool | None:
         """One read-modify-write. None means "version moved, try again"."""
         resp = self._client.get(f"/items/{item_key}")
+        if resp.status_code == 404:
+            raise ItemGone(f"item {item_key} no longer exists")
         if resp.status_code >= 400:
             raise ZoteroError(
                 f"GET /items/{item_key} failed: {resp.status_code} {resp.text}"
             )
         item = resp.json()
         data = item.get("data", {})
+        if data.get("deleted"):
+            # Zotero's trash is a flag, not a deletion, so this reads 200 OK.
+            # Tagging a trashed item would quietly resurrect provenance onto
+            # something the user removed.
+            raise ItemGone(f"item {item_key} is in the trash")
         version = int(resp.headers.get("Last-Modified-Version", item.get("version", 0)))
         existing_tags = {t["tag"] for t in data.get("tags", [])}
         to_add = [t for t in new_tags if t not in existing_tags]
@@ -270,12 +288,20 @@ class ZoteroClient:
 
         resolved_title: str | None = None
         if title_resolver is not None and title_is_unresolved(data, existing_tags):
-            candidate = title_resolver()
-            # The fetcher returns the URL itself when it fails; only a different,
-            # non-empty string counts as a real title.
-            if candidate and candidate != (data.get("url") or ""):
-                resolved_title = candidate
+            if _title_is_real(data):
+                # The tag says unresolved; the title says otherwise. A person
+                # fixed it by hand and left the tag behind. The tag is a CLAIM
+                # about the title, the title is the EVIDENCE, and trusting the
+                # claim overwrote real metadata with whatever the fetcher
+                # happened to return. Retire the stale claim, keep the evidence.
                 merged.discard(UNRESOLVED_TITLE_TAG)
+            else:
+                candidate = title_resolver()
+                # The fetcher returns the URL itself when it fails; only a
+                # different, non-empty string counts as a real title.
+                if candidate and candidate != (data.get("url") or ""):
+                    resolved_title = candidate
+                    merged.discard(UNRESOLVED_TITLE_TAG)
 
         if not to_add and resolved_title is None:
             return False
@@ -295,7 +321,7 @@ class ZoteroClient:
             )
         return True
 
-    def update_url(self, item_key: str, url: str) -> None:
+    def update_url(self, item_key: str, url: str) -> bool:
         """Correct the stored URL of an item.
 
         Needed because a URL truncated at capture time cannot be repaired by any
@@ -305,7 +331,11 @@ class ZoteroClient:
         """
         resp = self._client.get(f"/items/{item_key}")
         if resp.status_code == 404:
-            return  # already gone, idempotent
+            # NOT success. Returning None here read as "done" to repair, which
+            # then rewrote its SQLite row and counted a rewrite for an item that
+            # does not exist — an index entry claiming a corrected URL with
+            # nothing behind it.
+            return False
         if resp.status_code >= 400:
             raise ZoteroError(
                 f"GET /items/{item_key} failed: {resp.status_code} {resp.text}"
@@ -327,10 +357,13 @@ class ZoteroClient:
             json=payload,
             headers={"If-Unmodified-Since-Version": version},
         )
-        if resp.status_code not in (204, 404):
+        if resp.status_code == 404:
+            return False
+        if resp.status_code != 204:
             raise ZoteroError(
                 f"PATCH /items/{item_key} (url) failed: {resp.status_code} {resp.text}"
             )
+        return True
 
     def trash_item(self, item_key: str) -> None:
         """Move an item to the Zotero trash.
@@ -341,7 +374,11 @@ class ZoteroClient:
         """
         resp = self._client.get(f"/items/{item_key}")
         if resp.status_code == 404:
-            return  # already gone, idempotent
+            # NOT success. Returning None here read as "done" to repair, which
+            # then rewrote its SQLite row and counted a rewrite for an item that
+            # does not exist — an index entry claiming a corrected URL with
+            # nothing behind it.
+            return False
         if resp.status_code >= 400:
             raise ZoteroError(
                 f"GET /items/{item_key} failed: {resp.status_code} {resp.text}"
@@ -354,6 +391,8 @@ class ZoteroClient:
             json={"deleted": 1},
             headers={"If-Unmodified-Since-Version": version},
         )
+        if resp.status_code == 404:
+            return False
         if resp.status_code not in (204, 404):
             raise ZoteroError(
                 f"PATCH /items/{item_key} (trash) failed: "
@@ -363,7 +402,11 @@ class ZoteroClient:
     def delete_item(self, item_key: str) -> None:
         resp = self._client.get(f"/items/{item_key}")
         if resp.status_code == 404:
-            return  # already gone, idempotent
+            # NOT success. Returning None here read as "done" to repair, which
+            # then rewrote its SQLite row and counted a rewrite for an item that
+            # does not exist — an index entry claiming a corrected URL with
+            # nothing behind it.
+            return False
         if resp.status_code >= 400:
             raise ZoteroError(
                 f"GET /items/{item_key} failed: {resp.status_code} {resp.text}"
@@ -376,10 +419,18 @@ class ZoteroClient:
             f"/items/{item_key}",
             headers={"If-Unmodified-Since-Version": version},
         )
+        if resp.status_code == 404:
+            return False
         if resp.status_code not in (204, 404):
             raise ZoteroError(
                 f"DELETE /items/{item_key} failed: {resp.status_code} {resp.text}"
             )
+
+
+def _title_is_real(data: dict[str, Any]) -> bool:
+    """Whether the stored title is metadata rather than the URL fallback."""
+    title = (data.get("title") or "").strip()
+    return bool(title) and title != (data.get("url") or "").strip()
 
 
 def title_is_unresolved(data: dict[str, Any], tags: set[str]) -> bool:

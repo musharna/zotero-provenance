@@ -241,6 +241,20 @@ def release_url(
     return cursor.rowcount == 1
 
 
+def drop_row(db_path: Path, url_canonical: str) -> None:
+    """Forget a URL entirely, index row and queued tags together.
+
+    For the case where the Zotero item behind a row no longer exists. Unlike
+    release_url this does not care whether the row completed: a completed row
+    whose item a person deleted is exactly the row that has to go.
+    """
+    with closing(_connect(db_path)) as conn:
+        conn.execute("DELETE FROM url_index WHERE url_canonical = ?", (url_canonical,))
+        conn.execute(
+            "DELETE FROM pending_tags WHERE url_canonical = ?", (url_canonical,)
+        )
+
+
 def update_last_seen(db_path: Path, url_canonical: str, seen: date) -> None:
     with closing(_connect(db_path)) as conn:
         cursor = conn.execute(
