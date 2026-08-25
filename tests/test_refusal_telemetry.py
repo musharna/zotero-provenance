@@ -93,6 +93,8 @@ def test_health_does_not_count_a_refusal_as_a_capture(tmp_path: Path) -> None:
     warnings = evaluate(
         [good, refused],
         pinned_root="/c/0.15.0",
+        now=datetime(2026, 8, 25, 12, 0, tzinfo=tz),
+        window=timedelta(hours=24),
     )
 
     assert warnings, "a refusal was read as a successful capture"

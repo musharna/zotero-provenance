@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.18.0 — 2026-08-25
+
+The fourth audit found the same bug class it had found in the first, in a
+different place. That is the finding, and this release removes the class rather
+than the instance.
+
+Every defect this check has produced came from **cross-record inference** — one
+record's meaning depending on another:
+
+- a later successful capture "cleared" an earlier refusal, so one session's
+  activity declared another session's stranded hook recovered (verified: an
+  11:41 success erased an 11:40 refusal, and same-second appends lost their
+  order entirely)
+- an install timestamp scoped away stale writes, including one logged in the
+  same second as the install, because log stamps carry seconds and the registry
+  carries milliseconds
+- before that, an acknowledgement cursor suppressed by timestamp
+- before that, only the newest capture was examined at all
+
+Each fix corrected one instance and the mechanism produced the next. So now a
+record is judged only by its own contents, under two rules:
+
+- **Operational faults decay.** Refusals and capture errors are reported inside
+  a recency window. Timing a presence is sound; timing an absence is what failed
+  twice before, and nothing here does it.
+- **Integrity incidents do not.** A stale or unverifiable write stands until a
+  person acknowledges it with `--ack`. Nothing automatic clears it, because
+  nothing automatic knows whether the rows were checked — and a dead session's
+  bad write is still a bad row.
+
+- **A record with no pin evidence is not classified.** Found by running the new
+  check against the real log rather than by a test: it called eighteen correct
+  captures stale, because they predate the `pinned_root` field and were being
+  compared to today's pin. That was the same unsound inference, smuggled in
+  through a legacy fallback.
+
+- **The monitor no longer reads its own blindness as health.** Every `OSError`
+  on the log meant exit 0 and silence — permission denied, a directory in place
+  of the file, a failing disk. Only a *missing* log is healthy now. The bootstrap
+  event emitter also reports its own failure instead of swallowing it.
+
+- **The reader streams.** Materialising the whole log cost about 0.9 s and
+  ~294 MB at half a million records, which would eventually trip the hook's own
+  timeout and leave the monitor reporting nothing but its own failure. Peak
+  memory over a 500,000-record generator is now flat.
+
+- **Registry entries must be well-formed.** A malformed object (`{}` or
+  `{"installPath": 7}`) was silently skipped rather than refused, contradicting
+  the stated policy. And when two entries name the same root with different
+  `lastUpdated`, the newest is taken rather than whichever was serialised first.
+
 ## 0.17.0 — 2026-08-25
 
 A third audit. The pattern across all three is now the point: every fix to the

@@ -13,14 +13,18 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from zotero_capture.config import _state_dir  # noqa: E402
-from zotero_capture.health import evaluate  # noqa: E402
+from zotero_capture.health import evaluate, incident_keys  # noqa: E402
 from zotero_capture.registry import resolve_pinned  # noqa: E402
+
+ACK_FILE = "health-acknowledged"
+DEFAULT_WINDOW_HOURS = 24.0
+
 
 def _installed() -> tuple[str | None, datetime | None]:
     """Where the plugin manager points, and when it last pointed somewhere new.
@@ -38,22 +42,68 @@ def _installed() -> tuple[str | None, datetime | None]:
     return (str(root) if root else None), when
 
 
-def main() -> int:
-    log = _state_dir(os.environ) / "capture.log"
+def _window() -> timedelta:
+    raw = os.environ.get("ZOTERO_CAPTURE_HEALTH_WINDOW_HOURS")
     try:
-        lines = log.read_text(errors="replace").splitlines()
+        hours = float(raw) if raw else DEFAULT_WINDOW_HOURS
+    except ValueError:
+        hours = DEFAULT_WINDOW_HOURS
+    return timedelta(hours=max(hours, 0.0))
+
+
+def _acknowledged(state: Path) -> frozenset[str]:
+    try:
+        return frozenset(
+            line.strip()
+            for line in (state / ACK_FILE).read_text().splitlines()
+            if line.strip()
+        )
+    except FileNotFoundError:
+        return frozenset()
     except OSError:
+        # Unreadable is not empty. Saying "nothing acknowledged" would re-report
+        # incidents the user has already handled, which trains them to ignore it.
+        raise
+
+
+def _read_log(state: Path) -> list[str]:
+    """The log's lines, or [] only when there is genuinely no log yet.
+
+    Every OSError used to mean "return 0 and print nothing", which made a
+    permission error, a directory in place of the file, or a failing disk
+    indistinguishable from a clean bill of health. A monitor that cannot reach
+    its evidence is not healthy; only a missing file is.
+    """
+    try:
+        with (state / "capture.log").open("r", errors="replace") as handle:
+            return handle.read().splitlines()
+    except FileNotFoundError:
+        return []
+
+
+def main() -> int:
+    state = _state_dir(os.environ)
+    ack_mode = "--ack" in sys.argv[1:]
+    lines = _read_log(state)
+    pinned, _installed_at = _installed()
+
+    if ack_mode:
+        keys = incident_keys(lines, pinned_root=pinned)
+        state.mkdir(parents=True, exist_ok=True)
+        (state / ACK_FILE).write_text("".join(f"{key}\n" for key in sorted(keys)))
+        print(f"zotero-provenance: acknowledged {len(keys)} integrity incident(s)")
         return 0
 
-    pinned, installed_at = _installed()
-    warnings = evaluate(lines, pinned_root=pinned, installed_at=installed_at)
+    warnings = evaluate(
+        lines,
+        pinned_root=pinned,
+        now=datetime.now().astimezone(),
+        window=_window(),
+        acknowledged=_acknowledged(state),
+    )
     if not warnings:
         return 0
 
-    # No cursor is written, deliberately. A timestamp cursor could not be made
-    # race-safe on one-second stamps, and it suppressed records it had never
-    # actually classified. Scope replaces state: these warnings describe the
-    # generation now installed, and an upgrade retires them.
     print("zotero-provenance: capture may not be working")
     for warning in warnings:
         print(f"  - {warning}")
@@ -66,12 +116,7 @@ if __name__ == "__main__":
     except SystemExit:
         raise
     except Exception:
-        # A crashed monitor is UNHEALTHY, and must not look like a quiet one.
-        # This used to exit 0 after writing to a stderr the hook discards, so an
-        # internal fault was byte-identical to a clean bill of health — the very
-        # failure class this check exists to report. The traceback goes to the
-        # caller's stderr, which the hook diverts to a log; the hook turns the
-        # non-zero exit into one stable sentence.
+        # A crashed monitor is UNHEALTHY and must not look like a quiet one.
         import traceback
 
         traceback.print_exc()

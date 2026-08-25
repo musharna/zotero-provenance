@@ -84,9 +84,12 @@ case "$ZP_MINE" in
 		ZP_SEEN="" ZP_COUNT=0
 		if ZP_RAW="$(jq -r --arg k "${ZP_PLUGIN}@${ZP_MARKET}" '
 			((.plugins // {}) | if type == "object" then .[$k] else null end) // []
-			| if (type == "array") and (all(.[]; type == "object"))
+			| if (type == "array")
+			     and (all(.[]; (type == "object")
+			                   and (.installPath | type == "string")
+			                   and (.installPath != "")))
 			  then .[] else empty end
-			| .installPath | select(type == "string" and . != "")' "$ZP_REG" 2>/dev/null)"; then
+			| .installPath' "$ZP_REG" 2>/dev/null)"; then
 			while IFS= read -r ZP_CAND; do
 				[[ -n "$ZP_CAND" ]] || continue
 				ZP_CAND="$(cd "$ZP_CAND" 2>/dev/null && pwd -P)" || continue
