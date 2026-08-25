@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.14.0 — 2026-08-25
+
+The plugin can now tell you it is broken.
+
+Every serious failure this plugin has had was silent. A v0.3.0 root wrote junk
+into the library for weeks. Capture stopped completely for 29 hours. Both were
+found by an audit, not by the plugin noticing anything was wrong. `staleness.py`
+has stated the principle since 0.11.7 — "loud absence beats quiet corruption" —
+but nothing was ever watching for the absence, so the corruption stayed quiet.
+
+- **A `SessionStart` health check.** It reads the capture log and speaks when,
+  and only when, one of four things is true: the last capture ran from a plugin
+  root that is not the installed one; refusal events have been recorded since
+  the last successful capture; nothing has been captured for longer than the
+  silence threshold (24 h, `ZOTERO_CAPTURE_MAX_SILENCE_HOURS`); or the last
+  capture reported errors.
+
+  It reads what the log has carried since 0.12.0 rather than adding new
+  bookkeeping, so it can answer for the past as well as the present. Verified
+  against a replay of the actual 2026-08-25 outage: it reports the stale root,
+  the 91 refusals, and the 29-hour gap.
+
+- **Silence is the requirement, not a nicety.** On a healthy session it prints
+  nothing. A check that speaks when things are fine gets tuned out, and a
+  tuned-out check is worse than none — which is precisely how the measurement
+  canary printed its warning for four consecutive releases without anyone acting
+  on it. The silence test is the most important one in the suite and the one
+  most likely to rot, so it is named as such.
+
+- **It cannot break a session start.** No credentials are loaded, since
+  requiring a working config would silence the check in some of the cases it
+  exists to report. Every path exits 0. `ZOTERO_CAPTURE_HEALTH_DISABLE=1` turns
+  it off without touching capture.
+
+- **No trampoline on this hook, deliberately.** Unlike the capture hooks, it
+  reads the log and the registry — both global rather than per-root — so a
+  superseded copy reaches the same conclusion as a current one, and it never
+  writes to the library.
+
 ## 0.13.0 — 2026-08-25
 
 A superseded plugin root now delegates to the installed one instead of refusing.
