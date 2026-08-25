@@ -228,13 +228,29 @@ lookup and the connection — a rebinding attack — is not covered.
 python3 -m pytest -q
 ```
 
-280 tests run by default and need no network. The 10 live ones are opted _into_
+493 tests run by default and need no network. The 10 live ones are opted _into_
 with `-m live` rather than out of — `addopts = -m "not live"` is set, because
 they used to run on a bare `pytest -q` and reach the internet despite this
 section promising otherwise. The hook tests execute the real shell scripts as
 subprocesses; the end-to-end tests run the real hook and CLI against a local HTTP
 server standing in for the Zotero API, so only the remote service is stubbed.
-Live Zotero tests additionally need `RUN_LIVE_ZOTERO=1` and credentials.
+
+To run every live test, including the two that write to Zotero:
+
+```bash
+set -a; . ~/.config/zotero-provenance/secrets.env; set +a
+RUN_LIVE_ZOTERO=1 \
+ZOTERO_WEBSOURCES_COLLECTION_KEY_TEST=<a throwaway collection key> \
+  python3 -m pytest -m live -q
+```
+
+Both write into that **separate** collection and delete after themselves, so
+they never touch `web-sources`. Two variables gate them rather than one, and
+without the collection key they SKIP — which is how one of them sat broken and
+unnoticed: its URL had been switched to the non-resolving fixture host during a
+cleanup while its assertion still expected the real page's title. A skipped test
+reports the same green as a passing one. Run these after any change to title
+fetching or the Zotero client.
 
 ## License
 

@@ -400,7 +400,14 @@ def test_live_unresolved_title_is_reenriched(live_zotero_creds: dict[str, str]):
     if not coll_key:
         pytest.skip("ZOTERO_WEBSOURCES_COLLECTION_KEY_TEST not set")
 
-    url = "https://fixturehost.org/"
+    # A REAL page, deliberately. Every other test in this file uses
+    # fixturehost.org precisely because it does not resolve — but this one's
+    # whole purpose is to drive an actual HTTP fetch, so a non-resolving host
+    # makes it assert something impossible. It did: the URL was switched to
+    # fixturehost.org during a fixture cleanup and the "Example Domain"
+    # assertion was left behind, which nobody saw because the test is gated
+    # behind ZOTERO_WEBSOURCES_COLLECTION_KEY_TEST and had never once run.
+    url = "https://example.com/"
     probe_tag = "context:test-reenrich"
     client = ZoteroClient(
         api_key=live_zotero_creds["api_key"],
