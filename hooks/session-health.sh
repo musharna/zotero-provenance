@@ -21,6 +21,28 @@ set -uo pipefail
 [[ "${ZOTERO_CAPTURE_DISABLE:-}" == "1" ]] && exit 0
 [[ "${ZOTERO_CAPTURE_HEALTH_DISABLE:-}" == "1" ]] && exit 0
 
+# One place that turns "the monitor could not even start" into a visible line.
+# Missing jq, a corrupt lib.sh and an absent interpreter all used to exit 0 in
+# silence — and the missing-jq case was the worst of them: no health hook could
+# resolve a target, so nothing remained able to report the forward-unresolved
+# events the capture hooks were writing. A monitor that vanishes quietly is the
+# failure this whole feature exists to catch.
+zp_health_bootstrap_failed() {
+	local detail="$1"
+	local log="${ZOTERO_CAPTURE_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/zotero-provenance}/health-errors.log"
+	mkdir -p "${log%/*}" 2>/dev/null || true
+	printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$detail" >>"$log" 2>/dev/null || true
+	printf 'zotero-provenance: the health check could not run (%s); see %s\n' "$detail" "$log"
+	exit 0
+}
+
+# The health hook's version of the same seam. This one SPEAKS: a monitor that
+# cannot start is unhealthy, and staying quiet about it is the failure class the
+# monitor exists to report.
+zp_tramp_refuse() {
+	zp_health_bootstrap_failed "$1"
+}
+
 # --- trampoline: a superseded root delegates instead of refusing ---------------
 # A session keeps whichever plugin root it resolved at its own start and cannot
 # be made to re-resolve without restarting. This SCRIPT, though, is re-read from
@@ -78,20 +100,31 @@ case "$ZP_MINE" in
 		# Each candidate is canonicalised BEFORE they are compared. Deduping raw
 		# strings made two spellings of one root ("/p/1" and "/p/1/../1") look
 		# like two candidates, and the ambiguity rule then refused every capture.
+		# jq's OUTPUT is captured and its EXIT STATUS checked, rather than
+		# streamed through process substitution — bash cannot see a producer's
+		# status there. With a valid entry followed by a malformed one, jq printed
+		# the good path and then exited 5, the loop counted one candidate and
+		# accepted it; reversing the entries refused. That made resolution depend
+		# on serialisation order again, which is the exact class of bug that
+		# started this sequence. Entries are type-checked in jq for the same reason.
 		ZP_SEEN="" ZP_COUNT=0
-		while IFS= read -r ZP_CAND; do
-			[[ -n "$ZP_CAND" ]] || continue
-			ZP_CAND="$(cd "$ZP_CAND" 2>/dev/null && pwd -P)" || continue
-			[[ -n "$ZP_CAND" ]] || continue
-			case "$ZP_SEEN" in
-			*"|$ZP_CAND|"*) continue ;;
-			esac
-			ZP_SEEN="$ZP_SEEN|$ZP_CAND|"
-			ZP_TARGET="$ZP_CAND"
-			ZP_COUNT=$((ZP_COUNT + 1))
-		done < <(jq -r --arg k "${ZP_PLUGIN}@${ZP_MARKET}" '
+		if ZP_RAW="$(jq -r --arg k "${ZP_PLUGIN}@${ZP_MARKET}" '
 			((.plugins // {}) | if type == "object" then .[$k] else null end) // []
-			| .[]? | .installPath // empty | select(. != "")' "$ZP_REG" 2>/dev/null)
+			| if (type == "array") and (all(.[]; type == "object"))
+			  then .[] else empty end
+			| .installPath | select(type == "string" and . != "")' "$ZP_REG" 2>/dev/null)"; then
+			while IFS= read -r ZP_CAND; do
+				[[ -n "$ZP_CAND" ]] || continue
+				ZP_CAND="$(cd "$ZP_CAND" 2>/dev/null && pwd -P)" || continue
+				[[ -n "$ZP_CAND" ]] || continue
+				case "$ZP_SEEN" in
+				*"|$ZP_CAND|"*) continue ;;
+				esac
+				ZP_SEEN="$ZP_SEEN|$ZP_CAND|"
+				ZP_TARGET="$ZP_CAND"
+				ZP_COUNT=$((ZP_COUNT + 1))
+			done <<<"$ZP_RAW"
+		fi
 		# One unambiguous root, or nothing. Two that disagree refuse rather than
 		# guess: guessing is what put an unverified path on the exec line.
 		((ZP_COUNT == 1)) || ZP_TARGET=""
@@ -106,13 +139,11 @@ case "$ZP_MINE" in
 		# are the ones a later release has already corrected.
 		if [[ -n "${ZP_FORWARDED_FROM:-}" ]]; then
 			zp_tramp_log "forward-loop-refused" "${ZP_FORWARDED_FROM}"
-			cat >/dev/null
-			exit 0
+			zp_tramp_refuse "a forward returned to a superseded root"
 		fi
 		if [[ -z "$ZP_TARGET" || ! -f "$ZP_TARGET/hooks/$ZP_SELF" ]]; then
 			zp_tramp_log "forward-unresolved" "${ZP_TARGET:-none}"
-			cat >/dev/null
-			exit 0
+			zp_tramp_refuse "cannot resolve the installed plugin root"
 		fi
 		export ZP_FORWARDED_FROM="$ZP_MINE"
 		exec bash "$ZP_TARGET/hooks/$ZP_SELF"
@@ -122,10 +153,10 @@ esac
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
-source "$HOOK_DIR/lib.sh" 2>/dev/null || exit 0
+source "$HOOK_DIR/lib.sh" 2>/dev/null || zp_health_bootstrap_failed "lib.sh is missing or unreadable"
 
 PY_BIN="$(zp_python)"
-[[ -x "$PY_BIN" || -n "$(command -v "$PY_BIN")" ]] || exit 0
+[[ -x "$PY_BIN" || -n "$(command -v "$PY_BIN")" ]] || zp_health_bootstrap_failed "no usable python3 ($PY_BIN)"
 
 # Diagnostics go to a log, never into the session; a non-zero exit becomes one
 # stable sentence. Discarding stderr and exiting 0 made an internal crash

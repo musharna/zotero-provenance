@@ -141,28 +141,27 @@ credentials come from the secrets file.
 ### The health check
 
 Every serious failure this plugin has had was silent: a superseded root wrote
-junk for weeks, and capture stopped dead for 29 hours. Both were found by an
-audit rather than by the plugin noticing. A `SessionStart` hook now reads the
-capture log and says something when — and only when — one of three things is
-true:
+junk for weeks, and capture stopped dead for 29 hours. A `SessionStart` hook now
+reads the capture log and speaks when — and only when — one of these is true:
 
 - a capture ran from a plugin root that was not the installed one **at the time
-  it wrote** (each record carries the pin it observed, so this survives later
-  upgrades and needs no registry to interpret)
-- refusals have been recorded since the last successful capture, whether from
-  the hooks or from a capture that declined to write
+  it wrote** (each record carries the pin it observed, so it needs no registry
+  to interpret and no later state can revise it)
+- a capture wrote while the installed root **could not be verified** — reported
+  as its own thing, because unknown is not the same as stale
+- refusals since the last successful capture, including configuration and
+  bootstrap errors that stop capture before it starts
 - the last capture reported errors
 
-The first is reported **once**, against an acknowledgement cursor, and it claims
-only that a stale write occurred — not that a session is still executing, which
-a log line cannot prove. Two earlier designs were removed for lying in opposite
-directions: elapsed-time silence warned after any ordinary weekend, and counting
-hook fires chattered after roughly a hundred turns that happened to cite nothing.
+Incidents are scoped to the running version rather than acknowledged: they are
+reported while they still describe the generation now installed, and an upgrade
+retires them. Nothing is stored, so nothing can be lost — an acknowledgement
+cursor could not be made race-safe against one-second timestamps.
 
-On a healthy session it prints nothing at all. That is the point: a check that
-speaks when things are fine gets tuned out. If the check itself fails, it says
-so in one line and writes the detail to `health-errors.log` — a crashed monitor
-is unhealthy, and must not be mistaken for a quiet one. Run it by hand with
+On a healthy session it prints nothing. If the check itself cannot run — no
+`jq`, no `lib.sh`, no interpreter, or an internal crash — it says so in one line
+and writes the detail to `health-errors.log`. A monitor that vanishes quietly is
+the failure this feature exists to catch. Run it by hand with
 `python3 scripts/zotero_capture_health.py`.
 
 ## What is not captured

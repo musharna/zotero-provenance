@@ -404,3 +404,31 @@ def test_equivalent_spellings_are_one_candidate_not_two(tmp_path: Path, hook: st
 
     assert proc.returncode == 0, proc.stderr
     assert _appears(argv_out), f"two spellings of one root refused; {proc.stderr!r}"
+
+
+@requires_jq
+@pytest.mark.parametrize("order", ["valid-first", "valid-last"])
+@pytest.mark.parametrize("hook", HOOKS)
+def test_a_failing_jq_does_not_yield_a_usable_candidate(
+    tmp_path: Path, hook: str, order: str
+) -> None:
+    """Process substitution hides the producer's exit status.
+
+    With a valid entry followed by a malformed one, jq printed the good path and
+    THEN exited 5; the loop saw exactly one candidate and accepted it. Reverse
+    the entries and it refused. Registry resolution was serialisation-order
+    dependent again — the same class as the first-prefix-match bug that started
+    this whole sequence. The answer must not depend on entry order.
+    """
+    setup = _install(tmp_path, mine="0.9.0", pinned="1.0.0", hook=hook)
+    home = setup["home"]
+    argv_out = _fake_python(tmp_path)
+    good = {"scope": "user", "installPath": str(home / CACHE_REL / "1.0.0")}
+    entries = [good, "bad-entry"] if order == "valid-first" else ["bad-entry", good]
+    _write_registry(home, {"zotero-provenance@zotero-provenance": entries})
+
+    proc = _run(setup["hook"], _env(tmp_path, home), _payload())
+
+    assert proc.returncode == 0, proc.stderr
+    assert _stays_absent(setup["marker"]), f"accepted a candidate from a failed jq ({order})"
+    assert _stays_absent(argv_out), "captured from a superseded root"

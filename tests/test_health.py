@@ -47,14 +47,8 @@ def _event(ts: str, event: str) -> str:
     return json.dumps({"ts": ts, "event": event, "self": "/old/root"})
 
 
-def _check(
-    lines, *, pinned: str | None = PINNED, now=NOW, installed_at=None,
-    acknowledged_before=None,
-):
-    return evaluate(
-        lines, pinned_root=pinned, now=now, installed_at=installed_at,
-        acknowledged_before=acknowledged_before,
-    )
+def _check(lines, *, pinned: str | None = PINNED, installed_at=None):
+    return evaluate(lines, pinned_root=pinned, installed_at=installed_at)
 
 
 # --- the requirement that matters most ----------------------------------------
@@ -365,35 +359,6 @@ def test_the_warning_does_not_claim_a_session_is_live() -> None:
     assert "occurred" in warnings[0], warnings
 
 
-def test_an_acknowledged_incident_is_not_repeated() -> None:
-    """Otherwise the first stale write in production complains at every start."""
-    stale = "/home/u/.claude/plugins/cache/zotero-provenance/zotero-provenance/0.3.0"
-    tz = timezone(timedelta(hours=-4))
-    lines = [_capture("2026-08-25T11:40:00-04:00", root=stale)]
-    ack = datetime(2026, 8, 25, 11, 45, tzinfo=tz)
-
-    assert _check(lines, installed_at=datetime(2026, 8, 25, 11, 30, tzinfo=tz)) != []
-    assert _check(
-        lines, installed_at=datetime(2026, 8, 25, 11, 30, tzinfo=tz),
-        acknowledged_before=ack,
-    ) == []
-
-
-def test_a_newer_incident_after_an_acknowledgement_is_reported() -> None:
-    stale = "/home/u/.claude/plugins/cache/zotero-provenance/zotero-provenance/0.3.0"
-    tz = timezone(timedelta(hours=-4))
-    lines = [
-        _capture("2026-08-25T11:40:00-04:00", root=stale),
-        _capture("2026-08-25T11:50:00-04:00", root=stale),
-    ]
-
-    warnings = _check(
-        lines,
-        installed_at=datetime(2026, 8, 25, 11, 30, tzinfo=tz),
-        acknowledged_before=datetime(2026, 8, 25, 11, 45, tzinfo=tz),
-    )
-
-    assert warnings, "a new stale write after the acknowledgement was swallowed"
 
 
 def test_a_self_describing_record_is_read_without_the_registry() -> None:
@@ -430,3 +395,72 @@ def test_a_huge_refusal_count_is_capped_in_the_message() -> None:
 
     assert warnings
     assert len(warnings[0]) < 400, warnings
+
+
+def test_a_stale_incident_repeats_while_it_is_still_current() -> None:
+    """No cursor: the report is not one-shot, it is scoped to this install.
+
+    A timestamp cursor could not be made race-safe — log stamps carry one-second
+    precision, so a record appended in the same second as the acknowledgement
+    was dropped forever — and it advanced past records that were not part of the
+    warning at all, suppressing them once they became classifiable. Both faults
+    were in machinery added to stop chatter.
+
+    Repetition is the honest behaviour here: while a stale write since the
+    current install exists, an old session is probably still running.
+    """
+    stale = "/home/u/.claude/plugins/cache/zotero-provenance/zotero-provenance/0.3.0"
+    installed = datetime(2026, 8, 25, 11, 30, tzinfo=timezone(timedelta(hours=-4)))
+    lines = [_capture("2026-08-25T11:40:00-04:00", root=stale)]
+
+    first = _check(lines, installed_at=installed)
+    second = _check(lines, installed_at=installed)
+
+    assert first and second == first, (first, second)
+
+
+def test_a_stale_write_from_before_this_install_is_not_reported() -> None:
+    """Upgrading resets the slate: that generation has already been superseded."""
+    stale = "/home/u/.claude/plugins/cache/zotero-provenance/zotero-provenance/0.3.0"
+    installed = datetime(2026, 8, 25, 11, 30, tzinfo=timezone(timedelta(hours=-4)))
+    lines = [_capture("2026-08-25T10:00:00-04:00", root=stale)]
+
+    assert _check(lines, installed_at=installed) == []
+
+
+def test_a_capture_that_could_not_verify_its_pin_is_its_own_warning() -> None:
+    """Not stale, but not health either — say which, rather than nothing."""
+    line = json.dumps(
+        {
+            "ts": "2026-08-25T11:40:00-04:00",
+            "version": "0.3.0",
+            "root": "/c/0.3.0",
+            "pin_observation": "unknown",
+            "urls_seen": 1,
+            "urls_new": 1,
+            "errors": [],
+        }
+    )
+    installed = datetime(2026, 8, 25, 11, 30, tzinfo=timezone(timedelta(hours=-4)))
+
+    warnings = _check([line], installed_at=installed)
+
+    assert len(warnings) == 1, warnings
+    assert "verif" in warnings[0], warnings
+    assert "stale" not in warnings[0].lower(), warnings
+
+
+def test_a_configuration_error_is_visible() -> None:
+    """A credential-less install failed on every URL, forever, in silence."""
+    line = json.dumps(
+        {
+            "ts": "2026-08-25T11:40:00-04:00",
+            "event": "configuration-error",
+            "detail": "missing required environment variable(s): ZOTERO_API_KEY",
+        }
+    )
+
+    warnings = _check([line])
+
+    assert warnings, "a configuration error produced no warning"
+    assert "configuration-error" in warnings[0], warnings

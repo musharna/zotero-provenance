@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.17.0 — 2026-08-25
+
+A third audit. The pattern across all three is now the point: every fix to the
+health check bought a new failure mode, because each one added machinery to
+suppress the previous one's noise. This release removes the machinery instead.
+
+- **The acknowledgement cursor is gone.** It was added in 0.16.0 so a stale-write
+  incident would be reported once. It could not be made race-safe: log stamps
+  carry one-second precision, so a record appended in the same second as the
+  acknowledgement was dropped **permanently** — and concurrent sessions make
+  same-second writes ordinary. It also advanced past records it had never
+  classified, so a legacy record that became provable later was suppressed
+  forever.
+
+  Scope replaces state. An incident is reported while it still describes the
+  generation now installed, and an upgrade retires it. Nothing is stored, so
+  nothing can be lost. This does mean a stale write from before the current
+  install is not reported — accepted, because it is self-correcting for the case
+  that can still be acted on: a session still alive writes again, and that write
+  is reported.
+
+- **A capture that could not verify its pin is its own warning.** 0.16.0 wrote
+  `pin_observation: "unknown"` and read it nowhere, so a record that explicitly
+  disclaimed knowledge was judged by the legacy clock and produced a positive
+  stale warning. It is now neither stale nor silent.
+
+- **Configuration and bootstrap failures reach the log as events.** A missing
+  credential wrote one plaintext line, which the health parser drops for not
+  being JSON — so a fresh install with no API key could fail on every cited URL
+  forever without a word. `configuration-error` and `capture-bootstrap-error`
+  are now structured, written through a state directory that resolves without
+  credentials, which is the point.
+
+- **The health hook says when it cannot start.** Missing `jq`, a corrupt
+  `lib.sh` and an absent interpreter all exited 0 in silence. The `jq` case was
+  the worst: no health hook could resolve a target, so nothing was left able to
+  report the `forward-unresolved` events the capture hooks were writing.
+
+- **`jq`'s exit status is checked.** Process substitution hides it. With a valid
+  entry followed by a malformed one, `jq` printed the good path and then exited
+  5; the loop counted one candidate and accepted it. Reversing the entries
+  refused. Resolution was serialisation-order dependent again — the same class
+  as the first-prefix-match bug that started this sequence. A malformed entry
+  anywhere in the array now refuses outright.
+
+- **The three inline trampolines are held byte-identical by a test.** Inlining
+  is still right at runtime, but three copies of the arithmetic that decides
+  what gets `exec`'d will drift. The per-hook difference now lives in one named
+  seam. The parity test found drift on its first run.
+
 ## 0.16.0 — 2026-08-25
 
 A second audit, of the fixes from the first. Seven findings; the health check
