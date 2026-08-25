@@ -23,7 +23,7 @@ from pathlib import Path
 
 from zotero_capture.capture import CaptureResult
 from zotero_capture.cli import _emit_log
-from zotero_capture.health import evaluate
+from zotero_capture.health import evaluate as _evaluate
 
 TZ = timezone(timedelta(hours=-4))
 
@@ -58,31 +58,6 @@ def test_the_log_line_carries_the_pinned_root(tmp_path: Path) -> None:
     assert record.get("pinned_root") == "/c/0.15.0", record
 
 
-def test_an_upgrade_retires_a_stale_write_from_the_previous_generation() -> None:
-    """This REVERSES an earlier fix, deliberately, and the reason matters.
-
-    0.15.0 made a stale write stay visible across upgrades, because
-    `installed_at` was being used to JUDGE staleness and an upgrade therefore
-    forgave real evidence. Records now carry the pin they observed, so they
-    judge themselves — `installed_at` only decides whether an incident still
-    describes the generation now running.
-
-    A pre-upgrade stale write is therefore not reported. That is a genuine
-    reduction in coverage, and it is accepted because it is self-correcting for
-    the case that can still be acted on: if the offending session is still
-    alive, its NEXT write produces a fresh incident after the install and is
-    reported. Only a dead session's historical write goes unmentioned, and by
-    then there is nothing left to do about it.
-    """
-    stale_then = _line("2026-08-24T10:00:00-04:00", "/c/0.3.0", "/c/0.13.0")
-    warnings = evaluate(
-        [stale_then],
-        pinned_root="/c/0.15.0",
-        installed_at=datetime(2026, 8, 25, 11, 30, tzinfo=TZ),
-    )
-
-    assert warnings == [], warnings
-
 
 def test_a_write_that_was_current_at_the_time_stays_quiet() -> None:
     """The legitimate case: it agreed with the registry when it ran."""
@@ -95,17 +70,6 @@ def test_a_write_that_was_current_at_the_time_stays_quiet() -> None:
 
     assert warnings == [], warnings
 
-
-def test_records_without_the_field_fall_back_to_the_install_clock() -> None:
-    """Every line written before 0.15.0 lacks it; they must still be readable."""
-    old = _line("2026-08-24T10:00:00-04:00", "/c/0.3.0", None)
-    warnings = evaluate(
-        [old],
-        pinned_root="/c/0.15.0",
-        installed_at=datetime(2026, 8, 25, 11, 30, tzinfo=TZ),
-    )
-
-    assert warnings == [], warnings
 
 
 def test_the_pin_is_observed_before_the_capture_not_after(tmp_path: Path) -> None:
@@ -224,3 +188,12 @@ def test_a_resolved_pin_still_decides_normally() -> None:
     )
 
     assert warnings, "the stale signal stopped working entirely"
+
+
+WINDOW = timedelta(hours=24)
+_NOW = datetime(2026, 8, 25, 12, 0, tzinfo=TZ)
+
+
+def evaluate(lines, *, pinned_root, installed_at=None):
+    """Shim: 0.18.0 dropped `installed_at` (see test_no_cross_record_inference)."""
+    return _evaluate(lines, pinned_root=pinned_root, now=_NOW, window=WINDOW)

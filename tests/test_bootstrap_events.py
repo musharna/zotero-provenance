@@ -65,7 +65,14 @@ def test_the_event_is_visible_to_the_health_check(tmp_path, monkeypatch) -> None
 
     main(["--cwd", "/tmp", "--session", "s", "--message", "see https://x.test/a"])
 
-    warnings = evaluate(_log(tmp_path).read_text().splitlines(), pinned_root=None)
+    from datetime import datetime, timedelta
+
+    warnings = evaluate(
+        _log(tmp_path).read_text().splitlines(),
+        pinned_root=None,
+        now=datetime.now().astimezone(),
+        window=timedelta(hours=24),
+    )
 
     assert warnings, "the health check still could not see a broken install"
     assert "configuration-error" in warnings[0], warnings

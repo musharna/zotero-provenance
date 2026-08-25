@@ -27,12 +27,19 @@ PINNED = "/home/u/.claude/plugins/cache/zotero-provenance/zotero-provenance/0.13
 DEFAULT_SILENCE = timedelta(hours=24)
 
 
-def _capture(ts: str, *, root: str = PINNED, errors=None, urls_new: int = 1) -> str:
+def _capture(
+    ts: str, *, root: str = PINNED, errors=None, urls_new: int = 1,
+    pinned: str | None = PINNED,
+) -> str:
+    """A capture record. Carries `pinned_root` by default: without pin evidence
+    a record cannot be classified at all, which is deliberate but would make
+    these fixtures test nothing."""
     return json.dumps(
         {
             "ts": ts,
             "version": "0.13.0",
             "root": root,
+            **({"pinned_root": pinned} if pinned else {}),
             "project": "demo",
             "urls_seen": 1,
             "urls_new": urls_new,
@@ -47,8 +54,14 @@ def _event(ts: str, event: str) -> str:
     return json.dumps({"ts": ts, "event": event, "self": "/old/root"})
 
 
+WINDOW = timedelta(hours=24)
+
+
 def _check(lines, *, pinned: str | None = PINNED, installed_at=None):
-    return evaluate(lines, pinned_root=pinned, installed_at=installed_at)
+    # `installed_at` is accepted and ignored: generation scoping was removed in
+    # 0.18.0 because it was an externally-advanced cursor that dropped incidents
+    # nobody had seen. Kept in the signature so these tests read unchanged.
+    return evaluate(lines, pinned_root=pinned, now=NOW, window=WINDOW)
 
 
 # --- the requirement that matters most ----------------------------------------
@@ -84,20 +97,6 @@ def test_reports_a_capture_written_from_an_unpinned_root() -> None:
     assert len(warnings) == 1
     assert "0.3.0" in warnings[0], warnings
 
-
-def test_a_stale_root_capture_from_before_the_upgrade_is_not_reported() -> None:
-    """The false alarm every release would otherwise fire.
-
-    Right after `claude plugin update`, the most recent capture legitimately came
-    from the previous root — it happened before the new one was pinned. Reporting
-    that as "executing superseded code" would make the check cry wolf on every
-    single release, which is the fastest way to get it ignored.
-    """
-    stale = "/home/u/.claude/plugins/cache/zotero-provenance/zotero-provenance/0.12.0"
-    captured = "2026-08-25T11:00:00-04:00"
-    installed = datetime(2026, 8, 25, 11, 30, tzinfo=timezone(timedelta(hours=-4)))
-
-    assert _check([_capture(captured, root=stale)], installed_at=installed) == []
 
 
 def test_a_later_good_capture_does_not_hide_an_earlier_stale_one() -> None:
@@ -151,11 +150,11 @@ def test_a_stale_root_capture_after_the_upgrade_is_reported() -> None:
     assert "0.12.0" in warnings[0], warnings
 
 
-def test_reports_refusals_recorded_since_the_last_capture() -> None:
+def test_reports_recent_refusals() -> None:
     lines = [
-        _capture("2026-08-25T09:00:00-04:00"),
-        _event("2026-08-25T10:00:00-04:00", "stale-root-refused"),
-        _event("2026-08-25T10:05:00-04:00", "forward-unresolved"),
+        _capture("2026-08-25T11:50:00-04:00"),
+        _event("2026-08-25T11:00:00-04:00", "stale-root-refused"),
+        _event("2026-08-25T11:05:00-04:00", "forward-unresolved"),
     ]
     warnings = _check(lines)
 
@@ -163,14 +162,6 @@ def test_reports_refusals_recorded_since_the_last_capture() -> None:
     assert "2" in warnings[0], warnings
     assert "stale-root-refused" in warnings[0], warnings
 
-
-def test_ignores_refusals_that_predate_the_last_capture() -> None:
-    """Old refusals that were already resolved are not news."""
-    lines = [
-        _event("2026-08-25T09:00:00-04:00", "stale-root-refused"),
-        _capture("2026-08-25T11:00:00-04:00"),
-    ]
-    assert _check(lines) == []
 
 
 def test_a_long_quiet_stretch_alone_is_not_reported() -> None:
@@ -208,12 +199,15 @@ def test_an_unknown_pinned_root_does_not_trigger_a_root_warning() -> None:
 def test_several_problems_are_all_reported() -> None:
     stale = "/home/u/.claude/plugins/cache/zotero-provenance/zotero-provenance/0.3.0"
     lines = [
+        # An old integrity incident — these do NOT decay...
         _capture("2026-08-23T11:00:00-04:00", root=stale),
-        _event("2026-08-24T09:00:00-04:00", "stale-root-refused"),
+        # ...and a recent operational fault, which does.
+        _event("2026-08-25T11:00:00-04:00", "stale-root-refused"),
     ]
     warnings = _check(lines)
 
-    # Two, not three: elapsed time is no longer a signal on its own.
+    # Stale write + refusals. Elapsed time is not a signal; nothing clears the
+    # refusal, and the stale incident stands until acknowledged.
     assert len(warnings) == 2, warnings
 
 
@@ -270,7 +264,8 @@ def test_hook_is_silent_on_a_healthy_log(tmp_path: Path) -> None:
     from zotero_capture_health import _installed
 
     pinned = _installed()[0] or PINNED
-    _write_log(state, [_recent(0.1, root=pinned)])
+    # Both fields must agree, or the record describes itself as stale.
+    _write_log(state, [_recent(0.1, root=pinned, pinned=pinned)])
 
     proc = _run_hook(state)
 
@@ -291,9 +286,10 @@ def test_hook_reports_the_outage_shape(tmp_path: Path) -> None:
     proc = _run_hook(state)
 
     assert proc.returncode == 0, proc.stderr
+    # The refusal is 2h old (inside the window); the stale write stands until
+    # acknowledged. Neither is an elapsed-time claim about absence.
     assert "refusal" in proc.stdout, proc.stdout
-    # No elapsed-time claim: a 29-hour gap is not itself evidence of a fault.
-    assert "hours" not in proc.stdout, proc.stdout
+    assert "no successful capture in" not in proc.stdout, proc.stdout
     # The stale-ROOT signal is deliberately absent here: against the real
     # registry this capture predates the installed-at timestamp, so it cannot
     # be distinguished from a capture that merely happened before an upgrade.
@@ -356,7 +352,7 @@ def test_the_warning_does_not_claim_a_session_is_live() -> None:
 
     assert warnings
     assert "live session" not in warnings[0].lower(), warnings
-    assert "occurred" in warnings[0], warnings
+    assert "ran from plugin" in warnings[0], warnings
 
 
 
@@ -418,14 +414,6 @@ def test_a_stale_incident_repeats_while_it_is_still_current() -> None:
 
     assert first and second == first, (first, second)
 
-
-def test_a_stale_write_from_before_this_install_is_not_reported() -> None:
-    """Upgrading resets the slate: that generation has already been superseded."""
-    stale = "/home/u/.claude/plugins/cache/zotero-provenance/zotero-provenance/0.3.0"
-    installed = datetime(2026, 8, 25, 11, 30, tzinfo=timezone(timedelta(hours=-4)))
-    lines = [_capture("2026-08-25T10:00:00-04:00", root=stale)]
-
-    assert _check(lines, installed_at=installed) == []
 
 
 def test_a_capture_that_could_not_verify_its_pin_is_its_own_warning() -> None:

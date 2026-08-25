@@ -134,35 +134,41 @@ Sources get bucketed by their `seen:` history:
 | `ZOTERO_PROVENANCE_PYTHON`         | Interpreter to use, if the default `python3` lacks the deps.             |
 | `ZOTERO_API_BASE`                  | Alternate API root, for tests or an API-compatible server.               |
 | `ZOTERO_CAPTURE_HEALTH_DISABLE=1`  | Turn off the session-start health check only.                            |
+| `ZOTERO_CAPTURE_HEALTH_WINDOW_HOURS` | How far back operational faults are reported. Default 24.             |
 
 Hooks do not inherit MCP-scoped environment from `~/.claude.json`, which is why
 credentials come from the secrets file.
 
 ### The health check
 
-Every serious failure this plugin has had was silent: a superseded root wrote
-junk for weeks, and capture stopped dead for 29 hours. A `SessionStart` hook now
-reads the capture log and speaks when — and only when — one of these is true:
+Every serious failure this plugin has had was silent. A `SessionStart` hook
+reads the capture log and speaks only when something in it says so — and no
+record's meaning depends on any other record. Four audits found four defects in
+this check, and all four came from one record being interpreted in light of
+another: a later capture "cleared" an earlier refusal, an install timestamp
+scoped away a stale write, a cursor suppressed by second-precision timestamps.
 
-- a capture ran from a plugin root that was not the installed one **at the time
-  it wrote** (each record carries the pin it observed, so it needs no registry
-  to interpret and no later state can revise it)
-- a capture wrote while the installed root **could not be verified** — reported
-  as its own thing, because unknown is not the same as stale
-- refusals since the last successful capture, including configuration and
-  bootstrap errors that stop capture before it starts
-- the last capture reported errors
+Two rules replace all of that:
 
-Incidents are scoped to the running version rather than acknowledged: they are
-reported while they still describe the generation now installed, and an upgrade
-retires them. Nothing is stored, so nothing can be lost — an acknowledgement
-cursor could not be made race-safe against one-second timestamps.
+- **Operational faults decay.** Refusals, configuration errors and capture
+  errors are reported within a recency window (24 h,
+  `ZOTERO_CAPTURE_HEALTH_WINDOW_HOURS`). Timing a *presence* is sound — "three
+  refusals in the last day" is checkable and ages out on its own. Timing an
+  *absence* is what failed twice, and nothing here does it.
+- **Integrity incidents do not decay.** A capture that ran from a root which was
+  not the installed one, or that could not verify which root was installed, is
+  reported until you acknowledge it:
 
-On a healthy session it prints nothing. If the check itself cannot run — no
-`jq`, no `lib.sh`, no interpreter, or an internal crash — it says so in one line
-and writes the detail to `health-errors.log`. A monitor that vanishes quietly is
-the failure this feature exists to catch. Run it by hand with
-`python3 scripts/zotero_capture_health.py`.
+      python3 scripts/zotero_capture_health.py --ack
+
+  Nothing clears it automatically, because nothing automatic can know whether
+  the affected rows were checked. A record written before the pin was recorded
+  carries no evidence either way and is not classified at all.
+
+On a healthy session it prints nothing. If the check cannot run — no `jq`, no
+`lib.sh`, no interpreter, an unreadable log, or an internal crash — it says so
+and writes the detail to `health-errors.log`. Only a *missing* log counts as
+healthy silence; a monitor that cannot reach its evidence is not healthy.
 
 ## What is not captured
 

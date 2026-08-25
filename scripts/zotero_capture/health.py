@@ -1,45 +1,55 @@
-"""Capture health: report only when capture is actually broken.
+"""Capture health: report only what a single record proves, on its own terms.
 
-Every serious failure this plugin has had was silent. A v0.3.0 root wrote junk
-for weeks; capture stopped dead for 29 hours; both were found by an audit rather
-than by the plugin noticing anything. staleness.py already states the principle
-— "loud absence beats quiet corruption" — but until now nothing was watching for
-the absence, so the corruption stayed quiet anyway.
+Every serious failure this plugin has had was silent — a superseded root wrote
+junk for weeks, capture stopped dead for 29 hours — and both were found by an
+audit rather than by the plugin noticing.
 
-This reads what the log has recorded since 0.12.0 (`version`, `root`, `errors`)
-rather than adding new bookkeeping, which means it can answer for the past as
-well as the present.
+Four audits then found four defects in the check itself, and they shared one
+mechanism: **one record's meaning depended on another record.** A later
+successful capture cleared an earlier refusal. An install timestamp scoped away
+a stale write. An acknowledgement cursor suppressed by timestamp. Each fix
+corrected one instance and the mechanism produced the next.
 
-The design constraint is silence. A check that speaks on a healthy session gets
-tuned out, and a tuned-out check is worse than none: that is exactly how the
-measurement canary printed its warning for four consecutive releases without
-anyone acting on it. So there are four things worth interrupting for and nothing
-else, and each names both what is wrong and the number that shows it.
+So there is no cross-record inference here at all. Two rules, and a record is
+judged only by its own contents:
+
+- **Operational faults decay.** Refusals and capture errors are reported inside
+  a recency window. Timing a PRESENCE is sound: "three refusals in the last day"
+  is checkable and ages out by itself. Timing an ABSENCE is what failed twice
+  before, and no signal here does it.
+- **Integrity incidents do not decay.** A write from a root that was not the
+  installed one is reported until a person acknowledges it. Nothing clears it
+  automatically, because nothing automatic can know whether the row was
+  repaired — and a dead session's bad write is still a bad row.
+
+The reader streams. Materialising the whole log cost 0.9 s and ~294 MB at half a
+million records, which would eventually trip the hook's own timeout and leave
+the monitor reporting nothing but its own failure.
 """
 
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Iterable
 
-# What the hooks write when they decline to capture. Any of these appearing
-# after the last successful capture means capture is off right now.
 REFUSAL_EVENTS = (
     "stale-root-refused",
     "forward-unresolved",
     "forward-loop-refused",
     "missing-dependencies",
-    # Bootstrap failures. These used to be written as plaintext, which this
-    # parser drops, so a fresh install with no credentials failed on every cited
-    # URL and reported nothing — forever.
+    # Bootstrap failures. Written as plaintext until 0.17.0, which this parser
+    # drops, so a fresh install with no credentials failed on every cited URL
+    # and said nothing at all.
     "configuration-error",
     "capture-bootstrap-error",
 )
 
+MAX_KINDS_SHOWN = 3
+
 
 def _parse_ts(raw: Any) -> datetime | None:
-    """Log timestamps are ISO-8601 with an offset, written as -0400 or -04:00."""
+    """Log timestamps are ISO-8601 with an offset, written -0400 or -04:00."""
     if not isinstance(raw, str):
         return None
     try:
@@ -49,9 +59,8 @@ def _parse_ts(raw: Any) -> datetime | None:
     return parsed if parsed.tzinfo is not None else None
 
 
-def _records(lines: Iterable[str]) -> list[dict]:
-    """Tolerant parse: one corrupt line must not blind the whole check."""
-    out: list[dict] = []
+def _each(lines: Iterable[str]):
+    """Yield (record, ts) one at a time. One corrupt line must not blind the rest."""
     for line in lines:
         text = line.strip() if isinstance(line, str) else ""
         if not text:
@@ -65,18 +74,11 @@ def _records(lines: Iterable[str]) -> list[dict]:
         ts = _parse_ts(record.get("ts"))
         if ts is None:
             continue
-        record["_ts"] = ts
-        out.append(record)
-    return out
+        yield record, ts
 
 
 def _is_capture(record: dict) -> bool:
-    """A run that WROTE. A refusal is not one, however similar the line looks.
-
-    `refused` is what separates them. Before it existed, a refused run emitted
-    `urls_seen: 0, errors: []` — the same bytes as a healthy message with no
-    citable URL — so a refusal reset the silence clock instead of raising it.
-    """
+    """A run that WROTE. A refusal is not one, however similar the line looks."""
     if record.get("refused"):
         return False
     return "event" not in record and ("urls_seen" in record or "version" in record)
@@ -86,107 +88,112 @@ def _version_of(root: str) -> str:
     return root.rstrip("/").rsplit("/", 1)[-1] or root
 
 
+def _integrity_kind(record: dict, pinned_root: str | None) -> str | None:
+    """"stale", "unverified", or None — decided by THIS record alone."""
+    root = record.get("root")
+    if not isinstance(root, str) or not root:
+        return None
+    if record.get("pin_observation") == "unknown":
+        return "unverified"
+    observed = record.get("pinned_root")
+    if isinstance(observed, str) and observed:
+        return "stale" if root != observed else None
+    # No pin evidence at all — a record written before 0.15.0. It proves nothing
+    # about staleness, and comparing it to the CURRENT pin is the same unsound
+    # inference this module exists to avoid: eighteen correct captures on the
+    # live log looked stale purely because the pin moved after they ran. Silence
+    # about the pre-field past is the honest answer; the field is why everything
+    # after it can be judged on its own.
+    return None
+
+
+def incident_key(record: dict, ts: datetime) -> str:
+    """A stable name for one integrity incident, for acknowledgement."""
+    return f"{ts.isoformat()}|{record.get('root') or '?'}"
+
+
+def incident_keys(lines: Iterable[str], *, pinned_root: str | None) -> frozenset[str]:
+    """Every acknowledgeable incident in the log."""
+    return frozenset(
+        incident_key(record, ts)
+        for record, ts in _each(lines)
+        if _is_capture(record) and _integrity_kind(record, pinned_root)
+    )
+
+
 def evaluate(
     lines: Iterable[str],
     *,
     pinned_root: str | None,
-    installed_at: datetime | None = None,
+    now: datetime,
+    window: timedelta,
+    acknowledged: frozenset[str] | set[str] = frozenset(),
 ) -> list[str]:
-    """Human-readable warnings, or an empty list when there is nothing to say.
+    """Human-readable warnings, or an empty list when there is nothing to say."""
+    cutoff = now - window
+    stale: list[tuple[datetime, str]] = []
+    unverified: list[datetime] = []
+    refusals: list[tuple[datetime, str]] = []
+    errors: list[tuple[datetime, dict]] = []
 
-    Four signals, and no clock beyond the log's own. Three earlier designs were
-    removed for lying: elapsed-time silence measured the user's habits, hook-fire
-    counting chattered after about a hundred citation-free turns, and an
-    acknowledgement cursor could not be made race-safe on one-second timestamps.
-    Each was machinery added to stop the previous one's noise.
+    for record, ts in _each(lines):
+        if record.get("event") in REFUSAL_EVENTS or record.get("refused"):
+            if ts >= cutoff:
+                refusals.append((ts, str(record.get("event") or record.get("refused"))))
+            continue
+        if not _is_capture(record):
+            continue
 
-    What replaces the cursor is scope rather than state: a stale write is
-    reported while it is still CURRENT — that is, since the running version was
-    installed — and stops being reported when the next upgrade supersedes that
-    generation. Nothing is stored, so nothing can be lost.
-    """
-    records = _records(lines)
-    if not records:
-        return []
+        kind = _integrity_kind(record, pinned_root)
+        if kind and incident_key(record, ts) not in acknowledged:
+            if kind == "stale":
+                stale.append((ts, str(record.get("root"))))
+            else:
+                unverified.append(ts)
 
-    captures = [r for r in records if _is_capture(r)]
-    last = max(captures, key=lambda r: r["_ts"]) if captures else None
+        found = record.get("errors")
+        if ts >= cutoff and isinstance(found, list) and found:
+            for item in found:
+                if isinstance(item, dict):
+                    errors.append((ts, item))
+
     warnings: list[str] = []
 
-    def _since_this_install(record: dict) -> bool:
-        # Scoping only. `installed_at` is NOT used to decide staleness — records
-        # carry the pin they observed and decide that themselves — it decides
-        # whether an incident still describes the generation now running.
-        return installed_at is None or record["_ts"] > installed_at
-
-    def _was_stale(record: dict) -> bool:
-        root = record.get("root")
-        if not isinstance(root, str) or not root:
-            return False
-        observed = record.get("pinned_root")
-        if isinstance(observed, str) and observed:
-            return root != observed
-        # The writer said it could not determine the pin. Unknown is not stale.
-        if record.get("pin_observation") == "unknown":
-            return False
-        if pinned_root is None or root == pinned_root:
-            return False
-        return _since_this_install(record)
-
-    # 1. A write happened from a root that was not the pinned one at the time.
-    stale = [r for r in captures if _was_stale(r) and _since_this_install(r)]
     if stale:
-        latest = max(stale, key=lambda r: r["_ts"])
-        roots = sorted({_version_of(r["root"]) for r in stale})
+        newest_ts, newest_root = max(stale)
+        roots = sorted({_version_of(root) for _, root in stale})
         warnings.append(
-            f"{len(stale)} capture(s) occurred from plugin {', '.join(roots)}, "
-            f"which was not the installed version at the time "
-            f"(most recent {latest['_ts'].isoformat()}, {latest['root']})"
+            f"{len(stale)} capture(s) ran from plugin {', '.join(roots)}, which was "
+            f"not the installed version at the time (most recent "
+            f"{newest_ts.isoformat()}, {newest_root}) — acknowledge with --ack "
+            f"once the rows are checked"
         )
 
-    # 2. A write happened while the plugin could not tell which root was pinned.
-    #    Not stale — the record disclaims that — but not silence either, because
-    #    "we wrote without being able to check" is exactly the uncertainty this
-    #    plugin refuses to paper over everywhere else.
-    unverified = [
-        r
-        for r in captures
-        if r.get("pin_observation") == "unknown" and _since_this_install(r)
-    ]
     if unverified:
-        latest = max(unverified, key=lambda r: r["_ts"])
         warnings.append(
             f"{len(unverified)} capture(s) wrote while the installed plugin root "
-            f"could not be verified (most recent {latest['_ts'].isoformat()})"
+            f"could not be verified (most recent {max(unverified).isoformat()})"
         )
 
-    # 3. Hooks fired and declined, or the plugin could not start. A successful
-    #    capture clears these; the count is capped because a long-broken install
-    #    produces an absurd number that adds nothing.
-    since = last["_ts"] if last else None
-    refusals = [
-        r
-        for r in records
-        if (r.get("event") in REFUSAL_EVENTS or r.get("refused"))
-        and (since is None or r["_ts"] > since)
-    ]
     if refusals:
-        kinds = sorted({str(r.get("event") or r.get("refused")) for r in refusals})[:3]
-        newest = max(refusals, key=lambda r: r["_ts"])
+        kinds = sorted({kind for _, kind in refusals})[:MAX_KINDS_SHOWN]
         warnings.append(
-            f"{len(refusals)} refusal(s) since the last successful capture "
+            f"{len(refusals)} refusal(s) recorded in the last {_hours(window)} "
             f"({', '.join(k[:60] for k in kinds)}; newest "
-            f"{newest['_ts'].isoformat()}) — capture is declining, not writing"
+            f"{max(ts for ts, _ in refusals).isoformat()}) — capture declined to "
+            f"write rather than writing"
         )
 
-    # 4. The last run did capture, but something inside it failed.
-    if last:
-        errors = last.get("errors")
-        if isinstance(errors, list) and errors:
-            first = errors[0] if isinstance(errors[0], dict) else {}
-            detail = (
-                f"{first.get('code')} ({first.get('message')}) for {first.get('url')}"
-            )
-            warnings.append(f"last capture reported {len(errors)} error(s): {detail}")
+    if errors:
+        newest_ts, first = max(errors, key=lambda pair: pair[0])
+        detail = f"{first.get('code')} ({first.get('message')}) for {first.get('url')}"
+        warnings.append(
+            f"{len(errors)} capture error(s) in the last {_hours(window)}: {detail}"
+        )
 
     return warnings
+
+
+def _hours(window: timedelta) -> str:
+    hours = int(window.total_seconds() // 3600)
+    return "hour" if hours == 1 else f"{hours} hours"

@@ -136,8 +136,24 @@ def _emit_bootstrap_event(event: str, detail: str) -> None:
                 )
                 + "\n"
             )
-    except Exception:
-        pass
+    except Exception as exc:
+        # If the reporter of failures fails, say so on stderr — which the hook
+        # appends to the log — rather than swallowing it. A silent failure
+        # reporter is the same class of bug as everything else this file exists
+        # to surface.
+        try:
+            sys.stderr.write(
+                json.dumps(
+                    {
+                        "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                        "event": "capture-bootstrap-error",
+                        "detail": f"could not record {event}: {exc}",
+                    }
+                )
+                + "\n"
+            )
+        except Exception:
+            pass
 
 
 def _observed_pinned_root() -> str | None:

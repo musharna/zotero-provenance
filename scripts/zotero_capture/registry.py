@@ -118,5 +118,9 @@ def resolve_pinned(
             resolved.relative_to(subtree.resolve())
         except ValueError:
             return None, None
-    when = next((w for p, w in candidates if p == resolved and w is not None), None)
-    return resolved, when
+    # The NEWEST timestamp among entries naming this root, not whichever was
+    # serialised first — two entries agreeing on the path but differing in
+    # lastUpdated used to return an arbitrary one, which moved health's scope
+    # depending on key order.
+    stamps = [w for path, w in candidates if path == resolved and w is not None]
+    return resolved, (max(stamps) if stamps else None)
