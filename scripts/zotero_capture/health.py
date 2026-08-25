@@ -31,7 +31,10 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Iterable
+
+from .health_ledger import count_open, open_incidents
 
 REFUSAL_EVENTS = (
     "stale-root-refused",
@@ -75,6 +78,7 @@ def _each(lines: Iterable[str], stats: dict | None = None):
             continue
         if stats is not None:
             stats["lines"] = stats.get("lines", 0) + 1
+            stats["tail"] = stats.get("tail", 0) + 1
         try:
             record = json.loads(text)
         except (ValueError, TypeError):
@@ -86,6 +90,7 @@ def _each(lines: Iterable[str], stats: dict | None = None):
             continue
         if stats is not None:
             stats["records"] = stats.get("records", 0) + 1
+            stats["tail"] = 0
         yield record, ts
 
 
@@ -114,7 +119,9 @@ def _version_of(root: str) -> str:
     return root.rstrip("/").rsplit("/", 1)[-1] or root
 
 
-def _integrity_kind(record: dict, pinned_root: str | None) -> str | None:
+def _integrity_kind(
+    record: dict, pinned_root: str | None, *, require_id: bool = True
+) -> str | None:
     """"stale", "unverified", or None — decided by THIS record alone.
 
     Requires an `incident_id`. Without one the incident cannot be acknowledged
@@ -124,7 +131,7 @@ def _integrity_kind(record: dict, pinned_root: str | None) -> str | None:
     root = record.get("root")
     if not isinstance(root, str) or not root:
         return None
-    if not record.get("incident_id"):
+    if require_id and not record.get("incident_id"):
         return None
     if not _wrote(record):
         return None
@@ -153,18 +160,21 @@ def incident_key(record: dict, ts: datetime) -> str:
     return str(record.get("incident_id"))
 
 
-def incidents(lines: Iterable[str], *, pinned_root: str | None) -> list[dict]:
+def incidents(
+    lines: Iterable[str], *, pinned_root: str | None, require_id: bool = True
+) -> list[dict]:
     """Every acknowledgeable incident, in full, so a person can see what they clear."""
     out: list[dict] = []
     for record, ts in _each(lines):
         if not _is_capture(record):
             continue
-        kind = _integrity_kind(record, pinned_root)
+        kind = _integrity_kind(record, pinned_root, require_id=require_id)
         if not kind:
             continue
         out.append(
             {
-                "id": incident_key(record, ts),
+                "id": record.get("incident_id") or f"legacy:{ts.isoformat()}|{record.get('root')}",
+                "url": record.get("url"),
                 "ts": ts.isoformat(),
                 "kind": kind,
                 "root": str(record.get("root")),
@@ -179,6 +189,10 @@ def incident_keys(lines: Iterable[str], *, pinned_root: str | None) -> frozenset
 
 
 MAX_DISTINCT_KINDS = 16
+# A single unparseable last line is ordinary: the writer appends while we read,
+# so a torn final record is expected. A RUN of them is a writer that stopped
+# producing structured telemetry.
+MIN_BROKEN_TAIL = 3
 
 
 def evaluate(
@@ -188,6 +202,7 @@ def evaluate(
     now: datetime,
     window: timedelta,
     acknowledged: frozenset[str] | set[str] = frozenset(),
+    ledger_path: Path | None = None,
 ) -> list[str]:
     """Human-readable warnings, or an empty list when there is nothing to say.
 
@@ -218,9 +233,11 @@ def evaluate(
 
     for record, ts in _each(lines, stats):
         if ts > horizon:
-            # A future-dated record is inside every recency window forever: one
-            # dated 2099 would have reported for seventy-three years. It is a
-            # clock or evidence problem, not a recent operational fault.
+            # A future-dated record sits inside every recency window forever —
+            # one dated 2099 would report for seventy-three years — so it is a
+            # clock problem rather than a recent operational fault. It only
+            # skips the WINDOW signals: integrity lives in the ledger and does
+            # not depend on recency, so a bad clock can no longer hide it.
             future_n += 1
             continue
         if record.get("event") in REFUSAL_EVENTS or record.get("refused"):
@@ -234,20 +251,6 @@ def evaluate(
         if not _is_capture(record):
             continue
 
-        kind = _integrity_kind(record, pinned_root)
-        if kind and incident_key(record, ts) not in acknowledged:
-            if kind == "stale":
-                stale_n += 1
-                root = str(record.get("root"))
-                if stale_newest is None or ts > stale_newest[0]:
-                    stale_newest = (ts, root)
-                if len(stale_roots) < MAX_DISTINCT_KINDS:
-                    stale_roots.add(_version_of(root))
-            else:
-                unverified_n += 1
-                if unverified_newest is None or ts > unverified_newest:
-                    unverified_newest = ts
-
         found = record.get("errors")
         if ts >= cutoff and isinstance(found, list) and found:
             for item in found:
@@ -258,11 +261,33 @@ def evaluate(
 
     warnings: list[str] = []
 
+    # A wholly unparseable log, OR a log whose TAIL stopped being parseable.
+    # Warning only on the former let one old valid record bless an indefinitely
+    # broken telemetry stream — the writer could stop emitting records forever
+    # and the monitor stayed silent.
+    tail = stats.get("tail", 0)
     if stats.get("lines") and not stats.get("records"):
         warnings.append(
             f"the capture log has {stats['lines']} line(s) but no readable "
             f"records — it cannot be assessed, which is not the same as healthy"
         )
+    elif tail >= MIN_BROKEN_TAIL:
+        warnings.append(
+            f"the last {tail} line(s) of the capture log are unreadable — the "
+            f"writer may have stopped recording structured events"
+        )
+
+    if ledger_path is not None:
+        total = count_open(ledger_path)
+        if total:
+            shown = open_incidents(ledger_path, limit=5)
+            ids = ", ".join(i["incident_id"] for i in shown)
+            more = f" (+{total - len(shown)} more)" if total > len(shown) else ""
+            kinds = ", ".join(sorted({i["kind"] for i in shown}))
+            warnings.append(
+                f"{total} open integrity incident(s) [{kinds}]: {ids}{more} — "
+                f"see --list-incidents, then --ack <id> once the rows are checked"
+            )
 
     if future_n:
         warnings.append(
@@ -275,8 +300,8 @@ def evaluate(
         warnings.append(
             f"{stale_n} capture(s) ran from plugin {', '.join(sorted(stale_roots))}, "
             f"which was not the installed version at the time (most recent "
-            f"{newest_ts.isoformat()}, {newest_root}) — acknowledge with --ack "
-            f"once the rows are checked"
+            f"{newest_ts.isoformat()}, {newest_root}) — see --list-incidents, "
+            f"then --ack <id> once the rows are checked"
         )
 
     if unverified_n and unverified_newest is not None:

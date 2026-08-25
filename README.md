@@ -141,38 +141,39 @@ credentials come from the secrets file.
 
 ### The health check
 
-Every serious failure this plugin has had was silent. A `SessionStart` hook
-reads the capture log and speaks only when something in it says so — and no
-record's meaning depends on any other record. Five audits found defects in this
-check, and nearly all came from one record being interpreted in light of
-another, or from an incident being suppressed by something reconstructed after
-the fact.
+Every serious failure this plugin has had was silent. Two things now watch for
+that, and they are deliberately different in kind.
 
-Two rules:
+**Integrity incidents are journalled before the write they describe.** If a
+capture is about to touch Zotero from a plugin root that is not the installed
+one — or one it cannot verify — the incident is written to a small SQLite ledger
+*first*. It used to be recorded afterwards, which meant a hook timeout at the
+wrong moment could leave a row in your library with nothing anywhere saying so.
+An intent for a write that never happens is a false positive you can close in
+one command; a write with no intent is corruption nobody can find.
 
-- **Operational faults decay.** Refusals, configuration errors and capture
-  errors are reported within a recency window (24 h,
-  `ZOTERO_CAPTURE_HEALTH_WINDOW_HOURS`). Timing a *presence* is sound; timing an
-  *absence* is not, and nothing here does it. Records dated in the future are
-  reported as a clock problem rather than treated as perpetually recent.
-- **Integrity incidents do not decay.** A capture that actually wrote a row from
-  a root which was not the installed one — or that could not verify which root
-  was installed — stands until you acknowledge it. Every capture carries a
-  unique `incident_id` written at capture time, so incidents are identified by
-  their writer rather than reconstructed from a timestamp:
+    python3 scripts/zotero_capture_health.py --list-incidents
+    python3 scripts/zotero_capture_health.py --ack <id> [<id> ...]
+    python3 scripts/zotero_capture_health.py --ack-all
 
-      python3 scripts/zotero_capture_health.py --list-incidents
-      python3 scripts/zotero_capture_health.py --ack <id> [<id> ...]
-      python3 scripts/zotero_capture_health.py --ack-all
+An unknown id exits non-zero and changes nothing. A healthy install never opens
+an incident, so its ledger stays empty.
 
-  `--ack-all` is spelled out because it clears incidents the aggregated report
-  never displayed. A record with no incident id, no pin evidence, or no evidence
-  that it wrote anything is not classified at all.
+**Operational faults decay.** Refusals, configuration errors and capture errors
+are read from the log inside a recency window (24 h,
+`ZOTERO_CAPTURE_HEALTH_WINDOW_HOURS`). Timing a *presence* is sound; timing an
+*absence* is not, and nothing here does it. Records dated in the future are
+reported as a clock problem rather than treated as perpetually recent.
+
+Keeping these apart is what makes the check bounded: open incidents are a small
+queryable set that shrinks when you resolve one, while operational faults expire
+on their own and never need suppressing.
 
 On a healthy session it prints nothing. If the check cannot run — no `jq`, no
 `lib.sh`, no interpreter, an unreadable log, or an internal crash — it says so
-and writes the detail to `health-errors.log`. A log that is readable but
-contains no parseable records also says so: unassessable is not healthy.
+and writes detail to `health-errors.log`. A log that is readable but unparseable,
+or whose tail has stopped being parseable, also says so: unassessable is not
+healthy.
 
 ## What is not captured
 

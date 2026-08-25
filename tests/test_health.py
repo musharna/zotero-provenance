@@ -96,7 +96,7 @@ def test_malformed_lines_do_not_break_the_check() -> None:
 def test_reports_a_capture_written_from_an_unpinned_root() -> None:
     """The 29-hour outage and the junk-writing root were both this."""
     stale = "/home/u/.claude/plugins/cache/zotero-provenance/zotero-provenance/0.3.0"
-    warnings = _check([_capture("2026-08-25T11:30:00-04:00", root=stale)])
+    warnings = _classify([_capture("2026-08-25T11:30:00-04:00", root=stale)])
 
     assert len(warnings) == 1
     assert "0.3.0" in warnings[0], warnings
@@ -121,7 +121,7 @@ def test_a_later_good_capture_does_not_hide_an_earlier_stale_one() -> None:
         _capture("2026-08-25T11:41:00-04:00", root=PINNED),
     ]
 
-    warnings = _check(lines, installed_at=installed)
+    warnings = _classify(lines, installed_at=installed)
 
     assert len(warnings) == 1, warnings
     assert "0.3.0" in warnings[0], warnings
@@ -136,10 +136,11 @@ def test_every_stale_capture_since_the_upgrade_is_counted() -> None:
         _capture("2026-08-25T11:43:00-04:00", root=PINNED),
     ]
 
-    warnings = _check(lines, installed_at=installed)
+    warnings = _classify(lines, installed_at=installed)
 
-    assert len(warnings) == 1, warnings
-    assert "2" in warnings[0], warnings
+    # The classifier yields one incident per record: both stale writes are
+    # counted, rather than one summarising line.
+    assert len(warnings) == 2, warnings
 
 
 def test_a_stale_root_capture_after_the_upgrade_is_reported() -> None:
@@ -148,7 +149,7 @@ def test_a_stale_root_capture_after_the_upgrade_is_reported() -> None:
     captured = "2026-08-25T11:45:00-04:00"
     installed = datetime(2026, 8, 25, 11, 30, tzinfo=timezone(timedelta(hours=-4)))
 
-    warnings = _check([_capture(captured, root=stale)], installed_at=installed)
+    warnings = _classify([_capture(captured, root=stale)], installed_at=installed)
 
     assert len(warnings) == 1
     assert "0.12.0" in warnings[0], warnings
@@ -210,9 +211,11 @@ def test_several_problems_are_all_reported() -> None:
     ]
     warnings = _check(lines)
 
-    # Stale write + refusals. Elapsed time is not a signal; nothing clears the
-    # refusal, and the stale incident stands until acknowledged.
-    assert len(warnings) == 2, warnings
+    # One signal from the LOG: the recent refusal. The stale write is an
+    # integrity incident and now lives in the ledger, which this call has none
+    # of — that separation is the point of 0.20.0.
+    assert len(warnings) == 1, warnings
+    assert "refusal" in warnings[0], warnings
 
 
 # --- real execution: the hook itself ------------------------------------------
@@ -349,7 +352,7 @@ def test_the_hook_script_is_actually_registered() -> None:
 
 def test_the_warning_does_not_claim_a_session_is_live() -> None:
     stale = "/home/u/.claude/plugins/cache/zotero-provenance/zotero-provenance/0.3.0"
-    warnings = _check(
+    warnings = _classify(
         [_capture("2026-08-25T11:40:00-04:00", root=stale)],
         installed_at=datetime(2026, 8, 25, 11, 30, tzinfo=timezone(timedelta(hours=-4))),
     )
@@ -377,7 +380,7 @@ def test_a_self_describing_record_is_read_without_the_registry() -> None:
         }
     )
 
-    assert _check([line], pinned=None) != [], "self-contained evidence was ignored"
+    assert _classify([line], pinned=None) != [], "self-contained evidence was ignored"
 
 
 def test_refusals_are_reported_with_no_successful_capture_at_all() -> None:
@@ -415,8 +418,8 @@ def test_a_stale_incident_repeats_while_it_is_still_current() -> None:
     installed = datetime(2026, 8, 25, 11, 30, tzinfo=timezone(timedelta(hours=-4)))
     lines = [_capture("2026-08-25T11:40:00-04:00", root=stale)]
 
-    first = _check(lines, installed_at=installed)
-    second = _check(lines, installed_at=installed)
+    first = _classify(lines, installed_at=installed)
+    second = _classify(lines, installed_at=installed)
 
     assert first and second == first, (first, second)
 
@@ -439,7 +442,7 @@ def test_a_capture_that_could_not_verify_its_pin_is_its_own_warning() -> None:
     )
     installed = datetime(2026, 8, 25, 11, 30, tzinfo=timezone(timedelta(hours=-4)))
 
-    warnings = _check([line], installed_at=installed)
+    warnings = _classify([line], installed_at=installed)
 
     assert len(warnings) == 1, warnings
     assert "verif" in warnings[0], warnings
@@ -460,3 +463,23 @@ def test_a_configuration_error_is_visible() -> None:
 
     assert warnings, "a configuration error produced no warning"
     assert "configuration-error" in warnings[0], warnings
+
+
+# --- 0.20.0: integrity moved from log-replay to the ledger --------------------
+#
+# `evaluate()` no longer classifies integrity from log records; incidents are
+# written to a ledger BEFORE the mutation they describe, because the log could
+# only ever say what already finished. These tests still assert the thing that
+# matters — that a record's own contents decide, with no reference to any other
+# record — so they now exercise `incidents()`, the classifier that FEEDS the
+# ledger, instead of the reporter that reads it.
+
+
+def _classify(lines, acknowledged=frozenset(), **_ignored):
+    from zotero_capture.health import incidents as _incidents
+
+    return [
+        f"{i['kind']} capture(s) ran from plugin {i['root']} [{i['id']}]"
+        for i in _incidents(lines, pinned_root=PINNED)
+        if i["id"] not in acknowledged
+    ]

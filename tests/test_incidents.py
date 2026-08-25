@@ -67,10 +67,10 @@ def test_acknowledging_one_does_not_silence_the_other() -> None:
     unver = _cap("2026-08-25T11:00:00-04:00", root="/c/OLD", incident_id="b",
                  pin_observation="unknown")
 
-    warnings = _check([stale, unver], acknowledged=frozenset({"a"}))
+    warnings = _classify([stale, unver], acknowledged=frozenset({"a"}))
 
     assert warnings, "acknowledging one incident silenced the other"
-    assert any("could not be verified" in w for w in warnings), warnings
+    assert any("unverified" in w for w in warnings), warnings
 
 
 def test_a_record_without_an_id_is_not_classified() -> None:
@@ -93,7 +93,7 @@ def test_a_recurring_write_still_counts_as_a_write() -> None:
     """Re-tagging an existing row still touched the library."""
     recur = _cap("2026-08-25T11:00:00-04:00", root="/c/OLD", urls_new=0, recurring=1)
 
-    assert _check([recur]), "a recurring write was treated as writing nothing"
+    assert _classify([recur]), "a recurring write was treated as writing nothing"
 
 
 def test_incidents_reports_what_ack_would_silence() -> None:
@@ -107,3 +107,39 @@ def test_incidents_reports_what_ack_would_silence() -> None:
     for item in found:
         assert item["kind"] in {"stale", "unverified"}
         assert item["root"] and item["ts"]
+
+
+def test_the_warning_names_a_command_that_actually_works(tmp_path) -> None:
+    """0.19.0 shipped advice to run `--ack`, which by then exited 2.
+
+    The advice now lives on the ledger-backed report, since that is what names
+    open incidents. Advice that fails when followed is worse than none.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from zotero_capture.health import evaluate
+    from zotero_capture.health_ledger import open_incident
+
+    ledger = tmp_path / "health.db"
+    open_incident(ledger, incident_id="abc123", url="u", root="/c/OLD",
+                  pinned_root=PINNED, kind="stale", ts="2026-08-25T11:00:00-04:00")
+
+    warnings = evaluate([], pinned_root=PINNED,
+                        now=datetime(2026, 8, 25, 12, 0, tzinfo=timezone(timedelta(hours=-4))),
+                        window=timedelta(hours=24), ledger_path=ledger)
+
+    assert warnings
+    text = " ".join(warnings)
+    assert "--list-incidents" in text, text
+    assert "--ack <id>" in text, text
+    assert "abc123" in text, text
+
+
+def _classify(lines, acknowledged=frozenset(), **_ignored):
+    from zotero_capture.health import incidents as _incidents
+
+    return [
+        f"{i['kind']} capture(s) ran from plugin {i['root']} [{i['id']}]"
+        for i in _incidents(lines, pinned_root=PINNED)
+        if i["id"] not in acknowledged
+    ]
