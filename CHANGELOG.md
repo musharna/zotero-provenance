@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.14.1 — 2026-08-25
+
+The health check cried wolf on its own release, and that was caught by running
+it against the live log rather than by a test.
+
+0.14.0 warned whenever the most recent capture came from a plugin root that is
+not the installed one. Thirty seconds after shipping it, it fired: the newest
+capture had come from 0.13.0 because it happened *before* 0.14.0 was pinned.
+Nothing was wrong. Left alone, the check would have raised a false alarm on
+every release it ever saw — which is precisely the way a check earns being
+ignored, and the failure mode 0.14.0's own notes said would kill it.
+
+The signal was asking the wrong question. "Did the last capture come from an
+unpinned root" has a legitimate yes right after any upgrade; the real question
+is whether anything has captured from an unpinned root *since* the upgrade. The
+check now takes the registry's own `lastUpdated` and suppresses the warning for
+captures that predate it. The other three signals — refusals, silence, errors —
+were never affected and still fire.
+
+Verified both directions afterwards: silent against the real log, and still
+reporting the refusals and the 29-hour gap against a replay of the outage.
+
 ## 0.14.0 — 2026-08-25
 
 The plugin can now tell you it is broken.

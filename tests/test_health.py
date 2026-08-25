@@ -47,8 +47,14 @@ def _event(ts: str, event: str) -> str:
     return json.dumps({"ts": ts, "event": event, "self": "/old/root"})
 
 
-def _check(lines, *, pinned: str | None = PINNED, now=NOW, max_silence=DEFAULT_SILENCE):
-    return evaluate(lines, pinned_root=pinned, now=now, max_silence=max_silence)
+def _check(
+    lines, *, pinned: str | None = PINNED, now=NOW, max_silence=DEFAULT_SILENCE,
+    installed_at=None,
+):
+    return evaluate(
+        lines, pinned_root=pinned, now=now, max_silence=max_silence,
+        installed_at=installed_at,
+    )
 
 
 # --- the requirement that matters most ----------------------------------------
@@ -83,6 +89,33 @@ def test_reports_a_capture_written_from_an_unpinned_root() -> None:
 
     assert len(warnings) == 1
     assert "0.3.0" in warnings[0] and "0.13.0" in warnings[0], warnings
+
+
+def test_a_stale_root_capture_from_before_the_upgrade_is_not_reported() -> None:
+    """The false alarm every release would otherwise fire.
+
+    Right after `claude plugin update`, the most recent capture legitimately came
+    from the previous root — it happened before the new one was pinned. Reporting
+    that as "executing superseded code" would make the check cry wolf on every
+    single release, which is the fastest way to get it ignored.
+    """
+    stale = "/home/u/.claude/plugins/cache/zotero-provenance/zotero-provenance/0.12.0"
+    captured = "2026-08-25T11:00:00-04:00"
+    installed = datetime(2026, 8, 25, 11, 30, tzinfo=timezone(timedelta(hours=-4)))
+
+    assert _check([_capture(captured, root=stale)], installed_at=installed) == []
+
+
+def test_a_stale_root_capture_after_the_upgrade_is_reported() -> None:
+    """Same shape, other side of the install: this one really is stale code."""
+    stale = "/home/u/.claude/plugins/cache/zotero-provenance/zotero-provenance/0.12.0"
+    captured = "2026-08-25T11:45:00-04:00"
+    installed = datetime(2026, 8, 25, 11, 30, tzinfo=timezone(timedelta(hours=-4)))
+
+    warnings = _check([_capture(captured, root=stale)], installed_at=installed)
+
+    assert len(warnings) == 1
+    assert "0.12.0" in warnings[0], warnings
 
 
 def test_reports_refusals_recorded_since_the_last_capture() -> None:
@@ -198,9 +231,9 @@ def test_hook_is_silent_on_a_healthy_log(tmp_path: Path) -> None:
     """The whole design rests on this. Chatter here and the check gets ignored."""
     state = tmp_path / "state"
     # root must match whatever is really installed, or this is a false alarm
-    from zotero_capture_health import _pinned_root
+    from zotero_capture_health import _installed
 
-    pinned = _pinned_root() or PINNED
+    pinned = _installed()[0] or PINNED
     _write_log(state, [_recent(0.1, root=pinned)])
 
     proc = _run_hook(state)
@@ -222,9 +255,14 @@ def test_hook_reports_the_outage_shape(tmp_path: Path) -> None:
     proc = _run_hook(state)
 
     assert proc.returncode == 0, proc.stderr
-    assert "0.3.0" in proc.stdout, proc.stdout
     assert "refusal" in proc.stdout, proc.stdout
     assert "29 hours" in proc.stdout, proc.stdout
+    # The stale-ROOT signal is deliberately absent here: against the real
+    # registry this capture predates the installed-at timestamp, so it cannot
+    # be distinguished from a capture that merely happened before an upgrade.
+    # That suppression is the fix for the every-release false alarm, and it is
+    # exercised directly, with a controlled install time, in the unit tests.
+    assert "superseded code" not in proc.stdout, proc.stdout
 
 
 def test_hook_exits_zero_with_no_log_at_all(tmp_path: Path) -> None:
