@@ -261,7 +261,10 @@ def run_capture(
     # in the library from a superseded root with no record that it happened.
     incident_id = uuid.uuid4().hex
     running_root = str(Path(__file__).resolve().parent.parent.parent)
-    ledger_path = log_path.parent / "health.db"
+    # Derived from the STATE directory, like the health checker does. Deriving
+    # it from log_path.parent meant a --log-path pointing elsewhere put
+    # incidents where the checker would never look for them.
+    ledger_path = _state_dir(os.environ) / "health.db"
     started = time.monotonic()
     result = capture_message(
         message=text,

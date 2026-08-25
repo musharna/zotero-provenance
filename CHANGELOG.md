@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.20.1 — 2026-08-25
+
+Two holes in 0.20.0's own journal, both found by asking where it could still
+fail rather than by a test.
+
+- **A write is now refused when its incident cannot be recorded.** The intent
+  was journalled before each mutation, but a failure to journal was caught and
+  logged while the write went ahead — so a read-only state directory, a full
+  disk or a permission error reproduced exactly the condition the journal
+  exists to prevent, silently. A skipped citation is recoverable; an unrecorded
+  mutation is not. A healthy capture opens no incident, so a broken ledger
+  cannot stop ordinary work.
+
+- **The writer and the reader now agree where the ledger lives.** The capture
+  path derived it from `log_path.parent` and the health checker from the state
+  directory. With `--log-path` pointing elsewhere, incidents were written where
+  the checker never looked.
+
+Concurrency was measured rather than assumed: 240 concurrent writers recorded
+240 of 240 incidents with no failures.
+
 ## 0.20.0 — 2026-08-25
 
 The sixth audit found something none of the previous five did: a defect in the
