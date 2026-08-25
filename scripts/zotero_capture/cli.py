@@ -16,7 +16,6 @@ from pathlib import Path
 from .capture import CaptureResult, capture_message
 from .config import Config, ConfigError, load_config
 from .project_slug import derive_slug
-from .retry_queue import drain_queue
 from .sqlite_cache import lookup_url
 from .title_fetcher import fetch_title
 from .url_processing import canonicalize
@@ -90,7 +89,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="add the `triaged` tag to an already-captured URL",
     )
     p.add_argument("--db-path", default=None)
-    p.add_argument("--queue-path", default=None)
     p.add_argument("--log-path", default=None)
     return p
 
@@ -110,15 +108,6 @@ def build_client(config: Config, *, timeout: float | None = None) -> ZoteroClien
         web_sources_collection_key=config.collection_key,
         **kwargs,
     )
-
-
-def _retry_handler(entry: dict, zotero: ZoteroClient, db_path: Path) -> bool:
-    """Placeholder: retry is not implemented, so queued entries are always kept.
-
-    Nothing enqueues today (see run_capture), so this never drops data. It exists
-    so a future retry implementation has one obvious place to land.
-    """
-    return False
 
 
 def _emit_log(
@@ -157,12 +146,10 @@ def run_capture(
     zotero: ZoteroClient,
     title_fetcher: Callable[..., str],
     log_path: Path,
-    retry_queue_path: Path,
     origin: str = "assistant",
 ) -> CaptureResult:
     text: str = sys.stdin.read() if message is None else message
     started = time.monotonic()
-    drain_queue(retry_queue_path, lambda e: _retry_handler(e, zotero, db_path))
     result = capture_message(
         message=text,
         project_slug=project,
@@ -211,7 +198,6 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if args.triage is None else 1
 
     db_path = Path(args.db_path) if args.db_path else config.db_path
-    queue_path = Path(args.queue_path) if args.queue_path else config.queue_path
     log_path = Path(args.log_path) if args.log_path else config.log_path
     project = args.project or derive_slug(args.cwd)
 
@@ -228,7 +214,6 @@ def main(argv: list[str] | None = None) -> int:
                 zotero=zotero,
                 title_fetcher=fetch_title,
                 log_path=log_path,
-                retry_queue_path=queue_path,
                 origin=args.origin,
             )
         return 0

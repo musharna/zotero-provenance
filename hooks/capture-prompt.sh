@@ -24,7 +24,9 @@ mkdir -p "$(dirname "$LOG")"
 
 (
 	zp_load_secrets
-	printf '%s' "$PROMPT" | timeout 15 "$(zp_python)" \
+	PY_BIN="$(zp_python)"
+	zp_check_deps "$PY_BIN" "$LOG" || exit 0
+	printf '%s' "$PROMPT" | zp_timeout 15 "$PY_BIN" \
 		"$HOOK_DIR/../scripts/zotero_capture_main.py" \
 		--cwd "$CWD" --session "$SESSION_ID" \
 		--context user-shared --origin user --message-from-stdin

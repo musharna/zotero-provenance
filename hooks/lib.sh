@@ -18,8 +18,13 @@ zp_load_secrets() {
 	fi
 }
 
-# Resolve an interpreter that can import httpx + bs4. Explicit override wins,
-# then a venv created by setup, then whatever python3 is on PATH.
+# Resolve an interpreter that can import this plugin's dependencies. Explicit
+# override wins, then a venv if one exists, then whatever python3 is on PATH.
+#
+# No venv is created for you. This comment used to say "a venv created by
+# setup", which setup has never done — so the sentence described a path that
+# did not exist and nothing checked. zp_check_deps below is the part that
+# actually tells you when the interpreter cannot run the code.
 zp_python() {
 	if [[ -n "${ZOTERO_PROVENANCE_PYTHON:-}" ]]; then
 		printf '%s' "$ZOTERO_PROVENANCE_PYTHON"
@@ -31,4 +36,54 @@ zp_python() {
 		return
 	fi
 	printf 'python3'
+}
+
+# Run a command under a wall-clock limit, wherever one is available.
+#
+# The hooks used to call GNU `timeout` directly. Stock macOS does not ship it,
+# so every capture died with "command not found" — a total, silent outage on a
+# supported platform, and one no test could catch because the tests run here.
+# coreutils installs it as `gtimeout`; with neither, the command still runs,
+# because a capture without a limit is better than no capture at all.
+zp_timeout() {
+	local secs="$1"
+	shift
+	if command -v timeout >/dev/null 2>&1; then
+		timeout "$secs" "$@"
+	elif command -v gtimeout >/dev/null 2>&1; then
+		gtimeout "$secs" "$@"
+	else
+		"$@"
+	fi
+}
+
+# Report a missing dependency as a sentence instead of a traceback.
+#
+# url_processing imports idna, linkify_it and markdown_it at module scope, so a
+# missing one kills the hook before the staleness guard — before ANY of this
+# plugin's own error handling — and the user sees a raw ImportError in a log
+# they have no reason to be reading. Returns non-zero and names the fix.
+zp_check_deps() {
+	local py="$1" log="$2"
+	local missing
+	missing="$("$py" - <<-'PYEOF' 2>/dev/null
+		import importlib, sys
+		need = ["httpx", "bs4", "idna", "linkify_it", "markdown_it"]
+		out = []
+		for m in need:
+		    try:
+		        importlib.import_module(m)
+		    except Exception:
+		        out.append(m)
+		sys.stdout.write(" ".join(out))
+	PYEOF
+	)"
+	if [[ -n "$missing" ]]; then
+		printf '{"event": "missing-dependencies", "python": "%s", "missing": "%s"}\n' \
+			"$py" "$missing" >>"$log"
+		printf 'zotero-provenance: %s cannot import: %s\n' "$py" "$missing" >>"$log"
+		printf 'Install them for that interpreter, or set ZOTERO_PROVENANCE_PYTHON to one that has them.\n' >>"$log"
+		return 1
+	fi
+	return 0
 }

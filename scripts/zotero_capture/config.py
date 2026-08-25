@@ -38,10 +38,6 @@ class Config:
         return self.state_dir / "url_index.db"
 
     @property
-    def queue_path(self) -> Path:
-        return self.state_dir / "retry_queue.jsonl"
-
-    @property
     def log_path(self) -> Path:
         return self.state_dir / "capture.log"
 

@@ -63,6 +63,9 @@ CONTEXT="$(printf '%s' "$ASSISTANT_TEXT" |
 ARGS=(--cwd "$CWD" --session "$SESSION_ID" --origin assistant --message-from-stdin)
 [[ -n "$CONTEXT" ]] && ARGS+=(--context "$CONTEXT")
 
-printf '%s' "$ASSISTANT_TEXT" | timeout 10 "$(zp_python)" \
+PY_BIN="$(zp_python)"
+zp_check_deps "$PY_BIN" "$LOG" || exit 0
+
+printf '%s' "$ASSISTANT_TEXT" | zp_timeout 10 "$PY_BIN" \
 	"$HOOK_DIR/../scripts/zotero_capture_main.py" "${ARGS[@]}" 2>>"$LOG"
 exit 0

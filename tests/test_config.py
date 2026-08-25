@@ -52,4 +52,5 @@ def test_state_dir_follows_xdg_then_home():
 
 def test_explicit_state_dir_wins():
     cfg = load_config({**FULL_ENV, "ZOTERO_CAPTURE_STATE_DIR": "/tmp/zp"})
-    assert cfg.queue_path == Path("/tmp/zp/retry_queue.jsonl")
+    assert cfg.db_path == Path("/tmp/zp/url_index.db")
+    assert cfg.log_path == Path("/tmp/zp/capture.log")
