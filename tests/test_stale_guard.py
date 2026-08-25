@@ -36,17 +36,32 @@ def test_an_older_running_version_is_stale(running, installed):
     assert is_stale(running, installed) is True
 
 
+@pytest.mark.parametrize("running, installed", [("0.11.6", "0.11.6")])
+def test_an_exactly_matching_version_is_not_stale(running, installed):
+    """Positive control: the guard must not refuse an up-to-date session."""
+    assert is_stale(running, installed) is False
+
+
 @pytest.mark.parametrize(
     "running, installed",
     [
-        ("0.11.6", "0.11.6"),
-        ("0.11.7", "0.11.6"),  # a dev checkout ahead of the clone is fine
+        ("0.11.7", "0.11.6"),
         ("1.10.0", "1.2.3"),
     ],
 )
-def test_a_current_or_newer_version_is_not_stale(running, installed):
-    """Positive control: the guard must not refuse an up-to-date session."""
-    assert is_stale(running, installed) is False
+def test_a_version_AHEAD_of_the_install_is_also_refused(running, installed):
+    """Reversed 2026-08-25. This used to assert the opposite.
+
+    The old comment called a root ahead of the clone "a dev checkout, fine".
+    That reads reasonably until you ask how a bad release gets stopped: you roll
+    the install back. Under the old rule the rolled-back install left the bad
+    session running, so the one lever for stopping it did nothing — and said
+    nothing.
+
+    A dev checkout is still easy to run; it just has to say so, by pointing the
+    install at itself rather than by being silently exempt.
+    """
+    assert is_stale(running, installed) is True
 
 
 @pytest.mark.parametrize(

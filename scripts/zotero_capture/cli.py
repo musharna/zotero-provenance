@@ -19,6 +19,7 @@ from .project_slug import derive_slug
 from .sqlite_cache import lookup_url
 from .title_fetcher import fetch_title
 from .url_processing import canonicalize
+from . import __version__
 from .zotero_client import api_base, ZoteroClient
 
 logger = logging.getLogger(__name__)
@@ -117,10 +118,24 @@ def _emit_log(
     context: str | None,
     result: CaptureResult,
     latency_ms: int,
+    identity: dict[str, str] | None = None,
 ) -> None:
+    """Append one JSON line per capture, including WHO captured.
+
+    The runtime fields are here because of what it cost to be without them. A
+    session ran plugin v0.3.0 for weeks, writing rows that every release since
+    v0.8 refuses, and the log said `urls_new: 1, errors: []` every time —
+    perfectly true, and useless. Nothing recorded which code produced the line
+    or which index and library it wrote to, so the only way to find it was to
+    replay a URL through nine cached versions and see which one accepted it.
+
+    With `version` and `root` on every line the same question is one grep.
+    """
     log_path.parent.mkdir(parents=True, exist_ok=True)
     obj = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "version": __version__,
+        "root": str(Path(__file__).resolve().parent.parent.parent),
         "project": project,
         "context": context,
         "urls_seen": result.urls_seen,
@@ -128,6 +143,8 @@ def _emit_log(
         "urls_recurring": result.urls_recurring,
         "urls_excluded": result.urls_excluded,
         "latency_ms": latency_ms,
+        "library": (identity or {}).get("library_id", ""),
+        "collection": (identity or {}).get("collection_key", ""),
         "errors": [
             {"url": e.url, "code": e.code, "message": e.message} for e in result.errors
         ],
@@ -169,6 +186,7 @@ def run_capture(
         log_path,
         project=project,
         context=context,
+        identity=identity,
         result=result,
         latency_ms=latency_ms,
     )

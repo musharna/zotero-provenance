@@ -123,6 +123,13 @@ def _run_hook(
     env.pop("ZOTERO_CAPTURE_DISABLE", None)
     env["ZOTERO_SECRETS_FILE"] = str(secrets)
     env["ZOTERO_CAPTURE_STATE_DIR"] = str(tmp_path / "state")
+    # The hook runs in a subprocess, so it asks the staleness guard for real.
+    # Point it at THIS checkout's manifest: an end-to-end test must exercise the
+    # code in the repo, not depend on which version happens to be installed on
+    # the machine running the suite.
+    env["ZOTERO_PROVENANCE_INSTALLED_MANIFEST"] = str(
+        PLUGIN_ROOT / ".claude-plugin" / "plugin.json"
+    )
     return subprocess.run(
         ["bash", str(STOP_HOOK)],
         input=json.dumps(
@@ -266,6 +273,13 @@ def _run_hook_turns(
     env.pop("ZOTERO_CAPTURE_DISABLE", None)
     env["ZOTERO_SECRETS_FILE"] = str(secrets)
     env["ZOTERO_CAPTURE_STATE_DIR"] = str(tmp_path / "state")
+    # The hook runs in a subprocess, so it asks the staleness guard for real.
+    # Point it at THIS checkout's manifest: an end-to-end test must exercise the
+    # code in the repo, not depend on which version happens to be installed on
+    # the machine running the suite.
+    env["ZOTERO_PROVENANCE_INSTALLED_MANIFEST"] = str(
+        PLUGIN_ROOT / ".claude-plugin" / "plugin.json"
+    )
     payload: dict[str, Any] = {
         "transcript_path": str(transcript),
         "session_id": "s1",

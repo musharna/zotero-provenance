@@ -22,6 +22,27 @@ def pytest_configure(config):
     )
 
 
+@pytest.fixture(autouse=True)
+def _installed_version_matches(monkeypatch):
+    """Decouple the suite from whatever plugin version this machine installed.
+
+    capture_message asks the staleness guard, first thing, whether the running
+    version matches the INSTALLED one — and `installed_version()` reads a real
+    manifest under ~/.claude. So the suite quietly depended on the developer's
+    plugin install: it passed only while the repo and the installed clone
+    happened to hold the same number, and bumping the version to 0.12.0 turned
+    32 unrelated capture tests red at once.
+
+    That coupling is worth naming rather than patching per-test. A unit test
+    must not care what is deployed on the machine running it; the guard's own
+    behaviour is exercised deliberately in test_stale_guard.py and
+    test_audit_eight_staleness.py, which patch this on purpose.
+    """
+    import zotero_capture.capture as cap
+
+    monkeypatch.setattr(cap, "installed_version", lambda: cap.__version__)
+
+
 @pytest.fixture
 def tmp_db(tmp_path: Path) -> Path:
     return tmp_path / "test_index.db"
