@@ -63,6 +63,11 @@ class CaptureResult:
     urls_recurring: int = 0
     urls_excluded: int = 0
     errors: list[CaptureFailure] = field(default_factory=list)
+    # Why this run wrote nothing, when the reason was a deliberate refusal
+    # rather than an absence of URLs. Without it a refusal is byte-identical to
+    # a healthy message that cited nothing, which is how the health check came
+    # to count the plugin's most deliberate failures as successes.
+    refused: str | None = None
 
 
 def _domain(url: str) -> str:
@@ -165,6 +170,7 @@ def capture_message(
     reason = stale_reason(__version__, installed_version())
     if reason:
         logger.error("%s", reason)
+        result.refused = reason
         return result
     init_db(db_path)
     # Before any row is read or written: is this index an index of the library
@@ -176,6 +182,7 @@ def capture_message(
             bind_identity(db_path, **identity)
         except IndexIdentityMismatch as e:
             logger.error("%s", e)
+            result.refused = str(e)
             return result
     now = now or datetime.now(timezone.utc)
     if _is_generated_report(message, origin):

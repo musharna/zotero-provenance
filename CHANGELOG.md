@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.15.0 — 2026-08-25
+
+An external audit of yesterday's three releases. Six findings, four of them
+High, and the worst were all in the health check — the feature built two hours
+earlier specifically to detect silent failure. Every one reproduced before being
+accepted.
+
+- **A later good capture erased the evidence of a stale one.** The check read
+  only the newest capture. Two sessions running concurrently — a lingering
+  superseded one that captures at 11:40, a current one that captures at 11:41 —
+  and the stale write became invisible permanently, while that session was still
+  alive and still writing with rules corrected releases ago. Every capture since
+  the install is now examined, not just the last.
+
+- **A capture now records the pinned root it observed when it wrote.** The
+  install timestamp was never a generation clock: any upgrade or reinstall
+  advanced it, retroactively forgiving every write that had already been stale
+  when it happened. Staleness is now a property of the record, decided once by
+  the process that was there. Lines written before this fall back to the old
+  comparison.
+
+- **Registry resolution asked for a prefix and took the first hit.** A registry
+  legitimately holding this plugin from two marketplaces, or at two scopes,
+  resolved to whichever was serialised first — and the trampoline `exec`s that
+  path. Identity is now exact and derived from the caller's own location: a root
+  at `.../cache/<marketplace>/<plugin>/<version>` resolves only
+  `<plugin>@<marketplace>`, only to a canonical target inside that same subtree,
+  and refuses outright when two entries disagree.
+
+  Both sides are canonicalised first. A trailing slash or symlink spelling made
+  a root unequal to itself, so it forwarded to itself and hit the recursion
+  guard — losing not one capture but every capture for the life of the session.
+
+- **Refusals looked exactly like successes.** The two most deliberate failures —
+  a superseded version, and an index bound to a different library — logged an
+  error and returned an empty result, after which the CLI wrote an ordinary
+  `urls_seen: 0, errors: []` line. That is the shape of a healthy message with
+  no citable URL, so the health check counted a refusal as a capture and reset
+  its own clock. An identity mismatch could refuse every citation forever while
+  writing a healthy-looking record each time. Refusal is now a field on the
+  result, in the log line, and read by the check.
+
+- **`missing-dependencies` was written without a timestamp**, and the check
+  discards any record it cannot place in time — so on a fresh install with
+  missing dependencies it would have stayed silent indefinitely. Relatedly,
+  `date -Iseconds` is GNU-only; on stock macOS it produced no timestamp at all.
+  Both now use `date '+%Y-%m-%dT%H:%M:%S%z'`.
+
+- **Wall-clock silence is gone.** A 24-hour threshold warned after any ordinary
+  weekend and repeated across SessionStart's resume/clear/compact/fork subtypes.
+  Elapsed time measures the user's habits; hook fires measure the plugin. The
+  hooks now append a heartbeat line per fire, and the check reports many fires
+  with no successful capture between them.
+
+Verified by real execution, not only by tests: silent against the live log,
+and reporting correctly against replays of each failure above.
+
 ## 0.14.1 — 2026-08-25
 
 The health check cried wolf on its own release, and that was caught by running

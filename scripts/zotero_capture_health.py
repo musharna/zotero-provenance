@@ -11,60 +11,67 @@ that can break a session start is a worse bug than the ones it looks for.
 
 from __future__ import annotations
 
-import json
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from zotero_capture.config import _state_dir  # noqa: E402
 from zotero_capture.health import evaluate  # noqa: E402
+from zotero_capture.registry import resolve_pinned  # noqa: E402
 
-DEFAULT_MAX_SILENCE_HOURS = 24.0
+DEFAULT_MAX_FIRES = 200
+# Keep the heartbeat bounded without needing a lock: trim only when it grows
+# well past what the check reads, and replace atomically.
+TRIM_ABOVE, TRIM_TO = 4000, 1000
 
 
 def _installed() -> tuple[str | None, datetime | None]:
     """Where the plugin manager points, and when it last pointed somewhere new.
 
-    None means "do not guess": an unreadable registry must not be reported as a
-    version mismatch. The timestamp matters as much as the path — without it,
-    the check fires on every release, because for a few minutes after an upgrade
-    the newest capture legitimately came from the previous root.
+    Delegated to `registry.resolve_pinned`, which matches the qualified plugin
+    id exactly rather than the first key with the right prefix. The prefix match
+    this used to do resolved to whichever entry was serialised first, so an
+    ordinary registry holding the plugin from two marketplaces or two scopes
+    could name the wrong root.
+
+    None means "do not guess": an unreadable or ambiguous registry must never be
+    reported as a version mismatch.
     """
     registry = Path.home() / ".claude" / "plugins" / "installed_plugins.json"
-    try:
-        data = json.loads(registry.read_text())
-    except (OSError, ValueError):
-        return None, None
-    for name, entries in (data.get("plugins") or {}).items():
-        if not name.startswith("zotero-provenance@"):
-            continue
-        for entry in entries or []:
-            path = entry.get("installPath")
-            if not path:
-                continue
-            when = None
-            raw = entry.get("lastUpdated") or entry.get("installedAt")
-            if isinstance(raw, str):
-                try:
-                    when = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-                except ValueError:
-                    when = None
-                if when is not None and when.tzinfo is None:
-                    when = None
-            return str(path), when
-    return None, None
+    root, when = resolve_pinned(
+        own_root=Path(__file__).resolve().parent.parent, registry_path=registry
+    )
+    return (str(root) if root else None), when
 
 
-def _max_silence() -> timedelta:
-    raw = os.environ.get("ZOTERO_CAPTURE_MAX_SILENCE_HOURS")
+def _max_fires() -> int:
+    raw = os.environ.get("ZOTERO_CAPTURE_MAX_FIRES_WITHOUT_CAPTURE")
     try:
-        hours = float(raw) if raw else DEFAULT_MAX_SILENCE_HOURS
+        return max(int(raw), 1) if raw else DEFAULT_MAX_FIRES
     except ValueError:
-        hours = DEFAULT_MAX_SILENCE_HOURS
-    return timedelta(hours=max(hours, 0.0))
+        return DEFAULT_MAX_FIRES
+
+
+def _hook_fires(state: Path) -> list[str]:
+    """Timestamps of recent hook fires, trimming the file if it has grown."""
+    path = state / "hook-fires.log"
+    try:
+        lines = path.read_text(errors="replace").splitlines()
+    except OSError:
+        return []
+    if len(lines) > TRIM_ABOVE:
+        keep = lines[-TRIM_TO:]
+        tmp = path.with_suffix(".trim")
+        try:
+            tmp.write_text("".join(f"{line}\n" for line in keep))
+            tmp.replace(path)
+            lines = keep
+        except OSError:
+            pass
+    return lines
 
 
 def main() -> int:
@@ -79,8 +86,9 @@ def main() -> int:
         lines,
         pinned_root=pinned,
         now=datetime.now().astimezone(),
-        max_silence=_max_silence(),
         installed_at=installed_at,
+        fires=_hook_fires(_state_dir(os.environ)),
+        max_fires=_max_fires(),
     )
     if not warnings:
         return 0

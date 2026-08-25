@@ -134,7 +134,7 @@ Sources get bucketed by their `seen:` history:
 | `ZOTERO_PROVENANCE_PYTHON`         | Interpreter to use, if the default `python3` lacks the deps.             |
 | `ZOTERO_API_BASE`                  | Alternate API root, for tests or an API-compatible server.               |
 | `ZOTERO_CAPTURE_HEALTH_DISABLE=1`  | Turn off the session-start health check only.                            |
-| `ZOTERO_CAPTURE_MAX_SILENCE_HOURS` | Hours without a capture before the check says so. Default 24.            |
+| `ZOTERO_CAPTURE_MAX_FIRES_WITHOUT_CAPTURE` | Hook fires with no capture before the check says so. Default 200. |
 
 Hooks do not inherit MCP-scoped environment from `~/.claude.json`, which is why
 credentials come from the secrets file.
@@ -147,10 +147,16 @@ audit rather than by the plugin noticing. A `SessionStart` hook now reads the
 capture log and says something when — and only when — one of four things is
 true:
 
-- the last capture ran from a plugin root that is not the installed one
-- refusal events have been recorded since the last successful capture
-- nothing has been captured for longer than the silence threshold
+- any capture since the current version was installed ran from a plugin root
+  that was not the pinned one at the time it wrote
+- refusal events have been recorded since the last successful capture, whether
+  from the hooks or from a capture that declined to write
+- the hooks have fired many times with no successful capture between them
 - the last capture reported errors
+
+It counts hook fires rather than elapsed time on purpose. Wall-clock silence
+measures your habits, not the plugin's health: a Friday capture and a Monday
+session is a 70-hour gap with nothing wrong.
 
 On a healthy session it prints nothing at all. That is the point: a check that
 speaks when things are fine gets tuned out, and a tuned-out check is worse than

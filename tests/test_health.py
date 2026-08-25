@@ -48,12 +48,12 @@ def _event(ts: str, event: str) -> str:
 
 
 def _check(
-    lines, *, pinned: str | None = PINNED, now=NOW, max_silence=DEFAULT_SILENCE,
-    installed_at=None,
+    lines, *, pinned: str | None = PINNED, now=NOW, installed_at=None,
+    fires=(), max_fires=200,
 ):
     return evaluate(
-        lines, pinned_root=pinned, now=now, max_silence=max_silence,
-        installed_at=installed_at,
+        lines, pinned_root=pinned, now=now, installed_at=installed_at,
+        fires=fires, max_fires=max_fires,
     )
 
 
@@ -106,6 +106,45 @@ def test_a_stale_root_capture_from_before_the_upgrade_is_not_reported() -> None:
     assert _check([_capture(captured, root=stale)], installed_at=installed) == []
 
 
+def test_a_later_good_capture_does_not_hide_an_earlier_stale_one() -> None:
+    """The defect the 2026-08-25 Codex audit ranked first.
+
+    Two sessions run concurrently: a lingering one on a superseded root and a
+    current one. If the current session captures a second later, taking only the
+    NEWEST capture makes the stale write invisible — permanently, even though
+    that session is still alive and still writing with corrected-away rules.
+
+    This is the exact failure class the health check exists to detect, so it
+    failing here would make the whole feature decorative.
+    """
+    stale = "/home/u/.claude/plugins/cache/zotero-provenance/zotero-provenance/0.3.0"
+    installed = datetime(2026, 8, 25, 11, 30, tzinfo=timezone(timedelta(hours=-4)))
+    lines = [
+        _capture("2026-08-25T11:40:00-04:00", root=stale),
+        _capture("2026-08-25T11:41:00-04:00", root=PINNED),
+    ]
+
+    warnings = _check(lines, installed_at=installed)
+
+    assert len(warnings) == 1, warnings
+    assert "0.3.0" in warnings[0], warnings
+
+
+def test_every_stale_capture_since_the_upgrade_is_counted() -> None:
+    stale = "/home/u/.claude/plugins/cache/zotero-provenance/zotero-provenance/0.3.0"
+    installed = datetime(2026, 8, 25, 11, 30, tzinfo=timezone(timedelta(hours=-4)))
+    lines = [
+        _capture("2026-08-25T11:40:00-04:00", root=stale),
+        _capture("2026-08-25T11:42:00-04:00", root=stale),
+        _capture("2026-08-25T11:43:00-04:00", root=PINNED),
+    ]
+
+    warnings = _check(lines, installed_at=installed)
+
+    assert len(warnings) == 1, warnings
+    assert "2" in warnings[0], warnings
+
+
 def test_a_stale_root_capture_after_the_upgrade_is_reported() -> None:
     """Same shape, other side of the install: this one really is stale code."""
     stale = "/home/u/.claude/plugins/cache/zotero-provenance/zotero-provenance/0.12.0"
@@ -140,16 +179,36 @@ def test_ignores_refusals_that_predate_the_last_capture() -> None:
     assert _check(lines) == []
 
 
-def test_reports_a_long_silence() -> None:
-    warnings = _check([_capture("2026-08-23T11:00:00-04:00")])
+def test_a_long_quiet_stretch_alone_is_not_reported() -> None:
+    """Wall-clock silence is not evidence of a fault.
+
+    The 24-hour threshold this replaced warned after any ordinary weekend: a
+    Friday capture and a Monday session is a 60-70 hour gap with nothing wrong.
+    Repeated across SessionStart's startup/resume/clear/compact/fork subtypes,
+    that is precisely the chatter that gets a check ignored.
+    """
+    assert _check([_capture("2026-08-20T11:00:00-04:00")]) == []
+
+
+def test_reports_many_hook_fires_with_no_capture() -> None:
+    """Activity without capture IS evidence: the hooks ran and wrote nothing."""
+    fires = [f"2026-08-25T11:{m:02d}:00-04:00" for m in range(0, 60)]
+    warnings = _check(
+        [_capture("2026-08-25T09:00:00-04:00")], fires=fires, max_fires=30
+    )
 
     assert len(warnings) == 1
-    assert "49" in warnings[0] or "48" in warnings[0], warnings
+    assert "60" in warnings[0], warnings
 
 
-def test_silence_just_under_the_threshold_is_not_reported() -> None:
-    """The boundary decides whether this thing is livable or noisy."""
-    assert _check([_capture("2026-08-24T13:00:00-04:00")]) == []
+def test_fires_before_the_last_capture_do_not_count() -> None:
+    fires = [f"2026-08-25T09:{m:02d}:00-04:00" for m in range(0, 60)]
+    assert _check([_capture("2026-08-25T11:00:00-04:00")], fires=fires, max_fires=30) == []
+
+
+def test_ordinary_activity_below_the_threshold_is_quiet() -> None:
+    fires = [f"2026-08-25T11:{m:02d}:00-04:00" for m in range(0, 10)]
+    assert _check([_capture("2026-08-25T09:00:00-04:00")], fires=fires, max_fires=30) == []
 
 
 def test_reports_capture_errors_from_the_most_recent_run() -> None:
@@ -178,7 +237,8 @@ def test_several_problems_are_all_reported() -> None:
     ]
     warnings = _check(lines)
 
-    assert len(warnings) == 3, warnings
+    # Two, not three: elapsed time is no longer a signal on its own.
+    assert len(warnings) == 2, warnings
 
 
 # --- real execution: the hook itself ------------------------------------------
@@ -256,7 +316,8 @@ def test_hook_reports_the_outage_shape(tmp_path: Path) -> None:
 
     assert proc.returncode == 0, proc.stderr
     assert "refusal" in proc.stdout, proc.stdout
-    assert "29 hours" in proc.stdout, proc.stdout
+    # No elapsed-time claim: a 29-hour gap is not itself evidence of a fault.
+    assert "hours" not in proc.stdout, proc.stdout
     # The stale-ROOT signal is deliberately absent here: against the real
     # registry this capture predates the installed-at timestamp, so it cannot
     # be distinguished from a capture that merely happened before an upgrade.
