@@ -19,11 +19,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from zotero_capture.config import _state_dir  # noqa: E402
-from zotero_capture.health import evaluate, latest_record_ts  # noqa: E402
+from zotero_capture.health import evaluate  # noqa: E402
 from zotero_capture.registry import resolve_pinned  # noqa: E402
-
-ACK_FILE = "health-ack"
-
 
 def _installed() -> tuple[str | None, datetime | None]:
     """Where the plugin manager points, and when it last pointed somewhere new.
@@ -41,29 +38,6 @@ def _installed() -> tuple[str | None, datetime | None]:
     return (str(root) if root else None), when
 
 
-def _acknowledged_before(state: Path) -> datetime | None:
-    """The newest record already reported, so an incident is said once."""
-    try:
-        raw = (state / ACK_FILE).read_text().strip()
-    except OSError:
-        return None
-    try:
-        when = datetime.fromisoformat(raw)
-    except ValueError:
-        return None
-    return when if when.tzinfo is not None else None
-
-
-def _acknowledge(state: Path, when: datetime | None) -> None:
-    if when is None:
-        return
-    try:
-        state.mkdir(parents=True, exist_ok=True)
-        (state / ACK_FILE).write_text(when.isoformat())
-    except OSError:
-        pass
-
-
 def main() -> int:
     log = _state_dir(os.environ) / "capture.log"
     try:
@@ -71,24 +45,18 @@ def main() -> int:
     except OSError:
         return 0
 
-    state = _state_dir(os.environ)
     pinned, installed_at = _installed()
-    warnings = evaluate(
-        lines,
-        pinned_root=pinned,
-        now=datetime.now().astimezone(),
-        installed_at=installed_at,
-        acknowledged_before=_acknowledged_before(state),
-    )
+    warnings = evaluate(lines, pinned_root=pinned, installed_at=installed_at)
     if not warnings:
         return 0
 
+    # No cursor is written, deliberately. A timestamp cursor could not be made
+    # race-safe on one-second stamps, and it suppressed records it had never
+    # actually classified. Scope replaces state: these warnings describe the
+    # generation now installed, and an upgrade retires them.
     print("zotero-provenance: capture may not be working")
     for warning in warnings:
         print(f"  - {warning}")
-    # Everything examined is now reported. A record written after this point is
-    # newer than the cursor and will still be raised.
-    _acknowledge(state, latest_record_ts(lines))
     return 0
 
 

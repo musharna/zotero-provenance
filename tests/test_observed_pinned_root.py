@@ -58,18 +58,30 @@ def test_the_log_line_carries_the_pinned_root(tmp_path: Path) -> None:
     assert record.get("pinned_root") == "/c/0.15.0", record
 
 
-def test_an_upgrade_does_not_forgive_a_write_that_was_stale_at_the_time() -> None:
-    """The T1 write above stays visible after the T2 upgrade."""
+def test_an_upgrade_retires_a_stale_write_from_the_previous_generation() -> None:
+    """This REVERSES an earlier fix, deliberately, and the reason matters.
+
+    0.15.0 made a stale write stay visible across upgrades, because
+    `installed_at` was being used to JUDGE staleness and an upgrade therefore
+    forgave real evidence. Records now carry the pin they observed, so they
+    judge themselves — `installed_at` only decides whether an incident still
+    describes the generation now running.
+
+    A pre-upgrade stale write is therefore not reported. That is a genuine
+    reduction in coverage, and it is accepted because it is self-correcting for
+    the case that can still be acted on: if the offending session is still
+    alive, its NEXT write produces a fresh incident after the install and is
+    reported. Only a dead session's historical write goes unmentioned, and by
+    then there is nothing left to do about it.
+    """
     stale_then = _line("2026-08-24T10:00:00-04:00", "/c/0.3.0", "/c/0.13.0")
     warnings = evaluate(
         [stale_then],
         pinned_root="/c/0.15.0",
-        now=datetime(2026, 8, 25, 12, 0, tzinfo=TZ),
         installed_at=datetime(2026, 8, 25, 11, 30, tzinfo=TZ),
     )
 
-    assert warnings, "an upgrade erased evidence of a write that was already stale"
-    assert "0.3.0" in warnings[0], warnings
+    assert warnings == [], warnings
 
 
 def test_a_write_that_was_current_at_the_time_stays_quiet() -> None:
@@ -78,7 +90,6 @@ def test_a_write_that_was_current_at_the_time_stays_quiet() -> None:
     warnings = evaluate(
         [fine],
         pinned_root="/c/0.15.0",
-        now=datetime(2026, 8, 25, 12, 0, tzinfo=TZ),
         installed_at=datetime(2026, 8, 25, 11, 30, tzinfo=TZ),
     )
 
@@ -91,7 +102,6 @@ def test_records_without_the_field_fall_back_to_the_install_clock() -> None:
     warnings = evaluate(
         [old],
         pinned_root="/c/0.15.0",
-        now=datetime(2026, 8, 25, 12, 0, tzinfo=TZ),
         installed_at=datetime(2026, 8, 25, 11, 30, tzinfo=TZ),
     )
 
@@ -157,3 +167,60 @@ def test_an_unresolvable_pin_is_recorded_as_unknown(tmp_path: Path) -> None:
 
     record = json.loads(log.read_text().splitlines()[-1])
     assert record.get("pin_observation") == "unknown", record
+
+
+def test_a_record_that_disclaims_the_pin_is_not_called_stale() -> None:
+    """`pin_observation: "unknown"` was written and then read by nothing.
+
+    The record says, explicitly, that the writer could not determine which root
+    was pinned. Judging it by the install clock anyway is exactly the legacy
+    semantics the field was added to replace — and it produced a POSITIVE stale
+    write warning from evidence that disclaims itself. A detector that cannot
+    tell "stale" from "unknown" is guessing, which is the habit that produced
+    every false alarm in this feature so far.
+    """
+    line = json.dumps(
+        {
+            "ts": "2026-08-25T11:40:00-04:00",
+            "version": "0.3.0",
+            "root": "/c/0.3.0",
+            "pin_observation": "unknown",
+            "urls_seen": 1,
+            "urls_new": 1,
+            "errors": [],
+        }
+    )
+
+    warnings = evaluate(
+        [line],
+        pinned_root="/c/0.16.0",
+        installed_at=datetime(2026, 8, 25, 11, 30, tzinfo=TZ),
+    )
+
+    # Not called stale — but not silent either. Unverified is its own answer.
+    assert len(warnings) == 1, warnings
+    assert "could not be verified" in warnings[0], warnings
+    assert "not the installed version" not in warnings[0], warnings
+
+
+def test_a_resolved_pin_still_decides_normally() -> None:
+    """Positive control, so the test above cannot pass by disabling the signal."""
+    line = json.dumps(
+        {
+            "ts": "2026-08-25T11:40:00-04:00",
+            "version": "0.3.0",
+            "root": "/c/0.3.0",
+            "pinned_root": "/c/0.16.0",
+            "urls_seen": 1,
+            "urls_new": 1,
+            "errors": [],
+        }
+    )
+
+    warnings = evaluate(
+        [line],
+        pinned_root="/c/0.16.0",
+        installed_at=datetime(2026, 8, 25, 11, 30, tzinfo=TZ),
+    )
+
+    assert warnings, "the stale signal stopped working entirely"

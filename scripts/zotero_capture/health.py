@@ -20,7 +20,7 @@ else, and each names both what is wrong and the number that shows it.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Iterable
 
 # What the hooks write when they decline to capture. Any of these appearing
@@ -30,6 +30,11 @@ REFUSAL_EVENTS = (
     "forward-unresolved",
     "forward-loop-refused",
     "missing-dependencies",
+    # Bootstrap failures. These used to be written as plaintext, which this
+    # parser drops, so a fresh install with no credentials failed on every cited
+    # URL and reported nothing — forever.
+    "configuration-error",
+    "capture-bootstrap-error",
 )
 
 
@@ -77,17 +82,6 @@ def _is_capture(record: dict) -> bool:
     return "event" not in record and ("urls_seen" in record or "version" in record)
 
 
-def latest_record_ts(lines: Iterable[str]) -> datetime | None:
-    """The newest timestamp in the log the caller just read.
-
-    Used as the acknowledgement cursor. Acknowledging "now" would swallow any
-    record written between reading and acknowledging; acknowledging the newest
-    record actually examined cannot.
-    """
-    records = _records(lines)
-    return max((r["_ts"] for r in records), default=None)
-
-
 def _version_of(root: str) -> str:
     return root.rstrip("/").rsplit("/", 1)[-1] or root
 
@@ -96,17 +90,20 @@ def evaluate(
     lines: Iterable[str],
     *,
     pinned_root: str | None,
-    now: datetime,
     installed_at: datetime | None = None,
-    acknowledged_before: datetime | None = None,
 ) -> list[str]:
     """Human-readable warnings, or an empty list when there is nothing to say.
 
-    Three signals, deliberately fewer than before. Two rounds of audit killed
-    the others: counting hook fires chattered after about a hundred URL-free
-    turns, and elapsed time measured the user's habits rather than the plugin.
+    Four signals, and no clock beyond the log's own. Three earlier designs were
+    removed for lying: elapsed-time silence measured the user's habits, hook-fire
+    counting chattered after about a hundred citation-free turns, and an
+    acknowledgement cursor could not be made race-safe on one-second timestamps.
+    Each was machinery added to stop the previous one's noise.
 
-    What survives is what the log can actually prove.
+    What replaces the cursor is scope rather than state: a stale write is
+    reported while it is still CURRENT — that is, since the running version was
+    installed — and stops being reported when the next upgrade supersedes that
+    generation. Nothing is stored, so nothing can be lost.
     """
     records = _records(lines)
     if not records:
@@ -116,20 +113,12 @@ def evaluate(
     last = max(captures, key=lambda r: r["_ts"]) if captures else None
     warnings: list[str] = []
 
-    # 1. A write happened from a root that was not the pinned one AT THE TIME.
-    #
-    #    This claim used to be "a live session is executing superseded code",
-    #    which the evidence never supported: a record proves a write occurred,
-    #    not that its author still exists. One stale record in an unbounded log
-    #    then warned at every session start, forever, long after the session
-    #    that wrote it had gone — the false negative traded for a false
-    #    positive. So the claim shrank to what is provable, and an
-    #    acknowledgement cursor means it is said once rather than repeatedly.
-    #
-    #    A record carrying `pinned_root` decides its own staleness and is read
-    #    WITHOUT the current registry: it was already proof, and gating it on a
-    #    readable registry threw that proof away. `installed_at` remains the
-    #    fallback for lines written before that field existed.
+    def _since_this_install(record: dict) -> bool:
+        # Scoping only. `installed_at` is NOT used to decide staleness — records
+        # carry the pin they observed and decide that themselves — it decides
+        # whether an incident still describes the generation now running.
+        return installed_at is None or record["_ts"] > installed_at
+
     def _was_stale(record: dict) -> bool:
         root = record.get("root")
         if not isinstance(root, str) or not root:
@@ -137,13 +126,15 @@ def evaluate(
         observed = record.get("pinned_root")
         if isinstance(observed, str) and observed:
             return root != observed
+        # The writer said it could not determine the pin. Unknown is not stale.
+        if record.get("pin_observation") == "unknown":
+            return False
         if pinned_root is None or root == pinned_root:
             return False
-        return not (installed_at is not None and record["_ts"] <= installed_at)
+        return _since_this_install(record)
 
-    stale = [r for r in captures if _was_stale(r)]
-    if acknowledged_before is not None:
-        stale = [r for r in stale if r["_ts"] > acknowledged_before]
+    # 1. A write happened from a root that was not the pinned one at the time.
+    stale = [r for r in captures if _was_stale(r) and _since_this_install(r)]
     if stale:
         latest = max(stale, key=lambda r: r["_ts"])
         roots = sorted({_version_of(r["root"]) for r in stale})
@@ -153,10 +144,25 @@ def evaluate(
             f"(most recent {latest['_ts'].isoformat()}, {latest['root']})"
         )
 
-    # 2. Hooks fired and declined. A successful capture clears these, so unlike
-    #    the incident above they need no cursor: if they persist, capture really
-    #    is still off. The count is capped in the message because a long-broken
-    #    install produces an absurd number that says nothing extra.
+    # 2. A write happened while the plugin could not tell which root was pinned.
+    #    Not stale — the record disclaims that — but not silence either, because
+    #    "we wrote without being able to check" is exactly the uncertainty this
+    #    plugin refuses to paper over everywhere else.
+    unverified = [
+        r
+        for r in captures
+        if r.get("pin_observation") == "unknown" and _since_this_install(r)
+    ]
+    if unverified:
+        latest = max(unverified, key=lambda r: r["_ts"])
+        warnings.append(
+            f"{len(unverified)} capture(s) wrote while the installed plugin root "
+            f"could not be verified (most recent {latest['_ts'].isoformat()})"
+        )
+
+    # 3. Hooks fired and declined, or the plugin could not start. A successful
+    #    capture clears these; the count is capped because a long-broken install
+    #    produces an absurd number that adds nothing.
     since = last["_ts"] if last else None
     refusals = [
         r
@@ -173,7 +179,7 @@ def evaluate(
             f"{newest['_ts'].isoformat()}) — capture is declining, not writing"
         )
 
-    # 3. The last run did capture, but something inside it failed.
+    # 4. The last run did capture, but something inside it failed.
     if last:
         errors = last.get("errors")
         if isinstance(errors, list) and errors:

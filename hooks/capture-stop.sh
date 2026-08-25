@@ -6,6 +6,15 @@ set -uo pipefail
 
 [[ "${ZOTERO_CAPTURE_DISABLE:-}" == "1" ]] && exit 0
 
+# What this hook does when the trampoline declines. Kept OUT of the trampoline
+# block so that block can stay byte-identical in all three hooks — three copies
+# of path arithmetic that decides what gets exec'd must not drift silently.
+# A capture hook stays quiet: it must never delay or interrupt a turn.
+zp_tramp_refuse() {
+	cat >/dev/null
+	exit 0
+}
+
 # --- trampoline: a superseded root delegates instead of refusing ---------------
 # A session keeps whichever plugin root it resolved at its own start and cannot
 # be made to re-resolve without restarting. This SCRIPT, though, is re-read from
@@ -63,20 +72,31 @@ case "$ZP_MINE" in
 		# Each candidate is canonicalised BEFORE they are compared. Deduping raw
 		# strings made two spellings of one root ("/p/1" and "/p/1/../1") look
 		# like two candidates, and the ambiguity rule then refused every capture.
+		# jq's OUTPUT is captured and its EXIT STATUS checked, rather than
+		# streamed through process substitution — bash cannot see a producer's
+		# status there. With a valid entry followed by a malformed one, jq printed
+		# the good path and then exited 5, the loop counted one candidate and
+		# accepted it; reversing the entries refused. That made resolution depend
+		# on serialisation order again, which is the exact class of bug that
+		# started this sequence. Entries are type-checked in jq for the same reason.
 		ZP_SEEN="" ZP_COUNT=0
-		while IFS= read -r ZP_CAND; do
-			[[ -n "$ZP_CAND" ]] || continue
-			ZP_CAND="$(cd "$ZP_CAND" 2>/dev/null && pwd -P)" || continue
-			[[ -n "$ZP_CAND" ]] || continue
-			case "$ZP_SEEN" in
-			*"|$ZP_CAND|"*) continue ;;
-			esac
-			ZP_SEEN="$ZP_SEEN|$ZP_CAND|"
-			ZP_TARGET="$ZP_CAND"
-			ZP_COUNT=$((ZP_COUNT + 1))
-		done < <(jq -r --arg k "${ZP_PLUGIN}@${ZP_MARKET}" '
+		if ZP_RAW="$(jq -r --arg k "${ZP_PLUGIN}@${ZP_MARKET}" '
 			((.plugins // {}) | if type == "object" then .[$k] else null end) // []
-			| .[]? | .installPath // empty | select(. != "")' "$ZP_REG" 2>/dev/null)
+			| if (type == "array") and (all(.[]; type == "object"))
+			  then .[] else empty end
+			| .installPath | select(type == "string" and . != "")' "$ZP_REG" 2>/dev/null)"; then
+			while IFS= read -r ZP_CAND; do
+				[[ -n "$ZP_CAND" ]] || continue
+				ZP_CAND="$(cd "$ZP_CAND" 2>/dev/null && pwd -P)" || continue
+				[[ -n "$ZP_CAND" ]] || continue
+				case "$ZP_SEEN" in
+				*"|$ZP_CAND|"*) continue ;;
+				esac
+				ZP_SEEN="$ZP_SEEN|$ZP_CAND|"
+				ZP_TARGET="$ZP_CAND"
+				ZP_COUNT=$((ZP_COUNT + 1))
+			done <<<"$ZP_RAW"
+		fi
 		# One unambiguous root, or nothing. Two that disagree refuse rather than
 		# guess: guessing is what put an unverified path on the exec line.
 		((ZP_COUNT == 1)) || ZP_TARGET=""
@@ -91,13 +111,11 @@ case "$ZP_MINE" in
 		# are the ones a later release has already corrected.
 		if [[ -n "${ZP_FORWARDED_FROM:-}" ]]; then
 			zp_tramp_log "forward-loop-refused" "${ZP_FORWARDED_FROM}"
-			cat >/dev/null
-			exit 0
+			zp_tramp_refuse "a forward returned to a superseded root"
 		fi
 		if [[ -z "$ZP_TARGET" || ! -f "$ZP_TARGET/hooks/$ZP_SELF" ]]; then
 			zp_tramp_log "forward-unresolved" "${ZP_TARGET:-none}"
-			cat >/dev/null
-			exit 0
+			zp_tramp_refuse "cannot resolve the installed plugin root"
 		fi
 		export ZP_FORWARDED_FROM="$ZP_MINE"
 		exec bash "$ZP_TARGET/hooks/$ZP_SELF"

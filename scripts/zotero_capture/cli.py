@@ -14,7 +14,7 @@ from datetime import date
 from pathlib import Path
 
 from .capture import CaptureResult, capture_message
-from .config import Config, ConfigError, load_config
+from .config import Config, ConfigError, _state_dir, load_config
 from .project_slug import derive_slug
 from .sqlite_cache import lookup_url
 from .title_fetcher import fetch_title
@@ -109,6 +109,35 @@ def build_client(config: Config, *, timeout: float | None = None) -> ZoteroClien
         web_sources_collection_key=config.collection_key,
         **kwargs,
     )
+
+
+def _emit_bootstrap_event(event: str, detail: str) -> None:
+    """Record a failure that happened BEFORE any capture could be attempted.
+
+    Written through `_state_dir`, which resolves without valid credentials —
+    which is the whole point, since these are the paths where the credentials
+    are what is missing. Previously these were a plaintext stderr line and a
+    traceback; the health parser drops anything that is not JSON, so a fresh
+    install with no API key failed on every cited URL and reported nothing,
+    forever. Best-effort: this must never itself break a turn.
+    """
+    try:
+        log_path = _state_dir(os.environ) / "capture.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(
+                json.dumps(
+                    {
+                        "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                        "event": event,
+                        "detail": detail[:500],
+                        "version": __version__,
+                    }
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
 
 
 def _observed_pinned_root() -> str | None:
@@ -253,6 +282,7 @@ def main(argv: list[str] | None = None) -> int:
         # Loud on stderr (the hook appends stderr to the capture log) but never
         # non-zero from a hook path: a misconfigured plugin must not block a turn.
         sys.stderr.write(f"zotero-provenance: {e}\n")
+        _emit_bootstrap_event("configuration-error", str(e))
         return 0 if args.triage is None else 1
 
     db_path = Path(args.db_path) if args.db_path else config.db_path
@@ -281,8 +311,9 @@ def main(argv: list[str] | None = None) -> int:
                 },
             )
         return 0
-    except Exception:
+    except Exception as e:
         logging.exception("zotero-provenance capture failed")
+        _emit_bootstrap_event("capture-bootstrap-error", f"{type(e).__name__}: {e}")
         return 0 if args.triage is None else 1
 
 
