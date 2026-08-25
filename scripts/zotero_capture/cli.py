@@ -111,6 +111,26 @@ def build_client(config: Config, *, timeout: float | None = None) -> ZoteroClien
     )
 
 
+def _observed_pinned_root() -> str | None:
+    """What the registry pinned at the moment of THIS write, or None.
+
+    Recorded per line so staleness becomes a property of the record, decided
+    once by the process that was actually there. Deriving it later cannot work:
+    the registry moves, and any upgrade or reinstall would retroactively forgive
+    every write that had already been stale when it happened.
+    """
+    try:
+        from .registry import resolve_pinned
+
+        root, _ = resolve_pinned(
+            own_root=Path(__file__).resolve().parent.parent.parent,
+            registry_path=Path.home() / ".claude" / "plugins" / "installed_plugins.json",
+        )
+        return str(root) if root else None
+    except Exception:  # never let bookkeeping break a capture
+        return None
+
+
 def _emit_log(
     log_path: Path,
     *,
@@ -132,6 +152,7 @@ def _emit_log(
     With `version` and `root` on every line the same question is one grep.
     """
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    _pinned = _observed_pinned_root()
     obj = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "version": __version__,
@@ -142,6 +163,10 @@ def _emit_log(
         "urls_new": result.urls_new,
         "urls_recurring": result.urls_recurring,
         "urls_excluded": result.urls_excluded,
+        **({"pinned_root": _pinned} if _pinned else {}),
+        # Only present when the run refused; absent on ordinary captures so the
+        # healthy line keeps its existing shape.
+        **({"refused": result.refused} if result.refused else {}),
         "latency_ms": latency_ms,
         "library": (identity or {}).get("library_id", ""),
         "collection": (identity or {}).get("collection_key", ""),

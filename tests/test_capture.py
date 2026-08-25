@@ -513,7 +513,14 @@ def test_a_stale_plugin_root_captures_nothing(
         zotero=fake_zotero,
         title_fetcher=fake_title_fetcher,
     )
-    assert result == CaptureResult()
+    # Nothing written, AND the refusal is recorded rather than merely implied.
+    # `result == CaptureResult()` used to be the whole check, which made a
+    # refusal byte-identical to a healthy message that cited nothing — and that
+    # is exactly why the health check counted refusals as successful captures
+    # until the 2026-08-25 audit found it.
+    assert (result.urls_seen, result.urls_new, result.urls_recurring) == (0, 0, 0)
+    assert not result.errors
+    assert result.refused and "99.0.0" in result.refused
     fake_zotero.post_webpage_item.assert_not_called()
     fake_zotero.add_tags.assert_not_called()
 

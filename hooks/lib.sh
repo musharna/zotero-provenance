@@ -79,8 +79,13 @@ zp_check_deps() {
 	PYEOF
 	)"
 	if [[ -n "$missing" ]]; then
-		printf '{"event": "missing-dependencies", "python": "%s", "missing": "%s"}\n' \
-			"$py" "$missing" >>"$log"
+		# The ts is load-bearing, not decoration: the health check discards any
+		# record it cannot place in time, so an event without one is invisible
+		# to the very thing meant to report it. On a fresh install with missing
+		# dependencies there may be no other record at all, and health would
+		# then stay silent forever.
+		printf '{"ts": "%s", "event": "missing-dependencies", "python": "%s", "missing": "%s"}\n' \
+			"$(date '+%Y-%m-%dT%H:%M:%S%z')" "$py" "$missing" >>"$log"
 		printf 'zotero-provenance: %s cannot import: %s\n' "$py" "$missing" >>"$log"
 		printf 'Install them for that interpreter, or set ZOTERO_PROVENANCE_PYTHON to one that has them.\n' >>"$log"
 		return 1

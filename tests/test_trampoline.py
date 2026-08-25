@@ -237,3 +237,95 @@ def test_unresolvable_target_exits_zero_without_capturing(
     assert proc.returncode == 0, proc.stderr
     assert _stays_absent(setup["marker"])
     assert _stays_absent(argv_out), "stale root captured with no way to check itself"
+
+
+# --- registry resolution, per the 2026-08-25 audit ----------------------------
+
+
+def _write_registry(home: Path, entries: dict) -> None:
+    reg = home / ".claude" / "plugins" / "installed_plugins.json"
+    reg.parent.mkdir(parents=True, exist_ok=True)
+    reg.write_text(json.dumps({"version": 2, "plugins": entries}))
+
+
+@requires_jq
+@pytest.mark.parametrize("hook", HOOKS)
+def test_another_marketplace_listed_first_is_not_executed(tmp_path: Path, hook: str) -> None:
+    """The audit's reproduction: the prefix match exec'd the wrong plugin."""
+    setup = _install(tmp_path, mine="0.9.0", pinned="1.0.0", hook=hook)
+    home = setup["home"]
+    wrong = home / CACHE_REL.parent.parent / "other-marketplace" / "zotero-provenance" / "9.9.9"
+    wrong_marker = tmp_path / "wrong.txt"
+    _marker_hook(wrong / "hooks" / hook, wrong_marker)
+    _write_registry(
+        home,
+        {
+            "zotero-provenance@other-marketplace": [
+                {"scope": "project", "installPath": str(wrong)}
+            ],
+            "zotero-provenance@zotero-provenance": [
+                {"scope": "user", "installPath": str(home / CACHE_REL / "1.0.0")}
+            ],
+        },
+    )
+
+    proc = _run(setup["hook"], _env(tmp_path, home), _payload())
+
+    assert proc.returncode == 0, proc.stderr
+    assert _stays_absent(wrong_marker), "executed a plugin from another marketplace"
+    assert _appears(setup["marker"]), "did not reach the correct root"
+
+
+@requires_jq
+@pytest.mark.parametrize("hook", HOOKS)
+def test_a_trailing_slash_does_not_make_a_root_forward_to_itself(
+    tmp_path: Path, hook: str
+) -> None:
+    """Otherwise every fire self-forwards, hits the recursion guard, and is lost.
+
+    Not one capture — all of them, silently, for the life of the session. That is
+    the 29-hour outage again, reached by a spelling difference.
+    """
+    setup = _install(tmp_path, mine="1.0.0", pinned="1.0.0", hook=hook)
+    home = setup["home"]
+    argv_out = _fake_python(tmp_path)
+    _write_registry(
+        home,
+        {
+            "zotero-provenance@zotero-provenance": [
+                {"scope": "user", "installPath": str(home / CACHE_REL / "1.0.0") + "/"}
+            ]
+        },
+    )
+
+    proc = _run(setup["hook"], _env(tmp_path, home), _payload())
+
+    assert proc.returncode == 0, proc.stderr
+    assert _appears(argv_out), f"the pinned root refused itself; stderr: {proc.stderr!r}"
+
+
+@requires_jq
+@pytest.mark.parametrize("hook", HOOKS)
+def test_two_scopes_disagreeing_refuses_instead_of_guessing(
+    tmp_path: Path, hook: str
+) -> None:
+    setup = _install(tmp_path, mine="0.9.0", pinned="1.0.0", hook=hook)
+    home = setup["home"]
+    argv_out = _fake_python(tmp_path)
+    other = home / CACHE_REL / "2.0.0"
+    (other / "hooks").mkdir(parents=True, exist_ok=True)
+    _write_registry(
+        home,
+        {
+            "zotero-provenance@zotero-provenance": [
+                {"scope": "user", "installPath": str(home / CACHE_REL / "1.0.0")},
+                {"scope": "project", "installPath": str(other)},
+            ]
+        },
+    )
+
+    proc = _run(setup["hook"], _env(tmp_path, home), _payload())
+
+    assert proc.returncode == 0, proc.stderr
+    assert _stays_absent(setup["marker"]), "guessed between two candidates"
+    assert _stays_absent(argv_out), "captured from a superseded root"

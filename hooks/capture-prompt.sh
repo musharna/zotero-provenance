@@ -26,13 +26,13 @@ set -uo pipefail
 # the right direction. staleness.py keeps its guard as defence in depth for the
 # case where no target can be resolved at all.
 ZP_SELF="$(basename "${BASH_SOURCE[0]}")"
-ZP_MINE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ZP_MINE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 ZP_LOG="${ZOTERO_CAPTURE_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/zotero-provenance}/capture.log"
 
 zp_tramp_log() {
 	mkdir -p "$(dirname "$ZP_LOG")" 2>/dev/null
 	printf '{"ts": "%s", "event": "%s", "self": "%s", "detail": "%s"}\n' \
-		"$(date -Iseconds)" "$1" "$ZP_MINE" "${2:-}" >>"$ZP_LOG" 2>/dev/null
+		"$(date '+%Y-%m-%dT%H:%M:%S%z')" "$1" "$ZP_MINE" "${2:-}" >>"$ZP_LOG" 2>/dev/null
 }
 
 # Only a managed cache root can be superseded. A development checkout runs its
@@ -40,13 +40,37 @@ zp_tramp_log() {
 case "$ZP_MINE" in
 "$HOME/.claude/plugins/cache/"*)
 	ZP_REG="$HOME/.claude/plugins/installed_plugins.json"
+	# Identity is EXACT and derived from where this root lives:
+	# .../cache/<marketplace>/<plugin>/<version>. Asking for any key starting
+	# "zotero-provenance@" and taking the first hit resolved to whichever entry
+	# was serialised first, so a registry legitimately holding this plugin from
+	# two marketplaces, or at two scopes, could put the wrong path on the exec
+	# line below. Nothing adversarial is needed for that; scopes are ordinary.
+	ZP_PLUGIN="$(basename "$(dirname "$ZP_MINE")")"
+	ZP_MARKET="$(basename "$(dirname "$(dirname "$ZP_MINE")")")"
+	ZP_SUBTREE="$(dirname "$ZP_MINE")"
 	ZP_TARGET=""
 	if [[ -r "$ZP_REG" ]] && command -v jq >/dev/null 2>&1; then
-		ZP_TARGET="$(jq -r '
-			.plugins | to_entries[]
-			| select(.key | startswith("zotero-provenance@"))
-			| .value[]? | .installPath // empty' "$ZP_REG" 2>/dev/null | head -1)"
+		# One unambiguous installPath, or nothing. Two entries that disagree
+		# refuse rather than guess.
+		ZP_TARGET="$(jq -r --arg k "${ZP_PLUGIN}@${ZP_MARKET}" '
+			[ (.plugins // {})[$k]? // [] | .[]?
+			  | .installPath // empty | select(. != "") | sub("/+$"; "") ]
+			| unique
+			| if length == 1 then .[0] else empty end' "$ZP_REG" 2>/dev/null)"
 	fi
+	# Canonicalise before comparing. A symlink or ".." spelling would otherwise
+	# make a root unequal to ITSELF: it would forward to itself, hit the
+	# recursion guard, and lose not one capture but every capture for the life
+	# of the session — the 29-hour outage again, reached by a spelling.
+	if [[ -n "$ZP_TARGET" ]]; then
+		ZP_TARGET="$(cd "$ZP_TARGET" 2>/dev/null && pwd -P || true)"
+	fi
+	# And only ever forward inside this root's own marketplace/plugin subtree.
+	case "${ZP_TARGET:-}" in
+	"$ZP_SUBTREE"/*) ;;
+	*) ZP_TARGET="" ;;
+	esac
 	if [[ "$ZP_TARGET" != "$ZP_MINE" ]]; then
 		# Superseded: never capture from here. The rules this root would apply
 		# are the ones a later release has already corrected.
@@ -65,6 +89,12 @@ case "$ZP_MINE" in
 	fi
 	;;
 esac
+
+# Heartbeat: one line per fire, so health can tell "nobody was working" from
+# "the hooks are running and writing nothing". Elapsed time cannot separate
+# those — a Friday capture and a Monday session is a 70-hour gap with nothing
+# wrong — but fire count can. Append-only, so concurrent sessions need no lock.
+printf '%s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" >>"${ZP_LOG%/*}/hook-fires.log" 2>/dev/null || true
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
