@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from pathlib import Path
 
@@ -53,23 +54,38 @@ def _parts(version: str) -> tuple[int, ...] | None:
     return tuple(int(p) for p in version.split("."))
 
 
-def is_stale(running: str, installed: str) -> bool:
-    """True when `running` is strictly older than `installed`.
+CURRENT = "current"
+MISMATCH = "mismatch"
+UNKNOWN = "unknown"
 
-    Compared numerically, not lexicographically: "1.10.0" is newer than "1.2.3",
-    and a string comparison gets that backwards.
 
-    Unreadable input fails OPEN, which is the opposite of this plugin's usual
-    rule and is deliberate. Everywhere else an unanswerable question means
-    refuse; here a false positive silently stops capture for someone whose
-    install layout we could not read, and that is worse than the occasional
-    stale write it would have caught. The guard fires only when both versions
-    parse and the comparison is unambiguous.
+def classify(running: str, installed: str) -> str:
+    """CURRENT, MISMATCH or UNKNOWN — three answers, because there are three.
+
+    This was a boolean, and both of its shortcuts were real holes.
+
+    It asked "is running OLDER", so a root NEWER than the install was called
+    fine. But rolling the install back to 0.11.6 is precisely how you stop a bad
+    0.11.7 from writing, and under that rule the rollback did nothing to the
+    session it was meant to stop. Agreement now has to be exact.
+
+    And an unparseable version returned False — the same value as "verified
+    current" — so an install layout the code could not read silently disabled
+    the only guard against writing from an unknown root. UNKNOWN is now its own
+    answer, and the caller decides what it is worth.
+
+    Comparison is on parsed integers, not strings: "1.10.0" is newer than
+    "1.2.3" and a lexicographic compare gets that backwards.
     """
     a, b = _parts(running), _parts(installed)
     if a is None or b is None:
-        return False
-    return a < b
+        return UNKNOWN
+    return CURRENT if a == b else MISMATCH
+
+
+def is_stale(running: str, installed: str) -> bool:
+    """Whether capture must refuse. UNKNOWN does not refuse; see stale_reason."""
+    return classify(running, installed) is MISMATCH
 
 
 def stale_reason(running: str, installed: str) -> str:
@@ -79,18 +95,48 @@ def stale_reason(running: str, installed: str) -> str:
     actionable, while "running 0.3.0, 0.11.7 is installed" says exactly what
     happened and implies the fix, which is to start a new session.
     """
-    if not is_stale(running, installed):
+    verdict = classify(running, installed)
+    if verdict is CURRENT:
+        return ""
+    if verdict is UNKNOWN:
+        # Deliberately NOT a refusal, and deliberately not silent either.
+        #
+        # Refusing here would switch capture off for anyone whose install
+        # layout this code cannot parse — a failure that is both worse than the
+        # stale write it prevents and invisible in exactly the same way, which
+        # is the property that made the v0.3.0 outage last weeks. So capture
+        # proceeds and the uncertainty is logged. This is the one place the
+        # plugin's refuse-on-doubt rule is inverted, and the inversion is the
+        # whole reason it is written down here.
+        logger.warning(
+            "cannot compare plugin versions (running %r, installed %r); "
+            "capturing anyway",
+            running,
+            installed,
+        )
         return ""
     return (
         f"refusing to capture: this session is running plugin version {running}, "
         f"but {installed} is installed. A session keeps the plugin root it "
         f"resolved at its own start, so start a new session to pick it up. "
-        f"Capturing from an old root writes rows that current rules would refuse."
+        f"Capturing from a root that does not match the install writes rows the "
+        f"current rules would refuse — and a root NEWER than the install is "
+        f"just as wrong, because rolling the install back is how a bad release "
+        f"is stopped."
     )
 
 
-def installed_version(manifest: Path = INSTALLED_MANIFEST) -> str:
-    """The version of the installed clone, or "" if it cannot be read."""
+def installed_version(manifest: Path | None = None) -> str:
+    """The version of the installed clone, or "" if it cannot be read.
+
+    ZOTERO_PROVENANCE_INSTALLED_MANIFEST overrides the location. Two callers
+    need that: an end-to-end test, which runs the hook in a subprocess and must
+    not be at the mercy of what this machine happens to have installed, and
+    anyone whose plugin lives somewhere other than the marketplace clone.
+    """
+    if manifest is None:
+        override = os.environ.get("ZOTERO_PROVENANCE_INSTALLED_MANIFEST")
+        manifest = Path(override) if override else INSTALLED_MANIFEST
     try:
         return str(json.loads(manifest.read_text(encoding="utf-8")).get("version", ""))
     except (OSError, ValueError) as e:

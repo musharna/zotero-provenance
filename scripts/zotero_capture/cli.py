@@ -16,11 +16,11 @@ from pathlib import Path
 from .capture import CaptureResult, capture_message
 from .config import Config, ConfigError, load_config
 from .project_slug import derive_slug
-from .retry_queue import drain_queue
 from .sqlite_cache import lookup_url
 from .title_fetcher import fetch_title
 from .url_processing import canonicalize
-from .zotero_client import ZoteroClient
+from . import __version__
+from .zotero_client import api_base, ZoteroClient
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +90,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="add the `triaged` tag to an already-captured URL",
     )
     p.add_argument("--db-path", default=None)
-    p.add_argument("--queue-path", default=None)
     p.add_argument("--log-path", default=None)
     return p
 
@@ -112,15 +111,6 @@ def build_client(config: Config, *, timeout: float | None = None) -> ZoteroClien
     )
 
 
-def _retry_handler(entry: dict, zotero: ZoteroClient, db_path: Path) -> bool:
-    """Placeholder: retry is not implemented, so queued entries are always kept.
-
-    Nothing enqueues today (see run_capture), so this never drops data. It exists
-    so a future retry implementation has one obvious place to land.
-    """
-    return False
-
-
 def _emit_log(
     log_path: Path,
     *,
@@ -128,10 +118,24 @@ def _emit_log(
     context: str | None,
     result: CaptureResult,
     latency_ms: int,
+    identity: dict[str, str] | None = None,
 ) -> None:
+    """Append one JSON line per capture, including WHO captured.
+
+    The runtime fields are here because of what it cost to be without them. A
+    session ran plugin v0.3.0 for weeks, writing rows that every release since
+    v0.8 refuses, and the log said `urls_new: 1, errors: []` every time —
+    perfectly true, and useless. Nothing recorded which code produced the line
+    or which index and library it wrote to, so the only way to find it was to
+    replay a URL through nine cached versions and see which one accepted it.
+
+    With `version` and `root` on every line the same question is one grep.
+    """
     log_path.parent.mkdir(parents=True, exist_ok=True)
     obj = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "version": __version__,
+        "root": str(Path(__file__).resolve().parent.parent.parent),
         "project": project,
         "context": context,
         "urls_seen": result.urls_seen,
@@ -139,6 +143,8 @@ def _emit_log(
         "urls_recurring": result.urls_recurring,
         "urls_excluded": result.urls_excluded,
         "latency_ms": latency_ms,
+        "library": (identity or {}).get("library_id", ""),
+        "collection": (identity or {}).get("collection_key", ""),
         "errors": [
             {"url": e.url, "code": e.code, "message": e.message} for e in result.errors
         ],
@@ -157,12 +163,11 @@ def run_capture(
     zotero: ZoteroClient,
     title_fetcher: Callable[..., str],
     log_path: Path,
-    retry_queue_path: Path,
     origin: str = "assistant",
+    identity: dict[str, str] | None = None,
 ) -> CaptureResult:
     text: str = sys.stdin.read() if message is None else message
     started = time.monotonic()
-    drain_queue(retry_queue_path, lambda e: _retry_handler(e, zotero, db_path))
     result = capture_message(
         message=text,
         project_slug=project,
@@ -172,6 +177,7 @@ def run_capture(
         zotero=zotero,
         title_fetcher=title_fetcher,
         origin=origin,
+        identity=identity,
     )
     # Failures are NOT enqueued: _retry_handler is a stub that never drains, so
     # enqueuing would grow the file forever. Errors are surfaced in the log below.
@@ -180,6 +186,7 @@ def run_capture(
         log_path,
         project=project,
         context=context,
+        identity=identity,
         result=result,
         latency_ms=latency_ms,
     )
@@ -211,7 +218,6 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if args.triage is None else 1
 
     db_path = Path(args.db_path) if args.db_path else config.db_path
-    queue_path = Path(args.queue_path) if args.queue_path else config.queue_path
     log_path = Path(args.log_path) if args.log_path else config.log_path
     project = args.project or derive_slug(args.cwd)
 
@@ -228,8 +234,13 @@ def main(argv: list[str] | None = None) -> int:
                 zotero=zotero,
                 title_fetcher=fetch_title,
                 log_path=log_path,
-                retry_queue_path=queue_path,
                 origin=args.origin,
+                identity={
+                    "api_origin": api_base(),
+                    "library_type": config.library_type,
+                    "library_id": config.library_id,
+                    "collection_key": config.collection_key,
+                },
             )
         return 0
     except Exception:

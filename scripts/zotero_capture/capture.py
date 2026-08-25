@@ -12,6 +12,9 @@ from urllib.parse import urlsplit
 from . import __version__
 from .staleness import installed_version, stale_reason
 from .sqlite_cache import (
+    IndexIdentityMismatch,
+    bind_identity,
+    drop_row,
     init_db,
     new_zotero_key,
     queue_pending_tags,
@@ -19,7 +22,8 @@ from .sqlite_cache import (
     release_url,
     reserve_url,
     set_zotero_key,
-    take_pending_tags,
+    clear_pending_tags,
+    peek_pending_tags,
     update_last_seen,
 )
 from .url_processing import (
@@ -28,7 +32,7 @@ from .url_processing import (
     extract_urls,
     is_excluded,
 )
-from .zotero_client import UNRESOLVED_TITLE_TAG, ZoteroClient, ZoteroError
+from .zotero_client import ItemGone, UNRESOLVED_TITLE_TAG, ZoteroClient, ZoteroError
 
 logger = logging.getLogger(__name__)
 
@@ -115,11 +119,28 @@ def _resolve_claim(
         return row
     if zotero.item_exists(pending_key):
         logger.info("recovered %s: item %s exists, completing claim", url, pending_key)
-        set_zotero_key(db_path, url, pending_key)
+        set_zotero_key(db_path, url, pending_key, pending_key=pending_key)
         return lookup_url(db_path, url)
     logger.info("releasing stale claim on %s: %s was never created", url, pending_key)
-    release_url(db_path, url)
+    # Scoped to the key we just asked Zotero about. Between the lookup and here
+    # another session may have taken the claim over, and releasing by URL alone
+    # would delete a live reservation on the strength of a stale reading.
+    release_url(db_path, url, pending_key=pending_key)
     return None
+
+
+def _flush_pending(db_path: Path, url: str, key: str, zotero) -> None:
+    """Apply any tags another session queued against this URL, then clear them.
+
+    Peek, write, THEN clear — a destructive read would lose the sighting to a
+    transient error, which is the same defect this pass fixed in the recurring
+    branch.
+    """
+    queued = peek_pending_tags(db_path, url)
+    if not queued:
+        return
+    zotero.add_tags(key, queued)
+    clear_pending_tags(db_path, url, queued)
 
 
 def capture_message(
@@ -133,6 +154,7 @@ def capture_message(
     title_fetcher: Callable[[str], str],
     origin: str = "assistant",
     now: datetime | None = None,
+    identity: dict[str, str] | None = None,
 ) -> CaptureResult:
     """Process one message: extract URLs, then create or re-tag each in Zotero."""
     result = CaptureResult()
@@ -145,6 +167,16 @@ def capture_message(
         logger.error("%s", reason)
         return result
     init_db(db_path)
+    # Before any row is read or written: is this index an index of the library
+    # we are about to write to? Keyed by URL alone, it cannot tell otherwise,
+    # and pointing it at a different collection splits the sources in half while
+    # reporting success for both.
+    if identity is not None:
+        try:
+            bind_identity(db_path, **identity)
+        except IndexIdentityMismatch as e:
+            logger.error("%s", e)
+            return result
     now = now or datetime.now(timezone.utc)
     if _is_generated_report(message, origin):
         return result
@@ -227,9 +259,15 @@ def capture_message(
                         # is what produced duplicates: the claim stays, and
                         # _resolve_claim settles it later by asking Zotero.
                         if not issued:
-                            release_url(db_path, url)
+                            release_url(db_path, url, pending_key=pending_key)
                         raise
-                    set_zotero_key(db_path, url, key)
+                    set_zotero_key(db_path, url, key, pending_key=pending_key)
+                    # Another session may have queued its own sighting against
+                    # this claim while the POST was in flight. Nothing else will
+                    # ever come back for it: the recurring branch only runs on a
+                    # LATER citation, and a URL cited once, simultaneously, by
+                    # two sessions would silently lose one session's record.
+                    _flush_pending(db_path, url, key, zotero)
                     result.urls_new += 1
                     continue
                 existing = lookup_url(db_path, url)
@@ -243,13 +281,36 @@ def capture_message(
                 logger.debug("%s is claimed by another session; deferring", url)
                 queue_pending_tags(db_path, url, [seen_tag, context_tag, project_tag])
                 continue
+            # Peek, write, THEN clear. take_pending_tags() commits its DELETE
+            # before add_tags is even called, so a transient Zotero error used
+            # to destroy the very sighting queue_pending_tags exists to keep.
+            # Applying a tag twice is harmless -- add_tags is idempotent -- so
+            # at-least-once is the right trade for provenance.
+            queued = peek_pending_tags(db_path, url)
             zotero.add_tags(
                 key,
-                [seen_tag, context_tag, project_tag, *take_pending_tags(db_path, url)],
+                [seen_tag, context_tag, project_tag, *queued],
                 title_resolver=make_title_resolver(url),
             )
+            clear_pending_tags(db_path, url, queued)
             result.urls_recurring += 1
             update_last_seen(db_path, url, today)
+        except ItemGone as e:
+            # A person trashed or deleted the item. The row now points at
+            # nothing, and leaving it there made every future citation of this
+            # URL repeat the same 404 forever — the source silently stopped
+            # being recorded, with no way to notice.
+            #
+            # The row is dropped rather than tombstoned, so the index says only
+            # what the library actually holds. The cost is honest and worth
+            # stating: citing that URL again recreates the item. Someone who
+            # wants a source gone for good should exclude its host, not rely on
+            # a deletion that capture is designed to undo.
+            logger.warning("item for %s is gone (%s); dropping the stale row", url, e)
+            drop_row(db_path, url)
+            result.errors.append(
+                CaptureFailure(url=url, code="item_gone", message=str(e))
+            )
         except ZoteroError as e:
             logger.error("Zotero API error for %s: %s", url, e)
             result.errors.append(

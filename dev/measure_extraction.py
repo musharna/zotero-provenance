@@ -7,6 +7,13 @@ produced here. Two rules make the number mean something:
   * a **control** that must fail. `--control` swaps in a tokenizer that admits a
     space, which mangles roughly one message in six. If the control reports no
     change, the harness is broken and the headline number is worthless.
+  * a **seam check** that runs first. The control is only meaningful if the
+    thing it replaces is the thing extraction actually calls. From 0.11.3 the
+    boundary moved to linkify and `URL_RE` became vestigial, so the old harness
+    went on swapping a regex nothing read: the control reported zero damage and
+    every "changes nothing on real traffic" measured after that was vacuous.
+    The canary caught it and nobody re-ran the control. Now the seam is proved
+    on a fixture before the corpus is touched.
   * a **corpus of real messages**, read from Claude Code's own transcripts, not
     from fixtures written by the same person who wrote the regex.
 
@@ -67,13 +74,46 @@ def load_corpus(root: pathlib.Path) -> list[str]:
     return msgs
 
 
-def extract_all(messages: list[str], tokenizer: re.Pattern[str]) -> list[list[str]]:
-    shipped = up.URL_RE
+def _bare_urls_from(pattern: re.Pattern[str]):
+    """A `bare_urls` built from a plain tokenizer, for comparison arms.
+
+    Patching `bare_urls` rather than a regex is what keeps this honest: it is
+    the function `extract_urls` actually calls for prose, so a swap here cannot
+    silently become a no-op the way swapping `URL_RE` did.
+    """
+
+    def _bare(text: str) -> list[str]:
+        return [
+            up._trim_prose_url(m.group(0)) for m in pattern.finditer(up.strip_ansi(text))
+        ]
+
+    return _bare
+
+
+def extract_all(
+    messages: list[str], tokenizer: re.Pattern[str] | None
+) -> list[list[str]]:
+    """Extract with `tokenizer` for prose, or with the shipped code if None."""
+    if tokenizer is None:
+        return [up.extract_urls(m) for m in messages]
+    shipped = up.bare_urls
     try:
-        up.URL_RE = tokenizer
+        up.bare_urls = _bare_urls_from(tokenizer)
         return [up.extract_urls(m) for m in messages]
     finally:
-        up.URL_RE = shipped
+        up.bare_urls = shipped
+
+
+# A sentence the shipped extractor and a space-admitting tokenizer MUST read
+# differently. If they agree, the injection point is not connected to anything.
+_SEAM_PROBE = "see https://example.org/a and then some more words here"
+
+
+def seam_is_live() -> bool:
+    """Whether replacing the tokenizer actually changes what extraction returns."""
+    shipped = extract_all([_SEAM_PROBE], None)
+    swapped = extract_all([_SEAM_PROBE], BROKEN_CONTROL)
+    return shipped != swapped
 
 
 def compare(baseline: list[list[str]], candidate: list[list[str]]) -> dict[str, int]:
@@ -124,8 +164,17 @@ def main() -> int:
         print("no corpus: no assistant message mentioned a URL", file=sys.stderr)
         return 2
 
-    candidate = BROKEN_CONTROL if args.control else up.URL_RE
-    label = "BROKEN control (admits a space)" if args.control else "shipped tokenizer"
+    if not seam_is_live():
+        print(
+            "the tokenizer swap changes nothing on a fixture designed to break: "
+            "this harness is measuring code it does not control. Fix the seam "
+            "before trusting any number below.",
+            file=sys.stderr,
+        )
+        return 3
+
+    candidate = BROKEN_CONTROL if args.control else None
+    label = "BROKEN control (admits a space)" if args.control else "shipped extractor"
 
     baseline = extract_all(messages, BLACKLIST)
     result = compare(baseline, extract_all(messages, candidate))

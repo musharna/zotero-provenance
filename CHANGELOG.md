@@ -1,5 +1,94 @@
 # Changelog
 
+## 0.12.0 — 2026-08-25
+
+An external audit of the whole directory, after the previous one was scoped to
+URL handling. Eight findings, all reproduced before being accepted. The two that
+matter most are not bugs in the code so much as bugs in what the code could
+know about itself.
+
+- **The plugin had not captured anything for 29 hours, and said nothing.**
+  Claude's plugin registry still pinned `zotero-provenance` to the v0.3.0 cache
+  root. 0.11.7 had neutered every pre-guard root — correctly — but that root was
+  the one every new session resolved, so the containment took the whole plugin
+  down with it. 92 refusals on 2026-08-25, zero captures since 00:31 the day
+  before. Fixed by `claude plugin update`; the registry now points at the
+  current root.
+
+  The lesson generalises past this bug: "deployed" and "executing" are different
+  questions, and neither the repo nor the marketplace clone can answer the
+  second. Every capture log line now carries the `version` and `root` that wrote
+  it, plus the library and collection it wrote to. Finding the v0.3.0 session
+  took replaying a URL through nine cached versions; with these fields it is one
+  grep.
+
+- **The measurement harness had been measuring nothing since 0.11.3.** It
+  swapped `up.URL_RE`, and the linkify rewrite left that regex vestigial. So
+  `--control` — whose only job is to prove the instrument can fail — reported
+  zero damage, and every "changes nothing on real traffic" claim after that was
+  vacuous. The canary printed its warning each time and nobody re-ran the
+  control after changing the architecture. The control now replaces `bare_urls`,
+  and a seam check runs against a fixture BEFORE the corpus, so a disconnected
+  injection point fails loudly. Restored: control damages 205 of 1315 real
+  messages, the shipped extractor 1.
+
+- **Four parser holes**, three of which the working harness or the audit found:
+  a template inside a link destination was captured (CommonMark percent-encodes
+  it, so `{ID}` arrived as `%7BID%7D` and the brace rule saw nothing — this is
+  how `files.rcsb.org/download/%7BID%7D.pdb` reached the library); one
+  impossible port raised out of `canonicalize` and discarded every citation in
+  the message; raw HTML anchors were skipped as "raw" alongside code spans,
+  conflating showing a URL with linking to one; and an unbalanced `(` stored a
+  silent truncation, since linkify balances parens and `(` is a legal
+  sub-delimiter.
+
+- **Queued provenance was lost on any Zotero error, and again on success.**
+  `take_pending_tags` is a destructive read and it was called as an ARGUMENT to
+  `add_tags`, so the DELETE committed before the request went out. Split into
+  peek + clear. Separately, a completing session never drained what another had
+  queued against its in-flight claim — so a URL cited once, simultaneously, by
+  two sessions silently lost one session's record forever.
+
+- **Reservations had no owner.** `set_zotero_key` and `release_url` matched on
+  URL alone, which was safe only until claims could be reaped. Both are
+  compare-and-swap on the expected `pending_key` now.
+
+- **The index did not know which library it indexed.** Changing collection split
+  sources in half (a recurring URL is only tagged, and tagging does not move an
+  item); changing library made every row a permanent 404. It now binds
+  `(api_origin, library_type, library_id, collection_key)` and refuses a
+  mismatch. An unbound index adopts rather than refuses, because the deployed
+  one holds 4,732 rows that predate this and cannot prove their origin.
+
+- **A person editing the library broke the index permanently.** A trashed item
+  made every future citation repeat the same 404 forever; a title fixed by hand
+  was overwritten because the stale `title:unresolved` tag was trusted over the
+  title itself; and `update_url` reported success on a 404, so repair recorded
+  rewrites for items that do not exist.
+
+- **The retry queue was dead and unsafe.** `append_failure` was called only by
+  its own tests, so nothing was ever enqueued, while the drain rewrote the file
+  with no locking. Four green tests asserted a safety net that was not attached.
+  Deleted rather than repaired.
+
+- **A documented install could not run the code.** The README asked for httpx,
+  beautifulsoup4 and jq; the code imports `idna`, `linkify_it` and `markdown_it`
+  at startup, so a user following it exactly got an ImportError before any of
+  this plugin's error handling. The hooks check imports first and name what is
+  missing. `lib.sh` also claimed setup creates a virtualenv, which it has never
+  done. Both hooks called GNU `timeout`, absent on stock macOS — a total silent
+  outage on a supported platform that no test here could catch.
+
+- **The staleness guard was a boolean with two holes.** It asked "is running
+  older", so a root NEWER than the install passed — yet rolling the install back
+  is exactly how a bad release is stopped, and under that rule the rollback did
+  nothing. And an unparseable version returned the same value as "verified
+  current", silently disabling the guard. Now three-state: exact agreement is
+  CURRENT, anything else is MISMATCH, and UNKNOWN still proceeds — the one place
+  this plugin inverts refuse-on-doubt — but logs that it did.
+
+493 tests pass.
+
 ## 0.11.7 — 2026-08-24
 
 - **A stale plugin root refuses to write to the library.** Every URL defect

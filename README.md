@@ -76,7 +76,28 @@ Setup lists the libraries your key can reach, creates a `web-sources` collection
 there isn't one, **verifies the credentials with a live create/read/delete round-trip**,
 and writes `~/.config/zotero-provenance/secrets.env` with mode `0600`.
 
-Requires `python3` (3.10+) with `httpx` and `beautifulsoup4`, plus `jq`.
+### Requirements
+
+`python3` (3.10+) and `jq`, plus five Python packages **on the interpreter the
+hooks will run**:
+
+```
+python3 -m pip install httpx beautifulsoup4 idna linkify-it-py markdown-it-py
+```
+
+`idna`, `linkify-it-py` and `markdown-it-py` are imported at startup, so a
+missing one stops capture before any of this plugin's own error handling. When
+that happens the hooks write a line naming the interpreter and the missing
+packages to `capture.log` rather than leaving a traceback there; capture is off
+until it is fixed.
+
+No virtualenv is created for you. If `python3` is not the interpreter that has
+these, point `ZOTERO_PROVENANCE_PYTHON` at one that does — a venv at
+`<state-dir>/venv` is also picked up automatically if you make one.
+
+On macOS, `timeout` comes from `coreutils` (`brew install coreutils` provides
+`gtimeout`, which is also accepted). Without either, capture still runs, just
+without a wall-clock limit.
 
 ## Commands
 

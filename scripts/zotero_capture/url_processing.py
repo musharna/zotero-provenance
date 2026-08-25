@@ -9,7 +9,7 @@ import socket
 import idna
 from linkify_it import LinkifyIt
 from markdown_it import MarkdownIt
-from urllib.parse import unquote_plus, urlsplit, urlunsplit
+from urllib.parse import unquote, unquote_plus, urlsplit, urlunsplit
 
 IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
@@ -101,7 +101,13 @@ _MD = MarkdownIt("commonmark")
 # Inline tokens that are showing a literal rather than citing a source. Block
 # tokens need no list: only "inline" tokens are walked, and a fence, an indented
 # block and an HTML block are all block-level.
-_UNCITED_INLINE = frozenset({"code_inline", "html_inline"})
+_UNCITED_INLINE = frozenset({"code_inline"})
+
+# href from a raw HTML anchor. Deliberately narrow: only <a href=...>, only
+# quoted, because a bare attribute value has no reliable end in a fragment.
+_HTML_HREF_RE = re.compile(
+    r"""<a\s[^>]*?href\s*=\s*["']([^"']+)["']""", re.IGNORECASE
+)
 
 # This plugin's own reports list URLs it already holds, and the Stop hook reads
 # Claude's output — so displaying a report re-captured everything in it, stamping
@@ -227,7 +233,15 @@ def canonicalize(raw: str) -> str:
     autolink's content does not — so extract_urls hands over a URL that has
     already been decoded exactly as much as it should be.
     """
-    parts = urlsplit(raw.strip())
+    raw = raw.strip()
+    if not _has_usable_authority(raw):
+        # Total by construction. urlsplit().port raises on an impossible port,
+        # and this function is called from a loop that processes a whole
+        # message: one bad URL must cost that URL, not the turn. Returned
+        # unchanged rather than repaired, because there is nothing to repair to
+        # — is_storable_url() refuses it moments later.
+        return raw
+    parts = urlsplit(raw)
     host = parts.hostname or ""
     netloc = host.lower()
     # urlsplit strips the brackets off an IPv6 literal, and putting the bare
@@ -316,13 +330,22 @@ def extract_urls(text: str) -> list[str]:
                 in_link += 1
                 href = child.attrGet("href") or ""
                 if href.lower().startswith(("http://", "https://")):
-                    emit(href)
+                    if _destination_is_citable(href):
+                        emit(href)
             elif child.type == "link_close":
                 in_link = max(0, in_link - 1)
             elif child.type == "image":
                 # A badge or screenshot is a page asset, not a cited source, and
                 # its alt text is not prose that cites anything either.
                 continue
+            elif child.type == "html_inline":
+                # An anchor RENDERS as a hyperlink, so it cites a source; it is
+                # not a literal the way a code span is. Only the href is taken —
+                # the tag's other attributes are markup, not citations.
+                for href in _HTML_HREF_RE.findall(child.content):
+                    if href.lower().startswith(("http://", "https://")):
+                        if _destination_is_citable(href):
+                            emit(href)
             elif child.type in _UNCITED_INLINE:
                 continue
             elif child.type == "text" and not in_link:
@@ -366,6 +389,17 @@ def bare_urls(text: str) -> list[str]:
         # quote proves nothing, which is why the old unconditional closer list
         # was wrong, but a brace is never URL data in any position.
         if _TEMPLATE_RE.match(scan[match.last_index : match.last_index + 1] or ""):
+            continue
+        # Same reasoning, different character. linkify balances parentheses, so
+        # a URL holding an UNBALANCED "(" is cut at it — and "(" is a legal
+        # sub-delimiter, so what gets stored is a silent truncation that often
+        # still resolves. The corpus has one:
+        # ".../File:Hericium_erinaceus_(Bearded_Tooth..." was stored as
+        # ".../File:Hericium_erinaceus_". A prefix of an address is not the
+        # address, and inventing one is the harm the template rule exists to
+        # stop. Note this fires only when "(" IMMEDIATELY follows the match:
+        # "see (https://example.org/foo)" ends on a space and is untouched.
+        if scan[match.last_index : match.last_index + 1] == "(":
             continue
         raw = _strip_paired_closer(scan, match.index, raw)
         raw = _trim_prose_url(strip_illegal_tail(raw))
@@ -421,6 +455,8 @@ def is_storable_url(url: str) -> bool:
         return False
     if _TEMPLATE_RE.search(url):
         return False
+    if not _has_usable_authority(url):
+        return False
     rest = url.split("://", 1)[1]
     if not rest:
         return False
@@ -428,6 +464,39 @@ def is_storable_url(url: str) -> bool:
     if rest.startswith("["):
         rest = rest.partition("]")[2]
     return not any(_URL_CHAR_RE.match(ch) is None for ch in rest)
+
+
+def _has_usable_authority(url: str) -> bool:
+    """Whether the authority parses at all.
+
+    `urlsplit().port` RAISES for a port outside 0-65535 rather than returning
+    None. capture canonicalises before its per-URL guard, so one such link —
+    "[bad](https://example.com:99999/path)" — aborted the whole message and took
+    every real citation in that turn with it. Asking the question here turns a
+    thrown exception into an ordinary refusal of one URL.
+    """
+    try:
+        urlsplit(url).port
+    except ValueError:
+        return False
+    return True
+
+
+def _destination_is_citable(href: str) -> bool:
+    """Whether a parser-supplied link destination may be stored.
+
+    A destination does NOT arrive the way prose does: CommonMark percent-encodes
+    it, so "{ID}" reaches us as "%7BID%7D" and the template rule — which looks
+    for a literal brace — sees nothing wrong. That is how
+    "files.rcsb.org/download/%7BID%7D.pdb" entered the live library: a fetchable
+    directory listing nobody cited, stored while every guard reported success.
+
+    So the brace test is applied to the DECODED form, and the ordinary grammar
+    test to the destination as written.
+    """
+    if _TEMPLATE_RE.search(unquote(href)):
+        return False
+    return is_storable_url(href)
 
 
 def _trim_prose_url(url: str) -> str:

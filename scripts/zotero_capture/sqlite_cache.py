@@ -17,6 +17,14 @@ CREATE TABLE IF NOT EXISTS url_index (
     first_seen    TEXT NOT NULL,
     last_seen     TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS index_identity (
+    id             INTEGER PRIMARY KEY CHECK (id = 1),
+    api_origin     TEXT NOT NULL,
+    library_type   TEXT NOT NULL,
+    library_id     TEXT NOT NULL,
+    collection_key TEXT NOT NULL,
+    bound_at       TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS pending_tags (
     url_canonical TEXT NOT NULL,
     tag           TEXT NOT NULL,
@@ -76,6 +84,89 @@ def init_db(db_path: Path) -> None:
                 # Already applied. Anything else is a real problem and re-raises.
                 if "duplicate column name" not in str(e):
                     raise
+
+
+IDENTITY_FIELDS = ("api_origin", "library_type", "library_id", "collection_key")
+
+
+class IndexIdentityMismatch(RuntimeError):
+    """This index is an index of a DIFFERENT library or collection."""
+
+
+def read_identity(db_path: Path) -> dict[str, str] | None:
+    """What library this index describes, or None if it has never been told."""
+    with closing(_connect(db_path)) as conn:
+        row = conn.execute(
+            "SELECT api_origin, library_type, library_id, collection_key"
+            " FROM index_identity WHERE id = 1"
+        ).fetchone()
+    return {k: row[k] for k in IDENTITY_FIELDS} if row else None
+
+
+def bind_identity(
+    db_path: Path,
+    *,
+    api_origin: str,
+    library_type: str,
+    library_id: str,
+    collection_key: str,
+) -> None:
+    """Record which library this index is OF, or refuse if it is another's.
+
+    The index is a cache of one Zotero collection, keyed by URL alone, and it
+    stored nothing about what its rows referred to. Three ordinary changes were
+    therefore silent corruption:
+
+      * a different COLLECTION — new URLs land in the new one, but a recurring
+        URL is only TAGGED, and tagging does not move an item. The sources split
+        in half and both halves report success.
+      * a different LIBRARY — every stored key belongs to the old one, so each
+        recurrence 404s, and the row blocks that URL from ever being recreated.
+      * two state dirs against one library — two indexes, each certain a URL is
+        new, producing duplicate items neither can see.
+
+    An index with no identity ADOPTS the one it is opened with rather than
+    refusing: the deployed index holds thousands of rows written before this
+    existed, and refusing them would break the working case to guard a
+    hypothetical one. That is a real assumption — it trusts the upgrader is
+    still pointing at the library those rows came from — and it is why the
+    binding is written on first open rather than inferred later.
+
+    An EMPTY index rebinds freely. With no rows there is nothing to protect,
+    and refusing would make a state dir unusable after a single mistaken run.
+    """
+    incoming = {
+        "api_origin": api_origin.rstrip("/"),
+        "library_type": library_type,
+        "library_id": library_id,
+        "collection_key": collection_key,
+    }
+    current = read_identity(db_path)
+    if current is not None and current != incoming:
+        with closing(_connect(db_path)) as conn:
+            rows = conn.execute("SELECT COUNT(*) AS n FROM url_index").fetchone()["n"]
+        if rows:
+            differing = [k for k in IDENTITY_FIELDS if current[k] != incoming[k]]
+            raise IndexIdentityMismatch(
+                f"{db_path} indexes {current} but capture is configured for "
+                f"{incoming} (differs on: {', '.join(differing)}). Its "
+                f"{rows} rows describe the other target, so reusing it would "
+                f"split sources or strand every key. Point "
+                f"ZOTERO_CAPTURE_STATE_DIR at a separate directory for this "
+                f"target, or delete this index to rebuild it."
+            )
+    stamp = datetime.now(timezone.utc).isoformat()
+    with closing(_connect(db_path)) as conn:
+        conn.execute(
+            "INSERT INTO index_identity"
+            " (id, api_origin, library_type, library_id, collection_key, bound_at)"
+            " VALUES (1, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(id) DO UPDATE SET"
+            " api_origin=excluded.api_origin, library_type=excluded.library_type,"
+            " library_id=excluded.library_id, collection_key=excluded.collection_key,"
+            " bound_at=excluded.bound_at",
+            (*[incoming[k] for k in IDENTITY_FIELDS], stamp),
+        )
 
 
 def lookup_url(db_path: Path, url_canonical: str) -> URLCacheRow | None:
@@ -152,39 +243,106 @@ def queue_pending_tags(db_path: Path, url_canonical: str, tags: list[str]) -> No
         )
 
 
-def take_pending_tags(db_path: Path, url_canonical: str) -> list[str]:
-    """Remove and return the tags queued for a URL. Empty if there were none."""
+def peek_pending_tags(db_path: Path, url_canonical: str) -> list[str]:
+    """The tags queued for a URL, WITHOUT consuming them."""
     with closing(_connect(db_path)) as conn:
         rows = conn.execute(
             "SELECT tag FROM pending_tags WHERE url_canonical = ? ORDER BY tag",
             (url_canonical,),
         ).fetchall()
-        conn.execute(
-            "DELETE FROM pending_tags WHERE url_canonical = ?", (url_canonical,)
-        )
     return [r["tag"] for r in rows]
 
 
-def set_zotero_key(db_path: Path, url_canonical: str, zotero_key: str) -> None:
-    """Complete a reservation once the Zotero item exists."""
+def clear_pending_tags(db_path: Path, url_canonical: str, tags: list[str]) -> None:
+    """Drop exactly the tags that were successfully applied.
+
+    Named tags rather than "everything for this URL": between the peek and the
+    write, another session may have queued a sighting of its own, and a blanket
+    DELETE would discard a tag that was never applied to anything.
+    """
+    if not tags:
+        return
     with closing(_connect(db_path)) as conn:
-        conn.execute(
-            "UPDATE url_index SET zotero_key = ? WHERE url_canonical = ?",
-            (zotero_key, url_canonical),
+        conn.executemany(
+            "DELETE FROM pending_tags WHERE url_canonical = ? AND tag = ?",
+            [(url_canonical, tag) for tag in tags],
         )
 
 
-def release_url(db_path: Path, url_canonical: str) -> None:
-    """Drop an unfulfilled reservation so a later run can retry.
+def take_pending_tags(db_path: Path, url_canonical: str) -> list[str]:
+    """Remove and return the tags queued for a URL. Empty if there were none.
+
+    Destructive, so it must NOT be used to feed a write that can fail: the
+    DELETE commits on this autocommit connection before the caller's request is
+    issued, and a Zotero error then loses the sighting for good. Capture uses
+    peek + clear for that reason. Kept for callers that only need to drain.
+    """
+    tags = peek_pending_tags(db_path, url_canonical)
+    clear_pending_tags(db_path, url_canonical, tags)
+    return tags
+
+
+def set_zotero_key(
+    db_path: Path,
+    url_canonical: str,
+    zotero_key: str,
+    *,
+    pending_key: str | None = None,
+) -> bool:
+    """Complete a reservation once the Zotero item exists. True if it took.
+
+    Pass `pending_key` to make this a compare-and-swap. Matching on the URL
+    alone is not enough once a claim can be reaped: A claims and stalls, B
+    judges A abandoned and claims the URL with its own key, then A wakes and
+    stamps ITS key over B's completed row. The index then points at an item
+    that may not exist while B's real item is invisible to dedup forever.
+    """
+    sql = "UPDATE url_index SET zotero_key = ? WHERE url_canonical = ?"
+    params: tuple[str, ...] = (zotero_key, url_canonical)
+    if pending_key is not None:
+        sql += " AND pending_key = ?"
+        params += (pending_key,)
+    with closing(_connect(db_path)) as conn:
+        cursor = conn.execute(sql, params)
+    return cursor.rowcount == 1
+
+
+def release_url(
+    db_path: Path, url_canonical: str, *, pending_key: str | None = None
+) -> bool:
+    """Drop an unfulfilled reservation so a later run can retry. True if it did.
 
     Only removes a row that never got a key. A completed row belongs to a real
     Zotero item, and deleting its index entry would strand that item exactly the
     way the un-reserved race did.
+
+    Pass `pending_key` to release only YOUR OWN claim. Without it a stalled
+    owner, waking after its claim was reaped and re-taken, deletes the
+    successor's live reservation — and the successor's POST becomes an orphan
+    item that dedup can never see again. That is the very outcome the
+    reservation protocol exists to prevent, reintroduced by the reaper.
+    """
+    sql = "DELETE FROM url_index WHERE url_canonical = ? AND zotero_key = ''"
+    params: tuple[str, ...] = (url_canonical,)
+    if pending_key is not None:
+        sql += " AND pending_key = ?"
+        params += (pending_key,)
+    with closing(_connect(db_path)) as conn:
+        cursor = conn.execute(sql, params)
+    return cursor.rowcount == 1
+
+
+def drop_row(db_path: Path, url_canonical: str) -> None:
+    """Forget a URL entirely, index row and queued tags together.
+
+    For the case where the Zotero item behind a row no longer exists. Unlike
+    release_url this does not care whether the row completed: a completed row
+    whose item a person deleted is exactly the row that has to go.
     """
     with closing(_connect(db_path)) as conn:
+        conn.execute("DELETE FROM url_index WHERE url_canonical = ?", (url_canonical,))
         conn.execute(
-            "DELETE FROM url_index WHERE url_canonical = ? AND zotero_key = ''",
-            (url_canonical,),
+            "DELETE FROM pending_tags WHERE url_canonical = ?", (url_canonical,)
         )
 
 

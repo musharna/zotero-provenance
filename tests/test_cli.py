@@ -102,16 +102,16 @@ def test_run_capture_reads_message_from_stdin(tmp_db: Path, monkeypatch):
         zotero=fake_zotero,
         title_fetcher=lambda u, **kw: "T",
         log_path=tmp_db.parent / "log.jsonl",
-        retry_queue_path=tmp_db.parent / "retry.jsonl",
     )
     assert result.urls_new == 1
 
 
-def test_run_capture_does_not_enqueue_failures(tmp_db: Path):
-    """Phase-1: failures surface in result.errors + the JSON log, never the retry queue.
+def test_run_capture_reports_failures_in_the_result_and_the_log(tmp_db: Path):
+    """A failure must reach result.errors AND the JSON log — the only channels.
 
-    The retry handler is a stub returning False; queueing would accumulate
-    forever. Revisit when phase-2 ships real retry semantics (spec §7).
+    This once asserted "nothing is enqueued", guarding a retry queue that no
+    code path ever wrote to. The queue is gone; what actually has to hold is
+    that a failure is still visible in both places.
     """
     from zotero_capture.zotero_client import ZoteroError
 
@@ -127,7 +127,6 @@ def test_run_capture_does_not_enqueue_failures(tmp_db: Path):
 
     fake_zotero.post_webpage_item.side_effect = side_effect
 
-    retry_queue_path = tmp_db.parent / "retry.jsonl"
     log_path = tmp_db.parent / "log.jsonl"
 
     result = run_capture(
@@ -139,10 +138,8 @@ def test_run_capture_does_not_enqueue_failures(tmp_db: Path):
         zotero=fake_zotero,
         title_fetcher=lambda u, **kw: "T",
         log_path=log_path,
-        retry_queue_path=retry_queue_path,
     )
 
-    assert not retry_queue_path.exists(), "phase-1: nothing should be enqueued"
     error_codes = {e.code for e in result.errors}
     assert error_codes == {"zotero_error", "unexpected"}
     assert log_path.exists(), "errors must still be logged"

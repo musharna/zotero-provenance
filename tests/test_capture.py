@@ -559,3 +559,65 @@ def test_an_unreadable_installed_version_does_not_stop_capture(
         title_fetcher=fake_title_fetcher,
     )
     assert result.urls_new == 1
+
+
+def test_queued_provenance_survives_a_failed_tag_write(
+    empty_cache, fake_zotero, fake_title_fetcher
+):
+    """A 503 must not destroy the sighting a losing session queued.
+
+    `take_pending_tags` is a destructive read: it SELECTs then DELETEs, on an
+    autocommit connection. Called as an ARGUMENT to `zotero.add_tags(...)`, the
+    DELETE commits before the request is ever issued — so a Zotero failure
+    leaves the tags gone from SQLite and never applied to the item.
+
+    Those tags are exactly what `queue_pending_tags` exists to protect: the
+    provenance of a session that lost the reservation race and had no item to
+    write to. It survives the race and then dies to a transient error.
+
+    The positive control is in this same test on purpose. Asserting only that a
+    failure preserves the tags passes just as happily against a take that never
+    consumes anything at all.
+    """
+    from zotero_capture.sqlite_cache import queue_pending_tags, take_pending_tags
+    from zotero_capture.zotero_client import ZoteroError
+
+    url = "https://fixturehost.org/contended"
+    insert_url(empty_cache, url, "EXISTKEY", date(2026, 5, 5))
+    queue_pending_tags(empty_cache, url, ["seen:2026-05-04", "project:other"])
+
+    fake_zotero.add_tags.side_effect = ZoteroError("503 Service Unavailable")
+    result = capture_message(
+        message=f"See {url} here.",
+        project_slug="home",
+        context=None,
+        today=date(2026, 5, 5),
+        db_path=empty_cache,
+        zotero=fake_zotero,
+        title_fetcher=fake_title_fetcher,
+    )
+    assert result.errors, "the failure must still be reported"
+
+    survived = take_pending_tags(empty_cache, url)
+    assert sorted(survived) == ["project:other", "seen:2026-05-04"], (
+        "a failed tag write destroyed the queued provenance"
+    )
+
+    # Positive control: the same path on success DOES consume them, and hands
+    # them to Zotero. Without this, a take_pending_tags that never deletes
+    # anything would satisfy the assertion above while breaking the feature.
+    queue_pending_tags(empty_cache, url, ["seen:2026-05-04", "project:other"])
+    fake_zotero.add_tags.side_effect = None
+    fake_zotero.add_tags.return_value = True
+    capture_message(
+        message=f"See {url} here.",
+        project_slug="home",
+        context=None,
+        today=date(2026, 5, 6),
+        db_path=empty_cache,
+        zotero=fake_zotero,
+        title_fetcher=fake_title_fetcher,
+    )
+    applied = fake_zotero.add_tags.call_args.args[1]
+    assert "project:other" in applied and "seen:2026-05-04" in applied
+    assert take_pending_tags(empty_cache, url) == [], "success must consume them"
