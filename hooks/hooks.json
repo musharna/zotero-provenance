@@ -1,5 +1,5 @@
 {
-  "description": "zotero-provenance — record cited and shared sources into Zotero",
+  "description": "zotero-provenance \u2014 record cited and shared sources into Zotero",
   "hooks": {
     "Stop": [
       {
@@ -19,6 +19,17 @@
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/capture-prompt.sh\"",
             "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/session-health.sh\"",
+            "timeout": 15
           }
         ]
       }

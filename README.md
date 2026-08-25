@@ -133,9 +133,28 @@ Sources get bucketed by their `seen:` history:
 | `ZOTERO_SECRETS_FILE`              | Alternate credentials file.                                              |
 | `ZOTERO_PROVENANCE_PYTHON`         | Interpreter to use, if the default `python3` lacks the deps.             |
 | `ZOTERO_API_BASE`                  | Alternate API root, for tests or an API-compatible server.               |
+| `ZOTERO_CAPTURE_HEALTH_DISABLE=1`  | Turn off the session-start health check only.                            |
+| `ZOTERO_CAPTURE_MAX_SILENCE_HOURS` | Hours without a capture before the check says so. Default 24.            |
 
 Hooks do not inherit MCP-scoped environment from `~/.claude.json`, which is why
 credentials come from the secrets file.
+
+### The health check
+
+Every serious failure this plugin has had was silent: a superseded root wrote
+junk for weeks, and capture stopped dead for 29 hours. Both were found by an
+audit rather than by the plugin noticing. A `SessionStart` hook now reads the
+capture log and says something when — and only when — one of four things is
+true:
+
+- the last capture ran from a plugin root that is not the installed one
+- refusal events have been recorded since the last successful capture
+- nothing has been captured for longer than the silence threshold
+- the last capture reported errors
+
+On a healthy session it prints nothing at all. That is the point: a check that
+speaks when things are fine gets tuned out, and a tuned-out check is worse than
+none. Run it by hand with `python3 scripts/zotero_capture_health.py`.
 
 ### How the `project:` tag is chosen
 
