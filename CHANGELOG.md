@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.13.0 — 2026-08-25
+
+A superseded plugin root now delegates to the installed one instead of refusing.
+
+0.12.0 shipped a guard that made an out-of-date root decline to write, which was
+right as far as it went: stale code cannot know its rules were corrected, and
+loud absence beats quiet corruption. But it left every live session dark until
+that session restarted, and a session cannot be made to re-resolve its plugin
+root. On 2026-08-25 that meant 18 sessions capturing nothing, on top of the 29
+hours the previous release's containment had already cost.
+
+The thing both earlier passes missed is that "restart required" pins the plugin
+ROOT, not the hook SCRIPT. The script is re-read from disk on every fire. The
+log shows it plainly: the last capture from the pre-guard roots was at 00:31:37
+on 2026-08-24 and the first refusal at 00:32:57 — eighty seconds later, from
+sessions that had been running since 08-21, with no restart in between. Whatever
+is in that file at the moment it fires is what runs.
+
+- **A trampoline at the top of `capture-stop.sh` and `capture-prompt.sh`.** If
+  this root is not the one `installed_plugins.json` pins, the hook `exec`s the
+  same hook in the root that *is* pinned, and the current rules apply. Nothing
+  is deleted and nothing restarts.
+
+  The authority is the pinned `installPath`, not a version comparison: it is
+  what the manager actually resolves, it needs no parsing, and it follows a
+  rollback in the right direction.
+
+  It is inline in both hooks rather than factored into `lib.sh` on purpose — a
+  root that predates this code has a `lib.sh` that predates it too, and the
+  point is to be correctable by replacing the file that actually runs.
+
+- **A development checkout never forwards.** Forwarding is limited to roots
+  under the plugin cache, so running the hooks from a clone exercises the code
+  in front of you rather than whatever is deployed. This plugin has twice been
+  confused about which copy was executing; the fix should not add a third way.
+
+- **Three ways it declines rather than guesses**, each logged with its own
+  event and each exiting 0: `forward-loop-refused` if a forward lands back on a
+  superseded root, `forward-unresolved` if no target can be read, and the
+  existing `staleness.py` guard, kept as defence in depth for exactly that last
+  case.
+
+- **`staleness.py` no longer claims old roots must be deleted.** It concluded
+  that "there is no way to reason with them"; deletion was tried on 08-24 and
+  caused the 29-hour outage. You do not have to reason with old code to replace
+  the entry point that reaches it.
+
 ## 0.12.0 — 2026-08-25
 
 An external audit of the whole directory, after the previous one was scoped to

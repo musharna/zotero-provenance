@@ -12,13 +12,29 @@ eight simply did not exist in the code that was running. Nothing anywhere
 reported a problem. The index gained rows, the log recorded a successful capture,
 and the only way to notice was to ask which version had produced them.
 
-So an old root now declines to write and says why. Loud absence beats quiet
+So an old root declines to write and says why. Loud absence beats quiet
 corruption — the same trade this plugin makes everywhere else.
 
 The limit is worth stating plainly rather than discovering later: **a guard
-cannot fix a version that predates it.** v0.3.0 will never refuse itself. This
-closes the door from here forward; roots older than this release have to be
-removed from disk instead, because there is no way to reason with them.
+cannot fix a version that predates it.** v0.3.0 will never refuse itself.
+
+This file used to conclude from that: "roots older than this release have to be
+removed from disk instead, because there is no way to reason with them." That
+was wrong twice over, and 0.13.0 corrects it.
+
+Removing them was tried on 2026-08-24 and made things worse — the registry still
+pinned the oldest root, so neutering it took capture down for every session for
+29 hours. And refusing, even correctly, strands every live session until it
+restarts, because a session cannot be made to re-resolve its root.
+
+The move both readings missed is that you do not have to reason with old CODE to
+replace the ENTRY POINT that reaches it. The hook SCRIPT is re-read from disk on
+every fire, so a trampoline at the top of it hands the work to whichever root the
+plugin manager currently pins — see hooks/capture-stop.sh. An old root now
+delegates rather than declines, and nothing has to be deleted or restarted.
+
+This guard stays as defence in depth: it is what stops a write when forwarding
+cannot resolve a target at all.
 """
 
 from __future__ import annotations
