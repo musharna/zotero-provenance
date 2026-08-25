@@ -100,8 +100,9 @@ def test_ack_by_id_silences_only_that_incident(tmp_path: Path) -> None:
 
     after = _run(state)
     assert after.stdout, "acking one id silenced everything"
-    assert "0.9.0" in after.stdout, after.stdout
-    assert "0.3.0" not in after.stdout, after.stdout
+    # The summary names ids and kinds; roots belong to --list-incidents.
+    assert "bbb" in after.stdout, after.stdout
+    assert "aaa" not in after.stdout, after.stdout
 
 
 def test_bare_ack_is_not_a_silent_ack_all(tmp_path: Path) -> None:

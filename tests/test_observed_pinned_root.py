@@ -159,16 +159,15 @@ def test_a_record_that_disclaims_the_pin_is_not_called_stale() -> None:
         }
     )
 
-    warnings = evaluate(
-        [line],
+    warnings = _classify([line],
         pinned_root="/c/0.16.0",
         installed_at=datetime(2026, 8, 25, 11, 30, tzinfo=TZ),
     )
 
     # Not called stale — but not silent either. Unverified is its own answer.
     assert len(warnings) == 1, warnings
-    assert "could not be verified" in warnings[0], warnings
-    assert "not the installed version" not in warnings[0], warnings
+    assert "unverified" in warnings[0], warnings
+    assert "stale" not in warnings[0], warnings
 
 
 def test_a_resolved_pin_still_decides_normally() -> None:
@@ -187,8 +186,7 @@ def test_a_resolved_pin_still_decides_normally() -> None:
         }
     )
 
-    warnings = evaluate(
-        [line],
+    warnings = _classify([line],
         pinned_root="/c/0.16.0",
         installed_at=datetime(2026, 8, 25, 11, 30, tzinfo=TZ),
     )
@@ -203,3 +201,23 @@ _NOW = datetime(2026, 8, 25, 12, 0, tzinfo=TZ)
 def evaluate(lines, *, pinned_root, installed_at=None):
     """Shim: 0.18.0 dropped `installed_at` (see test_no_cross_record_inference)."""
     return _evaluate(lines, pinned_root=pinned_root, now=_NOW, window=WINDOW)
+
+
+# --- 0.20.0: integrity moved from log-replay to the ledger --------------------
+#
+# `evaluate()` no longer classifies integrity from log records; incidents are
+# written to a ledger BEFORE the mutation they describe, because the log could
+# only ever say what already finished. These tests still assert the thing that
+# matters — that a record's own contents decide, with no reference to any other
+# record — so they now exercise `incidents()`, the classifier that FEEDS the
+# ledger, instead of the reporter that reads it.
+
+
+def _classify(lines, acknowledged=frozenset(), **_ignored):
+    from zotero_capture.health import incidents as _incidents
+
+    return [
+        f"{i['kind']} capture(s) ran from plugin {i['root']} [{i['id']}]"
+        for i in _incidents(lines, pinned_root="/c/0.16.0")
+        if i["id"] not in acknowledged
+    ]

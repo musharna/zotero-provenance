@@ -22,6 +22,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from zotero_capture.config import _state_dir  # noqa: E402
 from zotero_capture.health import evaluate, incidents  # noqa: E402
+from zotero_capture.health_ledger import (  # noqa: E402
+    acknowledge,
+    acknowledge_all,
+    count_open,
+    open_incident,
+    open_incidents,
+)
 from zotero_capture.registry import resolve_pinned  # noqa: E402
 
 ACK_FILE = "health-acknowledged"
@@ -91,57 +98,91 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         prog="zotero_capture_health",
         description="Report capture faults. Silent when there is nothing to say.",
     )
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--list-incidents", action="store_true",
-        help="show each integrity incident and its id",
+        help="show open integrity incidents and their ids",
     )
-    parser.add_argument(
-        "--ack", nargs="+", metavar="ID", default=None,
-        help="acknowledge the named incident(s); see --list-incidents",
+    mode.add_argument(
+        "--ack", nargs="+", metavar="ID",
+        help="resolve the named incident(s); see --list-incidents",
     )
-    parser.add_argument(
+    mode.add_argument(
         "--ack-all", action="store_true",
-        help="acknowledge EVERY incident in the log, including any not shown",
+        help="resolve EVERY open incident, including any not shown",
+    )
+    parser.add_argument(
+        "--limit", type=int, default=50,
+        help="how many incidents to list (the remainder is counted, not hidden)",
     )
     return parser.parse_args(argv)
 
 
-def _write_ack(state: Path, keys: set[str]) -> None:
-    state.mkdir(parents=True, exist_ok=True)
-    (state / ACK_FILE).write_text("".join(f"{key}\n" for key in sorted(keys)))
+def _migrate_legacy(state: Path, ledger: Path, pinned: str | None) -> None:
+    """Import incidents proven by pre-0.19 records, once.
+
+    A 0.15-0.18 record with `root != pinned_root` and evidence of a write
+    already proves an integrity incident; only its acknowledgement identity was
+    missing. Rejecting it for having no id silently suppressed every open
+    incident at the moment of upgrade, which is not the same as rejecting a
+    record that cannot prove anything.
+    """
+    marker = state / "health-migrated"
+    if marker.exists():
+        return
+    try:
+        with _log_lines(state) as lines:
+            found = incidents(lines, pinned_root=pinned, require_id=False)
+        for item in found:
+            open_incident(
+                ledger, incident_id=item["id"], url=item.get("url"),
+                root=item["root"], pinned_root=pinned, kind=item["kind"],
+                ts=item["ts"],
+            )
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(f"{len(found)}\n")
+    except OSError:
+        pass
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(sys.argv[1:] if argv is None else argv)
     state = _state_dir(os.environ)
+    ledger = state / "health.db"
     pinned, _installed_at = _installed()
+    _migrate_legacy(state, ledger, pinned)
+    stamp = datetime.now().astimezone().isoformat()
 
     if args.list_incidents:
-        with _log_lines(state) as lines:
-            found = incidents(lines, pinned_root=pinned)
-        if not found:
-            print("zotero-provenance: no integrity incidents recorded")
+        total = count_open(ledger)
+        if not total:
+            print("zotero-provenance: no open integrity incidents")
             return 0
-        acked = _acknowledged(state)
-        for item in found:
-            mark = "acknowledged" if item["id"] in acked else "OPEN"
-            print(f"{item['id']}  {item['ts']}  {item['kind']:<10} {mark}  {item['root']}")
+        shown = open_incidents(ledger, limit=max(args.limit, 1))
+        for item in shown:
+            print(
+                f"{item['incident_id']}  {item['opened_at']}  "
+                f"{item['kind']:<10} {item['root']}  {item.get('url') or ''}"
+            )
+        if total > len(shown):
+            print(f"... {total - len(shown)} more (use --limit to show them)")
         return 0
 
     if args.ack_all:
-        with _log_lines(state) as lines:
-            keys = {item["id"] for item in incidents(lines, pinned_root=pinned)}
-        _write_ack(state, keys | set(_acknowledged(state)))
-        print(f"zotero-provenance: acknowledged all {len(keys)} incident(s)")
+        n = acknowledge_all(ledger, now=stamp)
+        print(f"zotero-provenance: resolved {n} incident(s)")
         return 0
 
-    if args.ack is not None:
-        # Only the ids named. Acknowledging everything used to be what a bare
-        # --ack did, silently, including incidents the aggregated report never
-        # displayed — it was an undocumented --ack-all.
-        _write_ack(state, set(args.ack) | set(_acknowledged(state)))
-        print(f"zotero-provenance: acknowledged {len(set(args.ack))} incident(s)")
-        return 0
+    if args.ack:
+        resolved = acknowledge(ledger, list(args.ack), now=stamp)
+        unknown = [i for i in args.ack if i not in resolved]
+        for i in resolved:
+            print(f"zotero-provenance: resolved {i}")
+        for i in unknown:
+            # An unknown id used to be appended to a file and reported as
+            # success, leaving the real incident open behind a typo.
+            print(f"zotero-provenance: no open incident with id {i}", file=sys.stderr)
+        return 0 if resolved and not unknown else 1
 
     with _log_lines(state) as lines:
         warnings = evaluate(
@@ -149,7 +190,7 @@ def main(argv: list[str] | None = None) -> int:
             pinned_root=pinned,
             now=datetime.now().astimezone(),
             window=_window(),
-            acknowledged=_acknowledged(state),
+            ledger_path=ledger,
         )
     if not warnings:
         return 0

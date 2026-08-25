@@ -186,6 +186,7 @@ def _emit_log(
     latency_ms: int,
     identity: dict[str, str] | None = None,
     pinned_root: str | None = None,
+    incident_id: str | None = None,
 ) -> None:
     """Append one JSON line per capture, including WHO captured.
 
@@ -212,7 +213,8 @@ def _emit_log(
         # Identity comes from the writer. Reconstructing it afterwards from
         # timestamp+root aliased distinct incidents that happened in the same
         # second, so acknowledging one silenced another that was never shown.
-        "incident_id": uuid.uuid4().hex,
+        # Minted before the capture ran, not here. See run_capture.
+        **({"incident_id": incident_id} if incident_id else {}),
         # Observed BEFORE the capture, not after: reading it afterwards let a
         # registry change mid-capture record a pin the write never ran under,
         # fabricating a stale write that never happened (and, reversed, hiding a
@@ -254,6 +256,12 @@ def run_capture(
     text: str = sys.stdin.read() if message is None else message
     # Read the authorisation state BEFORE the work it authorises.
     pinned_root = _observed_pinned_root()
+    # Created BEFORE the work it names. It used to be minted inside _emit_log,
+    # which runs after every Zotero write, so a hook timeout could leave a row
+    # in the library from a superseded root with no record that it happened.
+    incident_id = uuid.uuid4().hex
+    running_root = str(Path(__file__).resolve().parent.parent.parent)
+    ledger_path = log_path.parent / "health.db"
     started = time.monotonic()
     result = capture_message(
         message=text,
@@ -265,6 +273,10 @@ def run_capture(
         title_fetcher=title_fetcher,
         origin=origin,
         identity=identity,
+        incident_id=incident_id,
+        pinned_root=pinned_root,
+        running_root=running_root,
+        ledger_path=ledger_path,
     )
     # Failures are NOT enqueued: _retry_handler is a stub that never drains, so
     # enqueuing would grow the file forever. Errors are surfaced in the log below.
@@ -277,6 +289,7 @@ def run_capture(
         result=result,
         latency_ms=latency_ms,
         pinned_root=pinned_root,
+        incident_id=incident_id,
     )
     return result
 

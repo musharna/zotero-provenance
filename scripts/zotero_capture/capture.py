@@ -10,6 +10,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from . import __version__
+from .health_ledger import open_incident
 from .staleness import installed_version, stale_reason
 from .sqlite_cache import (
     IndexIdentityMismatch,
@@ -148,6 +149,41 @@ def _flush_pending(db_path: Path, url: str, key: str, zotero) -> None:
     clear_pending_tags(db_path, url, queued)
 
 
+def _incident_kind(running_root: str | None, pinned_root: str | None) -> str | None:
+    """Is a write from here an integrity incident, decided BEFORE the write?
+
+    None for a healthy capture, so a correct install never accumulates ledger
+    rows for ordinary work.
+    """
+    if not running_root:
+        return None
+    if pinned_root is None:
+        return "unverified"
+    return "stale" if running_root != pinned_root else None
+
+
+def _record_intent(
+    *, ledger_path, incident_id, url, running_root, pinned_root, ts,
+) -> None:
+    """Write the incident BEFORE the mutation it describes.
+
+    An intent for a mutation that never happens is a false positive someone can
+    close in one command. A mutation with no intent is corruption nobody can
+    find. Best-effort: bookkeeping must never break a capture, and a failure
+    here is strictly better than the write it was about to describe failing.
+    """
+    kind = _incident_kind(running_root, pinned_root)
+    if not (kind and ledger_path and incident_id and running_root):
+        return
+    try:
+        open_incident(
+            ledger_path, incident_id=incident_id, url=url, root=running_root,
+            pinned_root=pinned_root, kind=kind, ts=ts,
+        )
+    except Exception:
+        logger.exception("could not record incident intent for %s", url)
+
+
 def capture_message(
     *,
     message: str,
@@ -160,6 +196,10 @@ def capture_message(
     origin: str = "assistant",
     now: datetime | None = None,
     identity: dict[str, str] | None = None,
+    incident_id: str | None = None,
+    pinned_root: str | None = None,
+    running_root: str | None = None,
+    ledger_path: Path | None = None,
 ) -> CaptureResult:
     """Process one message: extract URLs, then create or re-tag each in Zotero."""
     result = CaptureResult()
@@ -252,6 +292,11 @@ def capture_message(
                         if title == url:
                             tags.append(UNRESOLVED_TITLE_TAG)
                         issued = True
+                        _record_intent(
+                            ledger_path=ledger_path, incident_id=incident_id,
+                            url=url, running_root=running_root,
+                            pinned_root=pinned_root, ts=today_iso,
+                        )
                         key = zotero.post_webpage_item(
                             url_canonical=url,
                             title=title,
@@ -294,6 +339,10 @@ def capture_message(
             # Applying a tag twice is harmless -- add_tags is idempotent -- so
             # at-least-once is the right trade for provenance.
             queued = peek_pending_tags(db_path, url)
+            _record_intent(
+                ledger_path=ledger_path, incident_id=incident_id, url=url,
+                running_root=running_root, pinned_root=pinned_root, ts=today_iso,
+            )
             zotero.add_tags(
                 key,
                 [seen_tag, context_tag, project_tag, *queued],

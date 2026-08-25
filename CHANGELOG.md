@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.20.0 — 2026-08-25
+
+The sixth audit found something none of the previous five did: a defect in the
+capture path rather than in the reporting. **The plugin could mutate the library
+and then have no record that it did.**
+
+- **The incident is written before the write.** The id was minted inside
+  `_emit_log`, which runs after every Zotero call, so a hook timeout — the hooks
+  impose ten and fifteen seconds — could leave a row created from a superseded
+  root with nothing anywhere saying so. Worse, "did it write" was inferred from
+  `urls_new + urls_recurring`, which are COMPLETION counters incremented after
+  the POST returns and after local bookkeeping; a commit followed by an
+  ambiguous failure reported zero writes. The incident is now journalled to a
+  SQLite ledger before each external mutation.
+
+  The asymmetry that settles it: an intent for a mutation that never happens is
+  a false positive a person closes in one command; a mutation with no intent is
+  corruption nobody can find.
+
+- **Open incidents are the bounded thing, not the acknowledgement set.**
+  Replaying an immutable, unbounded log and filtering acknowledged ids requires
+  remembering an unbounded set of ids — there is no bounded lossless version.
+  Acknowledgement now resolves a ledger row. A healthy install opens no
+  incidents at all, so it stores nothing.
+
+- **`--ack` of an unknown id fails.** It used to append the string to a file,
+  print "acknowledged 1 incident(s)", and leave the real incident open behind a
+  typo. `--list-incidents` pages with an explicit remainder rather than a silent
+  cap, and the mode flags are mutually exclusive.
+
+- **Proven pre-0.19 incidents are migrated rather than dropped.** A 0.15–0.18
+  record with `root != pinned_root` and evidence of a write already proved an
+  incident; only its acknowledgement identity was missing. Rejecting it for
+  having no id silently suppressed every open incident at the moment of upgrade.
+
+- **A broken log TAIL is reported.** Warning only when the whole log was
+  unparseable let one old valid record bless an indefinitely broken telemetry
+  stream. A single unparseable last line is still ignored — a torn final record
+  is ordinary when the writer appends while the reader reads.
+
+- **A bad clock no longer hides integrity evidence.** A future-dated record
+  incremented the clock counter and skipped the rest, discarding classification
+  that does not depend on recency at all.
+
 ## 0.19.0 — 2026-08-25
 
 Fifth audit. Both High findings were in `--ack` — the mechanism added one

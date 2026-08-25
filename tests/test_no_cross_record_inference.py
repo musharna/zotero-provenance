@@ -80,7 +80,7 @@ def test_a_stale_write_is_reported_regardless_of_when_the_version_was_installed(
     """installed_at was an externally-advanced cursor that dropped incidents."""
     lines = [_cap("2026-08-20T09:00:00-04:00", root="/c/0.3.0", pinned=PINNED)]
 
-    warnings = _check(lines)
+    warnings = _classify(lines)
 
     assert warnings, "an old stale write was retired by an upgrade"
     assert "0.3.0" in warnings[0], warnings
@@ -93,8 +93,8 @@ def test_a_stale_write_stops_only_when_acknowledged() -> None:
     keys = incident_keys(lines, pinned_root=PINNED)
     assert keys, "no acknowledgeable incident was produced"
 
-    assert _check(lines) != []
-    assert _check(lines, acknowledged=keys) == []
+    assert _classify(lines) != []
+    assert _classify(lines, acknowledged=keys) == []
 
 
 def test_acknowledging_one_incident_does_not_hide_a_different_one() -> None:
@@ -103,7 +103,7 @@ def test_acknowledging_one_incident_does_not_hide_a_different_one() -> None:
 
     acked = incident_keys([old], pinned_root=PINNED)
 
-    warnings = _check([old, new], acknowledged=acked)
+    warnings = _classify([old, new], acknowledged=acked)
     assert warnings, "acknowledging one incident silenced another"
     assert "0.9.0" in warnings[0] and "0.3.0" not in warnings[0], warnings
 
@@ -156,34 +156,58 @@ def test_a_record_with_no_pin_evidence_is_not_classified() -> None:
 def test_a_record_with_pin_evidence_is_still_classified() -> None:
     """Positive control: the fix above must not disable the signal."""
     current = _cap("2026-08-25T08:00:00-04:00", root="/c/0.3.0", pinned=PINNED)
-    assert _check([current]), "the stale signal stopped working"
+    assert _classify([current]), "the stale signal stopped working"
 
 
-def test_memory_is_bounded_when_everything_is_broken() -> None:
-    """Streaming that only streams on the happy path is not streaming.
+def test_reporting_is_bounded_no_matter_how_many_incidents_exist(tmp_path) -> None:
+    """The reason integrity moved to a ledger.
 
-    The first measurement of this used all-healthy records, so nothing
-    accumulated and it reported a flat peak. With every record stale the same
-    call held 110 MB and took 10.5 s at half a million records — past the hook's
-    own ten-second timeout, leaving the monitor able to report nothing but its
-    own failure. The worst case is exactly when the log is longest.
+    Replaying an unbounded log and filtering acknowledged ids needs an unbounded
+    set to filter with — there is no bounded lossless version. A ledger answers
+    "how many are open" with a count and shows a handful, so the SessionStart
+    path stays flat however bad things are. The first version of this test
+    measured `evaluate()` over all-HEALTHY records, so nothing accumulated and
+    it reported a flat peak that meant nothing.
     """
     import tracemalloc
 
-    def gen(n):
-        for i in range(n):
-            yield _cap("2026-08-25T11:00:00-04:00", root="/c/OLD", pinned=PINNED,
-                       incident_id=f"i{i}")
+    from zotero_capture.health_ledger import open_incident
+
+    ledger = tmp_path / "health.db"
+    for i in range(5_000):
+        open_incident(ledger, incident_id=f"i{i}", url="u", root="/c/OLD",
+                      pinned_root=PINNED, kind="stale",
+                      ts="2026-08-25T11:00:00-04:00")
 
     tracemalloc.start()
     try:
-        warnings = evaluate(
-            gen(100_000), pinned_root=PINNED, now=NOW, window=WINDOW
-        )
+        warnings = evaluate([], pinned_root=PINNED, now=NOW, window=WINDOW,
+                            ledger_path=ledger)
         peak = tracemalloc.get_traced_memory()[1]
     finally:
         tracemalloc.stop()
 
-    assert warnings, "positive control: the records should have been reported"
-    assert "100000" in warnings[0], warnings
-    assert peak < 8 * 1024 * 1024, f"held {peak / 1024 / 1024:.1f} MB for 100k records"
+    assert warnings, "positive control: 5000 open incidents should be reported"
+    assert "5000" in warnings[0], warnings
+    assert peak < 1024 * 1024, f"held {peak / 1024:.0f} KB to report 5000 incidents"
+
+
+
+# --- 0.20.0: integrity moved from log-replay to the ledger --------------------
+#
+# `evaluate()` no longer classifies integrity from log records; incidents are
+# written to a ledger BEFORE the mutation they describe, because the log could
+# only ever say what already finished. These tests still assert the thing that
+# matters — that a record's own contents decide, with no reference to any other
+# record — so they now exercise `incidents()`, the classifier that FEEDS the
+# ledger, instead of the reporter that reads it.
+
+
+def _classify(lines, acknowledged=frozenset(), **_ignored):
+    from zotero_capture.health import incidents as _incidents
+
+    return [
+        f"{i['kind']} capture(s) ran from plugin {i['root']} [{i['id']}]"
+        for i in _incidents(lines, pinned_root=PINNED)
+        if i["id"] not in acknowledged
+    ]
