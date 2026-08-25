@@ -25,25 +25,37 @@ from zotero_capture.health import evaluate  # noqa: E402
 DEFAULT_MAX_SILENCE_HOURS = 24.0
 
 
-def _pinned_root() -> str | None:
-    """Where the plugin manager currently points, or None if unreadable.
+def _installed() -> tuple[str | None, datetime | None]:
+    """Where the plugin manager points, and when it last pointed somewhere new.
 
     None means "do not guess": an unreadable registry must not be reported as a
-    version mismatch.
+    version mismatch. The timestamp matters as much as the path — without it,
+    the check fires on every release, because for a few minutes after an upgrade
+    the newest capture legitimately came from the previous root.
     """
     registry = Path.home() / ".claude" / "plugins" / "installed_plugins.json"
     try:
         data = json.loads(registry.read_text())
     except (OSError, ValueError):
-        return None
+        return None, None
     for name, entries in (data.get("plugins") or {}).items():
         if not name.startswith("zotero-provenance@"):
             continue
         for entry in entries or []:
             path = entry.get("installPath")
-            if path:
-                return str(path)
-    return None
+            if not path:
+                continue
+            when = None
+            raw = entry.get("lastUpdated") or entry.get("installedAt")
+            if isinstance(raw, str):
+                try:
+                    when = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                except ValueError:
+                    when = None
+                if when is not None and when.tzinfo is None:
+                    when = None
+            return str(path), when
+    return None, None
 
 
 def _max_silence() -> timedelta:
@@ -62,11 +74,13 @@ def main() -> int:
     except OSError:
         return 0
 
+    pinned, installed_at = _installed()
     warnings = evaluate(
         lines,
-        pinned_root=_pinned_root(),
+        pinned_root=pinned,
         now=datetime.now().astimezone(),
         max_silence=_max_silence(),
+        installed_at=installed_at,
     )
     if not warnings:
         return 0

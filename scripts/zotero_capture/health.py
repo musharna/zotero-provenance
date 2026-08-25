@@ -79,6 +79,7 @@ def evaluate(
     pinned_root: str | None,
     now: datetime,
     max_silence: timedelta,
+    installed_at: datetime | None = None,
 ) -> list[str]:
     """Human-readable warnings, or an empty list when there is nothing to say."""
     records = _records(lines)
@@ -92,9 +93,23 @@ def evaluate(
     # 1. Executing code that is not the installed code. This is the shape of both
     #    the junk-writing root and the 29-hour outage, and it is the one signal
     #    that identifies them on the first session after they begin.
+    #
+    #    `installed_at` is what keeps this from crying wolf on every release. For
+    #    a few minutes after an upgrade the newest capture legitimately came from
+    #    the PREVIOUS root, because it happened before the new one was pinned —
+    #    which is not stale code, just a clock ordering. The real question is
+    #    whether anything has captured from an unpinned root SINCE the upgrade.
+    #    Caught by running the check against the live log right after shipping
+    #    0.14.0, where it fired on a capture 30 seconds too old to be a fault.
     if pinned_root and last:
         root = last.get("root")
-        if isinstance(root, str) and root and root != pinned_root:
+        predates_install = installed_at is not None and last["_ts"] <= installed_at
+        if (
+            isinstance(root, str)
+            and root
+            and root != pinned_root
+            and not predates_install
+        ):
             warnings.append(
                 f"last capture ran from plugin {_version_of(root)}, but "
                 f"{_version_of(pinned_root)} is installed — that session is "
