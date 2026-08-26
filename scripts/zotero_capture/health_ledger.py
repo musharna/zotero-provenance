@@ -125,8 +125,6 @@ def open_incidents(db_path: Path, *, limit: int | None = None) -> list[dict]:
         if limit is not None:
             sql += f" LIMIT {int(limit)}"
         return [dict(row) for row in conn.execute(sql)]
-    except sqlite3.DatabaseError:
-        return []
     finally:
         conn.close()
 
@@ -140,8 +138,6 @@ def count_open(db_path: Path) -> int:
             "SELECT COUNT(*) AS n FROM incidents WHERE status = 'open'"
         ).fetchone()
         return int(row["n"]) if row else 0
-    except sqlite3.DatabaseError:
-        return 0
     finally:
         conn.close()
 
@@ -168,8 +164,6 @@ def acknowledge(db_path: Path, incident_ids: list[str], *, now: str = "") -> lis
                 )
                 if cur.rowcount:
                     resolved.append(incident_id)
-    except sqlite3.DatabaseError:
-        return []
     finally:
         conn.close()
     return resolved
@@ -187,7 +181,5 @@ def acknowledge_all(db_path: Path, *, now: str = "") -> int:
                 (now,),
             )
             return int(cur.rowcount or 0)
-    except sqlite3.DatabaseError:
-        return 0
     finally:
         conn.close()
