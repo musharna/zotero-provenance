@@ -1,9 +1,9 @@
-"""The three inline trampolines must stay byte-identical.
+"""The four inline trampolines must stay byte-identical.
 
 Inlining is right at runtime: a superseded root cannot rely on its own lib.sh,
 so the delegation logic has to live in the file that gets replaced. But there
-are three copies now — both capture hooks and the health hook — and three copies
-of security-relevant path arithmetic drift silently.
+are four copies now — both capture hooks, the health hook and the command
+launcher — and four copies of security-relevant path arithmetic drift silently.
 
 They have drifted once already in spirit: session-health.sh had no trampoline at
 all for two releases while its comment asserted it did not need one.
@@ -17,6 +17,11 @@ HOOKS_WITH_TRAMPOLINE = (
     "capture-stop.sh",
     "capture-prompt.sh",
     "session-health.sh",
+    # The command launcher. It went four releases without one while the hooks
+    # had it, so a superseded session ran superseded code that MUTATES the
+    # library -- the one case with no availability argument for letting it
+    # through.
+    "run-python.sh",
 )
 START = "# --- trampoline"
 END = "\t;;\nesac\n"
