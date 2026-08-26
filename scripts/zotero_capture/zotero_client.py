@@ -321,7 +321,9 @@ class ZoteroClient:
             )
         return True
 
-    def update_url(self, item_key: str, url: str) -> bool:
+    def update_url(
+        self, item_key: str, url: str, *, expect_url: str | None = None
+    ) -> bool:
         """Correct the stored URL of an item.
 
         Needed because a URL truncated at capture time cannot be repaired by any
@@ -345,6 +347,16 @@ class ZoteroClient:
             body.get("version", 0)
         )
         data = body.get("data", {})
+        # See trash_item: the decision was made on a snapshot, and rewriting an
+        # item that has since become something else is not a repair.
+        if expect_url is not None and (data.get("url") or "").strip() != expect_url.strip():
+            logger.warning(
+                "refusing to rewrite %s: selected as %r but it is now %r",
+                item_key,
+                expect_url,
+                data.get("url"),
+            )
+            return False
         payload: dict[str, Any] = {"url": url}
         # title_is_unresolved detects a failed fetch by title == url. Moving the
         # URL without the title breaks that equality, and the item silently stops
@@ -365,12 +377,23 @@ class ZoteroClient:
             )
         return True
 
-    def trash_item(self, item_key: str) -> None:
-        """Move an item to the Zotero trash.
+    def trash_item(self, item_key: str, *, expect_url: str | None = None) -> bool:
+        """Move an item to the Zotero trash. True if it was trashed.
 
         Deliberately not delete_item: the API's DELETE is permanent, while
         `deleted: 1` leaves the item recoverable from the trash in any Zotero
         client. Anything that removes items in bulk should be undoable.
+
+        `expect_url` is the URL the caller DECIDED on. Every caller selects from
+        a snapshot and destroys later by key, and optimistic versioning does not
+        cover that gap: it stops a write racing the final GET, not an edit that
+        landed before it. Without this, a sweep could report trashing a font
+        asset while it actually trashed the paper the item had become. Given an
+        expectation, the item must still be the one that was chosen.
+
+        The annotation used to say `-> None` while two paths returned False, so
+        the check was invisible to anyone reading the signature -- and all three
+        callers ignored the result.
         """
         resp = self._client.get(f"/items/{item_key}")
         if resp.status_code == 404:
@@ -383,8 +406,18 @@ class ZoteroClient:
             raise ZoteroError(
                 f"GET /items/{item_key} failed: {resp.status_code} {resp.text}"
             )
+        body = resp.json()
+        current_url = (body.get("data", {}).get("url") or "").strip()
+        if expect_url is not None and current_url != expect_url.strip():
+            logger.warning(
+                "refusing to trash %s: selected as %r but it is now %r",
+                item_key,
+                expect_url,
+                current_url,
+            )
+            return False
         version = resp.headers.get("Last-Modified-Version") or str(
-            resp.json().get("version", 0)
+            body.get("version", 0)
         )
         resp = self._client.patch(
             f"/items/{item_key}",
@@ -398,6 +431,7 @@ class ZoteroClient:
                 f"PATCH /items/{item_key} (trash) failed: "
                 f"{resp.status_code} {resp.text}"
             )
+        return True
 
     def delete_item(self, item_key: str) -> None:
         resp = self._client.get(f"/items/{item_key}")

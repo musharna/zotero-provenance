@@ -185,7 +185,7 @@ def apply_retire(
     connect,
 ) -> dict[str, int]:
     """Carry out a plan: journal the row, trash the item, then drop the row."""
-    counts = {"trashed": 0, "row_only": 0, "failed": 0}
+    counts = {"trashed": 0, "row_only": 0, "failed": 0, "skipped": 0}
     stamp = datetime.now(timezone.utc).isoformat()
     journal = journal_path(db_path)
     for step in steps:
@@ -218,7 +218,11 @@ def apply_retire(
                     + "\n"
                 )
             if step.zotero_key:
-                zotero.trash_item(step.zotero_key)
+                # expect_url: the plan can be minutes old, and an item that has
+                # become something else is no longer the one that was judged.
+                if not zotero.trash_item(step.zotero_key, expect_url=step.url):
+                    counts["skipped"] += 1
+                    continue
                 counts["trashed"] += 1
             else:
                 counts["row_only"] += 1

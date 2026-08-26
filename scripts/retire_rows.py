@@ -134,7 +134,8 @@ def main(argv: list[str] | None = None) -> int:
         counts = apply_retire(steps, db_path=db_path, zotero=zotero, connect=_connect)
     print(
         f"\ntrashed {counts['trashed']}, rows dropped without an item "
-        f"{counts['row_only']}, failed {counts['failed']}"
+        f"{counts['row_only']}, skipped {counts['skipped']}, "
+        f"failed {counts['failed']}"
     )
     return 1 if counts["failed"] else 0
 

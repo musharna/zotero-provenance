@@ -189,7 +189,9 @@ def apply_repair(
             continue
         try:
             if step.action == "rewrite":
-                if not zotero.update_url(step.zotero_key, step.corrected):
+                if not zotero.update_url(
+                    step.zotero_key, step.corrected, expect_url=step.url
+                ):
                     # The item is gone. Rewriting the index row anyway would
                     # leave it claiming a corrected URL with nothing behind it,
                     # and the pass would report a repair that did not happen.
@@ -254,7 +256,14 @@ def apply_repair(
                 ]
                 if tags:
                     zotero.add_tags(survivor_key, tags)
-                zotero.trash_item(step.zotero_key)
+                if not zotero.trash_item(step.zotero_key, expect_url=step.url):
+                    logger.warning(
+                        "skipping merge of %s: it is no longer the item that was "
+                        "planned",
+                        step.url,
+                    )
+                    counts["skip"] += 1
+                    continue
                 with connect(db_path) as conn:
                     merged = conn.execute(
                         "DELETE FROM url_index"

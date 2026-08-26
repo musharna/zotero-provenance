@@ -167,8 +167,9 @@ class _FakeZotero:
     def __init__(self):
         self.trashed: list[str] = []
 
-    def trash_item(self, key: str) -> None:
+    def trash_item(self, key: str, *, expect_url: str | None = None) -> bool:
         self.trashed.append(key)
+        return True
 
 
 def test_apply_trashes_the_item_and_drops_the_row(tmp_path):
@@ -198,7 +199,7 @@ def test_apply_trashes_the_item_and_drops_the_row(tmp_path):
 
     zotero = _FakeZotero()
     counts = apply_retire(steps, db_path=db, zotero=zotero, connect=connect)
-    assert counts == {"trashed": 1, "row_only": 0, "failed": 0}
+    assert counts == {"trashed": 1, "row_only": 0, "failed": 0, "skipped": 0}
     assert zotero.trashed == ["JUNKKEY1"]
 
     with closing(connect(db)) as conn:
@@ -221,7 +222,7 @@ def test_a_row_whose_claim_never_completed_is_dropped_without_a_zotero_call(tmp_
     steps = plan_retire([_row("https://a.example/{X}", key="")])
     zotero = _FakeZotero()
     counts = apply_retire(steps, db_path=db, zotero=zotero, connect=connect)
-    assert counts == {"trashed": 0, "row_only": 1, "failed": 0}
+    assert counts == {"trashed": 0, "row_only": 1, "failed": 0, "skipped": 0}
     assert zotero.trashed == []
 
 
@@ -260,9 +261,9 @@ def test_every_removed_row_is_journalled_before_it_is_destroyed(tmp_path):
         def __init__(self):
             self.trashed = []
 
-        def trash_item(self, key):
+        def trash_item(self, key, *, expect_url=None):
             self.trashed.append(key)
-
+            return True
     apply_retire(plan_retire(rows), db_path=db, zotero=_Zotero(), connect=connect)
 
     entries = [

@@ -241,9 +241,9 @@ def test_a_merge_does_not_carry_the_duplicate_s_unresolved_title_tag(tmp_path):
             self.added[key] = list(tags)
             return True
 
-        def trash_item(self, key):
+        def trash_item(self, key, *, expect_url=None):
             self.trashed.append(key)
-
+            return True
     z = _Zotero()
     step = RepairStep(
         "https://h.example/repo|", "DUPLICATE", "merge", "https://h.example/repo"
@@ -309,9 +309,9 @@ def test_a_merge_is_refused_when_the_survivor_has_no_item(tmp_path):
         def add_tags(self, key, tags, **kw):
             return True
 
-        def trash_item(self, key):
+        def trash_item(self, key, *, expect_url=None):
             self.trashed.append(key)
-
+            return True
     z = _Zotero()
     counts = apply_repair(plan_repair(rows), db_path=db, zotero=z, connect=connect)
 
@@ -363,9 +363,9 @@ def test_a_merge_still_happens_when_the_survivor_is_a_real_item(tmp_path):
             self.added[key] = list(tags)
             return True
 
-        def trash_item(self, key):
+        def trash_item(self, key, *, expect_url=None):
             self.trashed.append(key)
-
+            return True
     z = _Zotero()
     counts = apply_repair(plan_repair(rows), db_path=db, zotero=z, connect=connect)
     assert counts["merge"] == 1

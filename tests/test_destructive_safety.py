@@ -137,8 +137,9 @@ class _FakeZotero:
     def __init__(self) -> None:
         self.trashed: list[str] = []
 
-    def trash_item(self, key: str) -> None:
+    def trash_item(self, key: str, *, expect_url: str | None = None) -> bool:
         self.trashed.append(key)
+        return True
 
 
 JUNK_URL = "https://files.rcsb.org/download/{ID}.pdb"
