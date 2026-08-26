@@ -75,6 +75,21 @@ CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 HARD = "hard"
 POLICY = "policy"
 
+# The reserved-name set splits in two, and the tiers are exactly why that
+# matters. HARD asserts "proof the text cannot be an address at all" -- but
+# these five resolve perfectly well for whoever is on the right network:
+# localhost is guaranteed to reach loopback, .local answers over mDNS, .onion
+# answers through Tor, .internal is a private delegation, and .arpa resolves
+# but is never a document. Filing them as PROOF meant a bare `--apply`, with no
+# `--policy` flag, reached back and trashed a source that was real to the person
+# who cited it. The set is derived from the tier's own definition rather than
+# from the names anyone happened to notice.
+#
+# `_is_reserved_name` itself is deliberately untouched: capture uses it to keep
+# another project's fixture URLs out of the library, and that exclusion is right
+# for every one of these names. Only the DESTRUCTIVE tier assignment was wrong.
+RESOLVES_IN_CONTEXT = frozenset({"localhost", "local", "onion", "internal", "arpa"})
+
 
 def classify(url: str) -> tuple[str, str]:
     """Return (tier, reason) for a row, or ("", "") to leave it alone."""
@@ -89,6 +104,8 @@ def classify(url: str) -> tuple[str, str]:
     host = (parts.hostname or "").lower()
     if not host:
         return HARD, "no host at all"
+    if host.rpartition(".")[2] in RESOLVES_IN_CONTEXT:
+        return POLICY, "resolves only in context (loopback, mDNS, Tor, private zone)"
     if _is_reserved_name(host):
         return HARD, "a name the standards reserve (RFC 2606/6761)"
 

@@ -46,6 +46,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--db-path", default=None)
     p.add_argument("--limit", type=int, default=None, help="only the first N steps")
     args = p.parse_args(argv)
+    # `if args.limit:` -- 0 is falsy, so the cap on a bulk DESTRUCTIVE run
+    # inverted into "no cap" at exactly the value someone reaches for when they
+    # want to be careful. A negative one is worse than useless: steps[:-1] is
+    # every step but the last.
+    if args.limit is not None and args.limit < 0:
+        p.error("--limit must not be negative")
 
     config = load_config()
     db_path = Path(args.db_path) if args.db_path else config.db_path
@@ -55,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
     init_db(db_path)
     rows = _read_rows(db_path)
     steps = plan_repair(rows)
-    if args.limit:
+    if args.limit is not None:
         steps = steps[: args.limit]
 
     by_action: dict[str, int] = {}
