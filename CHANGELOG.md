@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.21.0 — 2026-08-26
+
+Round 7 of external review, against 0.20.0-0.20.2 — the write-ahead ledger
+itself. Two of the four High findings were defects inside the fix that round 6
+told me to write. Both are fixed here; both were reproduced by execution before
+anything was changed.
+
+- **Each mutation now has its own ledger row.** The incident id was minted once
+  per capture and reused for every URL in the message, and `incident_id` is the
+  ledger's PRIMARY KEY with `ON CONFLICT DO NOTHING`. So a message citing three
+  sources from a superseded root recorded ONE incident: it named the first URL,
+  silently discarded the other two, and offered an `--ack` that closed evidence
+  nobody was ever shown. Measured: three stale URLs, one row. A journal that
+  records one entry per BATCH cannot describe a batch that partly succeeded,
+  which is the only interesting case. The row id is now derived from the capture
+  id and the URL — derived and not random, because DO NOTHING is load-bearing:
+  a replayed write must not resurrect an acknowledged incident. The capture id
+  stays on the log line, which is the thing that really is per capture.
+
+- **A ledger that cannot be read is a fault, not a clean bill of health.** Every
+  reader caught `sqlite3.DatabaseError` and returned an empty answer, so a
+  truncated or half-written ledger reported `no open integrity incidents` and
+  exited 0 — the evidence store for integrity incidents treated corruption of
+  itself as proof of integrity. Measured on a real overwritten file:
+  `count_open` 0, `--list-incidents` "none", `--ack-all` "resolved 0", exit 0.
+  The readers now propagate. Nothing else was added: the top-level handler
+  already turns an exception into a traceback and exit 3, and the session hook
+  already turns non-zero into one visible sentence. A MISSING ledger stays
+  silent, because a healthy install never opens an incident and so never creates
+  the file — absent is zero, unreadable is unknown, and unknown is not zero.
+
+Known and deliberately not fixed here: `_migrate_legacy` still synthesises
+`legacy:<second>|<root>` ids, which alias two records from one root in the same
+second (round 7, finding 4). While the ledger key was the capture id, a
+migration re-import of a 0.19+ record collided with the row that record had
+already written and was dropped as a duplicate; with per-mutation keys it no
+longer collides, so a log migrated AFTER its own captures can now count one
+capture twice. That over-reports a real event rather than hiding one, and every
+row is listed by id, so it is visible and clearable — the honest fix belongs
+with finding 4.
+
 ## 0.20.2 — 2026-08-25
 
 The 0.20.1 fix caused a worse problem than the one it fixed, and the live ledger

@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from . import __version__
-from .health_ledger import open_incident
+from .health_ledger import mutation_id, open_incident
 from .staleness import installed_version, stale_reason
 from .sqlite_cache import (
     IndexIdentityMismatch,
@@ -187,13 +187,20 @@ def _record_intent(
 
     A healthy capture opens no incident and never reaches the write below, so a
     broken ledger cannot stop ordinary work.
+
+    `incident_id` names the CAPTURE. The row names ONE write of ONE url, and
+    keying it on the capture collapsed every URL in a message onto a single row
+    -- keeping the first and discarding the rest -- because the id is the
+    table's primary key and the insert says DO NOTHING on conflict. The row
+    carries its own derived id; the capture id stays in the log line, which is
+    the thing that really is per capture.
     """
     kind = _incident_kind(running_root, pinned_root)
     if not (kind and ledger_path and incident_id and running_root):
         return
     open_incident(
         ledger_path,
-        incident_id=incident_id,
+        incident_id=mutation_id(incident_id, url),
         url=url,
         root=running_root,
         pinned_root=pinned_root,
