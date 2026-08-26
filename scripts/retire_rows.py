@@ -46,7 +46,14 @@ def _read_rows(db_path: Path) -> list[dict]:
     with closing(_connect(db_path)) as conn:
         return [
             dict(r)
-            for r in conn.execute("SELECT url_canonical, zotero_key FROM url_index")
+            # pending_key and claimed_at are NOT decoration: an empty
+            # zotero_key is also the normal state of a claim in flight, and
+            # without these columns the planner cannot tell that apart from a
+            # row that never had an item. It deleted both.
+            for r in conn.execute(
+                "SELECT url_canonical, zotero_key, pending_key, claimed_at"
+                " FROM url_index"
+            )
         ]
 
 

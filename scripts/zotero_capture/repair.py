@@ -200,11 +200,23 @@ def apply_repair(
                     )
                     counts["skip"] += 1
                     continue
+                # ...AND zotero_key: between the plan and here another
+                # session can have replaced this row, and rewriting by URL alone
+                # moved a row that belongs to a different item.
                 with connect(db_path) as conn:
-                    conn.execute(
-                        "UPDATE url_index SET url_canonical = ? WHERE url_canonical = ?",
-                        (step.corrected, step.url),
+                    moved = conn.execute(
+                        "UPDATE url_index SET url_canonical = ?"
+                        " WHERE url_canonical = ? AND zotero_key = ?",
+                        (step.corrected, step.url, step.zotero_key),
+                    ).rowcount
+                if not moved:
+                    logger.warning(
+                        "rewrote item %s but its index row was replaced; "
+                        "leaving the new row alone",
+                        step.zotero_key,
                     )
+                    counts["skip"] += 1
+                    continue
                 counts["rewrite"] += 1
             else:
                 survivor = lookup_url(db_path, step.corrected)
@@ -244,8 +256,16 @@ def apply_repair(
                     zotero.add_tags(survivor_key, tags)
                 zotero.trash_item(step.zotero_key)
                 with connect(db_path) as conn:
-                    conn.execute(
-                        "DELETE FROM url_index WHERE url_canonical = ?", (step.url,)
+                    merged = conn.execute(
+                        "DELETE FROM url_index"
+                        " WHERE url_canonical = ? AND zotero_key = ?",
+                        (step.url, step.zotero_key),
+                    ).rowcount
+                if not merged:
+                    logger.warning(
+                        "merged item %s but its index row was replaced; "
+                        "leaving the new row alone",
+                        step.zotero_key,
                     )
                 counts["merge"] += 1
         except Exception as e:  # noqa: BLE001 - one bad row must not stop the pass

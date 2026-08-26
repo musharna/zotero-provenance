@@ -341,7 +341,32 @@ def capture_message(
                         if not issued:
                             release_url(db_path, url, pending_key=pending_key)
                         raise
-                    set_zotero_key(db_path, url, key, pending_key=pending_key)
+                    if not set_zotero_key(db_path, url, key, pending_key=pending_key):
+                        # set_zotero_key is a compare-and-swap and its result
+                        # was thrown away. It returns False exactly when the
+                        # claim is no longer ours -- taken over, or the row
+                        # deleted underneath us by a retire pass -- which means
+                        # the item now exists in Zotero with nothing in the
+                        # index pointing at it. Dedup will never see it again,
+                        # so every future citation of this URL makes another
+                        # copy. Silence here was the one moment the system could
+                        # have noticed.
+                        logger.error(
+                            "item %s was created for %s but no index row claims "
+                            "it; the claim was lost while the POST was in flight",
+                            key,
+                            url,
+                        )
+                        result.errors.append(
+                            CaptureFailure(
+                                url=url,
+                                code="claim_lost",
+                                message=(
+                                    f"item {key} exists in Zotero but no index "
+                                    f"row claims it"
+                                ),
+                            )
+                        )
                     # Another session may have queued its own sighting against
                     # this claim while the POST was in flight. Nothing else will
                     # ever come back for it: the recurring branch only runs on a

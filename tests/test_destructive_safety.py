@@ -16,6 +16,7 @@ import pytest
 
 import repair_urls
 import retire_rows
+from zotero_capture.retire import apply_retire, plan_retire
 from zotero_capture.retire import HARD, POLICY, classify
 from zotero_capture.sqlite_cache import init_db
 
@@ -121,3 +122,220 @@ def test_a_resolvable_special_use_name_is_policy_not_proof(url: str) -> None:
 def test_genuine_proof_is_still_hard(url: str) -> None:
     """Positive control: narrowing HARD must not empty it."""
     assert classify(url)[0] == HARD
+
+
+# --- the reservation race, and finalizing by URL alone -----------------------
+
+
+def _connect(db: Path):
+    conn = sqlite3.connect(db, isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+class _FakeZotero:
+    def __init__(self) -> None:
+        self.trashed: list[str] = []
+
+    def trash_item(self, key: str) -> None:
+        self.trashed.append(key)
+
+
+JUNK_URL = "https://files.rcsb.org/download/{ID}.pdb"
+
+
+def _insert(db: Path, url: str, key: str, *, pending_key: str = "",
+            claimed_at: str = "") -> None:
+    with closing(_connect(db)) as conn:
+        conn.execute(
+            "INSERT INTO url_index"
+            " (url_canonical, zotero_key, first_seen, last_seen, pending_key, claimed_at)"
+            " VALUES (?, ?, '2026-01-01', '2026-01-01', ?, ?)",
+            (url, key, pending_key, claimed_at),
+        )
+
+
+def _rows(db: Path) -> list[dict]:
+    return retire_rows._read_rows(db)
+
+
+def test_an_in_flight_reservation_is_not_retired(tmp_path: Path) -> None:
+    """`zotero_key == ""` is not proof the claim never completed.
+
+    It is also the NORMAL state between reserve_url() and the POST returning.
+    Retire read it as row-only garbage and deleted the row; capture's POST then
+    landed, set_zotero_key matched nothing, and the item existed in Zotero with
+    nothing in the index pointing at it -- invisible to dedup forever, which is
+    precisely what the reservation protocol exists to prevent.
+    """
+    db = tmp_path / "idx.db"
+    init_db(db)
+    _insert(db, JUNK_URL, "", pending_key="PENDING1", claimed_at="2026-08-26T09:00:00")
+
+    steps = plan_retire(_rows(db))
+
+    assert steps == [], f"an unresolved claim was planned for deletion: {steps}"
+
+
+def test_a_row_with_no_claim_at_all_is_still_retired(tmp_path: Path) -> None:
+    """Positive control: narrowing this must not stop retirement working."""
+    db = tmp_path / "idx.db"
+    init_db(db)
+    _insert(db, JUNK_URL, "")
+
+    steps = plan_retire(_rows(db))
+
+    assert [s.url for s in steps] == [JUNK_URL]
+    assert steps[0].zotero_key == ""
+
+
+def test_the_planner_is_actually_given_the_claim_columns(tmp_path: Path) -> None:
+    """A guard the production reader cannot feed is not a guard.
+
+    plan_retire's rows come from _read_rows, which selected only url and key --
+    so the claim was invisible to the planner by construction.
+    """
+    db = tmp_path / "idx.db"
+    init_db(db)
+    _insert(db, JUNK_URL, "", pending_key="PENDING1")
+
+    row = _rows(db)[0]
+
+    assert "pending_key" in row, f"the planner cannot see the claim: {sorted(row)}"
+
+
+def test_retire_does_not_delete_a_row_another_session_replaced(tmp_path: Path) -> None:
+    """Finalize was `WHERE url_canonical = ?` with no key term.
+
+    Plan names K1. Another session drops that row and capture recreates the URL
+    as K2. Retire then trashes K1 and deletes "the row for this URL" -- which is
+    now K2's, an item nobody trashed. K2 becomes an unindexed remote orphan.
+    """
+    db = tmp_path / "idx.db"
+    init_db(db)
+    _insert(db, JUNK_URL, "K1")
+    steps = plan_retire(_rows(db))
+    assert [s.zotero_key for s in steps] == ["K1"], "positive control: K1 was planned"
+
+    # the replacement happens between planning and applying
+    with closing(_connect(db)) as conn:
+        conn.execute(
+            "UPDATE url_index SET zotero_key = 'K2' WHERE url_canonical = ?",
+            (JUNK_URL,),
+        )
+
+    zotero = _FakeZotero()
+    apply_retire(steps, db_path=db, zotero=zotero, connect=_connect)
+
+    with closing(_connect(db)) as conn:
+        left = [dict(r) for r in conn.execute("SELECT * FROM url_index")]
+    assert [r["zotero_key"] for r in left] == ["K2"], (
+        "the replacement row was deleted for an item that was never trashed"
+    )
+
+
+def test_retire_still_deletes_the_row_it_planned(tmp_path: Path) -> None:
+    """Positive control for the compare-and-swap: the ordinary case must work."""
+    db = tmp_path / "idx.db"
+    init_db(db)
+    _insert(db, JUNK_URL, "K1")
+    _insert(db, "https://example.org.uk/real", "GOOD1")
+
+    steps = plan_retire(_rows(db))
+    zotero = _FakeZotero()
+    counts = apply_retire(steps, db_path=db, zotero=zotero, connect=_connect)
+
+    assert zotero.trashed == ["K1"]
+    assert counts["trashed"] == 1
+    with closing(_connect(db)) as conn:
+        left = [r[0] for r in conn.execute("SELECT url_canonical FROM url_index")]
+    assert left == ["https://example.org.uk/real"]
+
+
+# --- the other half of the race: capture must notice its claim vanished ------
+
+
+def test_capture_reports_an_item_whose_index_row_vanished(tmp_path: Path) -> None:
+    """`set_zotero_key` returns True only if it took, and capture threw it away.
+
+    It is a compare-and-swap whose whole purpose is to fail when the claim has
+    been taken over or deleted -- and its result went unread, so the one moment
+    the system could notice an item had been stranded in Zotero passed in
+    silence.
+    """
+    from datetime import date
+
+    from zotero_capture.capture import capture_message
+
+    db = tmp_path / "idx.db"
+    init_db(db)
+    url = "https://fixturehost.org/stranded"
+
+    class _DeletesTheRowMidFlight:
+        """A retire pass landing between the reservation and the POST."""
+
+        def __init__(self) -> None:
+            self.posted: list[str] = []
+
+        def post_webpage_item(self, *, url_canonical, title, access_date, tags,
+                              item_key=None, **kw):
+            with closing(_connect(db)) as conn:
+                conn.execute(
+                    "DELETE FROM url_index WHERE url_canonical = ?", (url_canonical,)
+                )
+            self.posted.append(url_canonical)
+            return item_key or "KEY"
+
+        def add_tags(self, *a, **k):
+            pass
+
+        def item_exists(self, key):
+            return True
+
+    zotero = _DeletesTheRowMidFlight()
+    result = capture_message(
+        message=f"see {url}",
+        project_slug="p",
+        context=None,
+        today=date(2026, 8, 26),
+        db_path=db,
+        zotero=zotero,
+        title_fetcher=lambda u: "t",
+    )
+
+    assert zotero.posted == [url], "positive control: the item was created"
+    assert any(e.code == "claim_lost" for e in result.errors), (
+        f"an item was stranded in Zotero and nothing recorded it: {result.errors}"
+    )
+
+
+def test_an_ordinary_capture_reports_no_claim_loss(tmp_path: Path) -> None:
+    """Positive control: the new check must not fire on the normal path."""
+    from datetime import date
+
+    from zotero_capture.capture import capture_message
+
+    db = tmp_path / "idx.db"
+    init_db(db)
+
+    class _Ok:
+        def post_webpage_item(self, *, item_key=None, **kw):
+            return item_key or "KEY"
+
+        def add_tags(self, *a, **k):
+            pass
+
+        def item_exists(self, key):
+            return True
+
+    result = capture_message(
+        message="see https://fixturehost.org/fine",
+        project_slug="p",
+        context=None,
+        today=date(2026, 8, 26),
+        db_path=db,
+        zotero=_Ok(),
+        title_fetcher=lambda u: "t",
+    )
+    assert result.urls_new == 1
+    assert result.errors == []

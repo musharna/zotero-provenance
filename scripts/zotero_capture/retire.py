@@ -146,11 +146,23 @@ class RetireStep:
 def plan_retire(rows: list[dict], *, include_policy: bool = False) -> list[RetireStep]:
     """Decide what to retire, touching nothing.
 
-    A row with no Zotero key never completed its claim, so there is no item to
+    A row with no Zotero key AND no outstanding claim never had an item to
     trash; the row is still dropped so the index stops carrying it.
+
+    An empty key with a `pending_key` is a different thing entirely, and this
+    used to read them as the same: it is the normal state between reserve_url()
+    and the POST returning. Deleting it let capture's POST land against a row
+    that no longer existed, so set_zotero_key matched nothing and the item sat
+    in Zotero with nothing in the index pointing at it -- invisible to dedup
+    forever, which is the exact failure the reservation protocol exists to
+    prevent. Whether such a claim is live or abandoned is not answerable from
+    the index; capture's _resolve_claim settles it by asking Zotero. So this
+    leaves it alone.
     """
     steps: list[RetireStep] = []
     for row in rows:
+        if not row["zotero_key"] and row.get("pending_key"):
+            continue
         tier, reason = classify(row["url_canonical"])
         if not reason:
             continue
@@ -210,12 +222,30 @@ def apply_retire(
                 counts["trashed"] += 1
             else:
                 counts["row_only"] += 1
+            # Compare-and-swap on the pair that was PLANNED. Deleting by URL
+            # alone deleted whatever row held that URL now -- and between the
+            # plan and here, another session can drop this row and capture can
+            # recreate the URL under a different key. The old code trashed K1
+            # and then deleted K2's row, leaving K2 in the library with nothing
+            # indexing it.
             with connect(db_path) as conn:
-                conn.execute(
-                    "DELETE FROM url_index WHERE url_canonical = ?", (step.url,)
-                )
-                conn.execute(
-                    "DELETE FROM pending_tags WHERE url_canonical = ?", (step.url,)
+                dropped = conn.execute(
+                    "DELETE FROM url_index"
+                    " WHERE url_canonical = ? AND zotero_key = ?",
+                    (step.url, step.zotero_key),
+                ).rowcount
+                if dropped:
+                    # Only this row's queued sightings. If the row was replaced,
+                    # the queue now belongs to whoever replaced it.
+                    conn.execute(
+                        "DELETE FROM pending_tags WHERE url_canonical = ?",
+                        (step.url,),
+                    )
+            if not dropped:
+                logger.warning(
+                    "trashed item %s but its index row was replaced; leaving the "
+                    "new row alone",
+                    step.zotero_key or "(none)",
                 )
         except Exception as e:  # noqa: BLE001 - one bad row must not stop the pass
             logger.error("retire failed for %s: %s", step.url, e)
