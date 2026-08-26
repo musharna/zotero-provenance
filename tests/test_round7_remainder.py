@@ -301,3 +301,62 @@ def test_migration_still_imports_a_record_that_could_not_journal_itself(
     _migrate_legacy(state, ledger, "/c/NEW")
 
     assert count_open(ledger) == 1
+
+
+# --- a torn append is not the same as a writer that stopped working ----------
+
+
+def _good_record() -> str:
+    import json
+
+    return json.dumps({
+        "ts": "2026-08-25T11:00:00-0400", "version": "x", "root": "/c/NEW",
+        "pinned_root": "/c/NEW", "project": "p", "urls_seen": 1,
+        "urls_new": 1, "urls_recurring": 0, "errors": [], "incident_id": "ok",
+    })
+
+
+def _check(lines):
+    from datetime import datetime, timedelta, timezone
+
+    from zotero_capture.health import evaluate
+
+    tz = timezone(timedelta(hours=-4))
+    return evaluate(
+        lines, pinned_root="/c/NEW",
+        now=datetime(2026, 8, 25, 12, 0, tzinfo=tz),
+        window=timedelta(hours=24), ledger_path=None,
+    )
+
+
+def test_one_complete_unreadable_line_is_reported() -> None:
+    """MIN_BROKEN_TAIL = 3 meant one or two junk lines never warned.
+
+    A COMPLETE line -- newline-terminated -- that does not parse is not a torn
+    append. The writer finished writing it and it is not a record, which is a
+    writer fault however few of them there are.
+    """
+    warnings = _check([_good_record() + "\n", "Traceback (most recent call last):\n"])
+
+    assert any("unreadable" in w or "readable" in w for w in warnings), warnings
+
+
+def test_a_torn_final_append_is_not_reported() -> None:
+    """The ordinary case: we read while the writer is mid-append.
+
+    The last line has no newline yet. That is the evidence distinguishing it
+    from a finished line that is junk, and `line.strip()` threw it away -- which
+    is why the threshold had to be 3 in the first place.
+    """
+    warnings = _check([_good_record() + "\n", '{"ts": "2026-08-25T11:0'])
+
+    assert not any("unreadable" in w or "readable" in w for w in warnings), warnings
+
+
+def test_a_run_of_junk_is_still_reported_even_if_the_last_is_torn() -> None:
+    """Positive control: exempting the final line must not exempt the run."""
+    warnings = _check([
+        _good_record() + "\n", "fatal\n", "fatal\n", '{"ts": "2026-08-2',
+    ])
+
+    assert any("unreadable" in w or "readable" in w for w in warnings), warnings

@@ -72,17 +72,30 @@ def _each(lines: Iterable[str], stats: dict | None = None):
     `stats` counts what was seen and what was discarded. A readable log made
     entirely of plaintext parsed to nothing and reported perfect health, which
     is the same blindness as an unreadable one.
+
+    It also records whether the LAST line was newline-terminated. Reading while
+    the writer is mid-append is ordinary, and the half-written line it leaves is
+    not a fault -- but `strip()` discarded the newline, which is the only thing
+    separating that from a line the writer finished and which is still not a
+    record. Losing that evidence is why the threshold had to be a run of three,
+    and why one or two lines of pure junk warned about nothing.
     """
     for line in lines:
-        text = line.strip() if isinstance(line, str) else ""
+        raw = line if isinstance(line, str) else ""
+        text = raw.strip()
         if not text:
             continue
         if stats is not None:
             stats["lines"] = stats.get("lines", 0) + 1
             stats["tail"] = stats.get("tail", 0) + 1
+            # Provisional: overwritten by any later line, so what survives
+            # describes the final one.
+            stats["torn_final"] = 0
         try:
             record = json.loads(text)
         except (ValueError, TypeError):
+            if stats is not None and not raw.endswith("\n"):
+                stats["torn_final"] = 1
             continue
         if not isinstance(record, dict):
             continue
@@ -209,10 +222,11 @@ def incident_keys(lines: Iterable[str], *, pinned_root: str | None) -> frozenset
 
 
 MAX_DISTINCT_KINDS = 16
-# A single unparseable last line is ordinary: the writer appends while we read,
-# so a torn final record is expected. A RUN of them is a writer that stopped
-# producing structured telemetry.
-MIN_BROKEN_TAIL = 3
+# One COMPLETE unreadable line is already a fault: the writer finished it and it
+# is not a record. The torn final append -- the genuinely ordinary case -- is
+# excluded by its missing newline rather than by hiding behind a count, so this
+# no longer has to be a run of three to avoid crying wolf.
+MIN_BROKEN_TAIL = 1
 
 
 def evaluate(
@@ -285,7 +299,8 @@ def evaluate(
     # Warning only on the former let one old valid record bless an indefinitely
     # broken telemetry stream — the writer could stop emitting records forever
     # and the monitor stayed silent.
-    tail = stats.get("tail", 0)
+    # The final line, if it was cut off mid-append, is not evidence of anything.
+    tail = stats.get("tail", 0) - stats.get("torn_final", 0)
     if stats.get("lines") and not stats.get("records"):
         warnings.append(
             f"the capture log has {stats['lines']} line(s) but no readable "
