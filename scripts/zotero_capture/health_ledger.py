@@ -27,7 +27,33 @@ mutation that happens with no record is corruption nobody can find.
 from __future__ import annotations
 
 import sqlite3
+import uuid
 from pathlib import Path
+
+# A fixed namespace, so a mutation id is a pure function of the capture it
+# belongs to and the URL it writes. Never regenerate it: the derivation is the
+# reason a replayed write cannot resurrect an acknowledged incident.
+MUTATION_NS = uuid.UUID("8b1f2c6a-4d3e-5f70-9a21-6c0d7e4b8f13")
+
+
+def mutation_id(capture_id: str, url: str | None) -> str:
+    """The id of ONE write of ONE url.
+
+    The capture id was used directly as the ledger key, and `incident_id` is
+    this table's PRIMARY KEY with ON CONFLICT DO NOTHING. So a message citing
+    three sources from a superseded root wrote three rows onto one key: the
+    ledger kept the first URL and silently dropped the rest, and the `--ack` it
+    offered closed evidence nobody was ever shown. A journal that records one
+    entry per BATCH cannot describe a batch that partly succeeded, which is the
+    only interesting case.
+
+    Derived rather than random, because DO NOTHING is load-bearing: the same
+    write may be retried and the log it came from is replayed at every start.
+    A fresh id per call would make that clause dead code and reopen incidents
+    that were already resolved.
+    """
+    return uuid.uuid5(MUTATION_NS, f"{capture_id}\n{url or ''}").hex
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS incidents (
