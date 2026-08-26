@@ -18,6 +18,7 @@ from .capture import CaptureResult, capture_message
 from .config import Config, ConfigError, _state_dir, load_config
 from .project_slug import derive_slug
 from .sqlite_cache import IndexIdentityMismatch, lookup_url, require_identity
+from .staleness import installed_version, stale_reason
 from .title_fetcher import fetch_title
 from .url_processing import canonicalize
 from . import __version__
@@ -319,7 +320,21 @@ def run_triage(
     read out of the index, and capture was the only caller that ever checked the
     index was OF that library -- so a configuration pointed at another
     collection tagged the wrong item and reported success.
+
+    And it refuses to write from a superseded root. 0.22.0's trampoline handles
+    that structurally by forwarding, but only for roots that CONTAIN the
+    trampoline and only when a target can be resolved at all -- and the
+    unresolvable case is precisely what staleness.py was kept for as defence in
+    depth. `stale_reason` appeared nowhere in this module until now, so the one
+    guard the project built for exactly this had never been asked.
+
+    A refusal here is cheap. Unlike capture, nothing is lost by declining: the
+    row stays untriaged and a person can run it again from a current session.
     """
+    reason = stale_reason(__version__, installed_version())
+    if reason:
+        sys.stderr.write(f"zotero-provenance: refusing to triage: {reason}\n")
+        return 3
     if identity is not None:
         try:
             require_identity(db_path, **identity)

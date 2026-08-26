@@ -360,3 +360,70 @@ def test_a_run_of_junk_is_still_reported_even_if_the_last_is_torn() -> None:
     ])
 
     assert any("unreadable" in w or "readable" in w for w in warnings), warnings
+
+
+# --- the command path's defence in depth ------------------------------------
+
+
+def test_triage_refuses_to_write_from_a_superseded_root(tmp_path: Path, monkeypatch) -> None:
+    """`stale_reason` appears nowhere in cli.py; the command path had no guard.
+
+    0.22.0's trampoline handles this structurally by forwarding, but only for
+    roots that contain it, and only when a target can be resolved at all. That
+    last case is exactly what staleness.py was kept for as defence in depth --
+    and triage never asked it.
+    """
+    import zotero_capture.cli as cli
+
+    class _Zotero:
+        def __init__(self):
+            self.tagged = []
+
+        def add_tags(self, key, tags, **kw):
+            self.tagged.append((key, tags))
+
+    import sqlite3
+
+    from zotero_capture.sqlite_cache import init_db
+
+    db = tmp_path / "idx.db"
+    init_db(db)
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT INTO url_index (url_canonical, zotero_key, first_seen, last_seen)"
+            " VALUES ('https://x.test/a', 'KEY1', '2026-01-01', '2026-01-01')"
+        )
+
+    monkeypatch.setattr(cli, "installed_version", lambda: "9.9.9", raising=False)
+    zotero = _Zotero()
+
+    rc = cli.run_triage(url="https://x.test/a", db_path=db, zotero=zotero)
+
+    assert zotero.tagged == [], "it wrote from a root that is not the installed one"
+    assert rc != 0
+
+
+def test_triage_still_runs_from_the_installed_root(tmp_path: Path, monkeypatch) -> None:
+    """Positive control: the guard must not refuse the ordinary case."""
+    import zotero_capture.cli as cli
+    from zotero_capture.sqlite_cache import init_db
+
+    db = tmp_path / "idx.db"
+    init_db(db)
+
+    class _Zotero:
+        def __init__(self):
+            self.tagged = []
+
+        def add_tags(self, key, tags, **kw):
+            self.tagged.append((key, tags))
+
+    monkeypatch.setattr(cli, "installed_version", lambda: cli.__version__,
+                        raising=False)
+    zotero = _Zotero()
+
+    # No row for the URL, so it stops at the lookup -- past the staleness guard,
+    # which is the thing under test.
+    rc = cli.run_triage(url="https://x.test/a", db_path=db, zotero=zotero)
+
+    assert rc == 2, "expected 'not found', i.e. it got past the guard"
