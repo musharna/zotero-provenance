@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.23.0 — 2026-08-26
+
+The round-7 findings 0.21.0 left open, cleared from the notes already in hand
+rather than by buying another review. All six were re-verified against live
+source first; none had drifted. Plus the defect 0.21.0 introduced and named in
+its own changelog, and the one gap 0.22.0's trampoline could not structurally
+close.
+
+- **The pin is read before every write, not once per message.** The pin
+  AUTHORISES a write — it is the entire basis for calling one healthy or stale —
+  and a capture spans seconds of network I/O per URL. An upgrade landing inside
+  that window left every write after it running from a root the registry no
+  longer pinned, each recorded as healthy, because the authorisation had been
+  cached before it went stale.
+
+- **`issued = True` means a request actually went out.** Set before
+  `_record_intent`, a refused journal — read-only state dir, full disk — left
+  the claim held for a write that never happened, so every other session skipped
+  that URL for the whole stale-claim window while nothing existed to complete it.
+
+- **`ledger_path` is required.** 0.20.2 made the caller own it precisely because
+  deriving it puts incidents where the checker never looks, then left a default
+  that derives it for anyone who forgets. Two tests were quietly relying on that
+  fallback — which is how the suite once wrote real incidents into the live
+  ledger.
+
+- **The ledger waits 1000 ms, not SQLite's default 5000.** A Stop hook has
+  10000 ms for everything; two journalled URLs contending could spend the lot
+  before any work happened, and the hook's `timeout` kill leaves no record at
+  all — the outcome the ledger exists to prevent.
+
+- **Legacy incidents get real ids.** `legacy:<second>|<root>` is the aliasing
+  0.19.0 deleted, walking back in through the migration path: two writes from
+  one root in one second collapsed onto one key, so acknowledging either
+  silenced both. It is a digest of the record now — stable across reads, because
+  the id is a handle a person types back.
+
+- **Migration imports only records that could not journal themselves.** A record
+  carrying an `incident_id` wrote its own ledger row; re-importing it under a
+  capture-scoped key duplicates it. While the ledger key WAS the capture id that
+  re-import collided and vanished, so the dedup was accidental, and 0.21.0's
+  per-mutation ids removed the accident.
+
+- **One complete unreadable line is reported.** `MIN_BROKEN_TAIL = 3` existed
+  because `strip()` discarded the newline, which is the only evidence separating
+  a half-written final line from a finished line that is not a record. Keeping
+  it separates them: a torn final append is exempt, and the threshold drops
+  to one.
+
+- **Triage asks the staleness guard.** `stale_reason` appeared nowhere in
+  cli.py. 0.22.0's trampoline covers this by forwarding, but only for roots that
+  contain it and only when a target resolves — and the unresolvable case is
+  exactly what staleness.py was kept for.
+
 ## 0.22.0 — 2026-08-26
 
 Round 8 of external review, and a change of target: the maintenance passes.
