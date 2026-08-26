@@ -196,3 +196,108 @@ def test_a_pin_that_stays_put_records_nothing(tmp_path: Path) -> None:
     _capture(db, ledger, lambda: "/c/SAME")
 
     assert count_open(ledger) == 0
+
+
+# --- legacy ids, and the double-import 0.21.0 introduced ---------------------
+
+
+def _legacy_record(ts: str, root: str, urls_new: int = 1, **extra) -> str:
+    import json
+
+    return json.dumps({
+        "ts": ts, "version": "0.15.0", "root": root, "pinned_root": "/c/NEW",
+        "project": "p", "urls_seen": 1, "urls_new": urls_new,
+        "urls_recurring": 0, "errors": [], **extra,
+    })
+
+
+def test_two_legacy_incidents_in_one_second_get_distinct_ids() -> None:
+    """`legacy:<second>|<root>` is the aliasing 0.19.0 deleted, re-entering.
+
+    Two writes from one root inside the same second collapsed onto one key, so
+    acknowledging either silenced both -- permanently, and without the second
+    ever being shown. Exactly the defect that made incidents carry a
+    writer-issued uuid in the first place.
+    """
+    from zotero_capture.health import incidents
+
+    lines = [
+        _legacy_record("2026-08-25T11:40:00-0400", "/c/OLD", urls_new=1),
+        _legacy_record("2026-08-25T11:40:00-0400", "/c/OLD", urls_new=2),
+    ]
+
+    found = incidents(lines, pinned_root="/c/NEW", require_id=False)
+
+    assert len(found) == 2, f"positive control: both are incidents: {found}"
+    assert len({i["id"] for i in found}) == 2, (
+        f"two distinct incidents share one acknowledgement id: "
+        f"{[i['id'] for i in found]}"
+    )
+
+
+def test_a_legacy_id_is_stable_across_reads() -> None:
+    """The id is an acknowledgement handle; it cannot change between runs."""
+    from zotero_capture.health import incidents
+
+    lines = [_legacy_record("2026-08-25T11:40:00-0400", "/c/OLD")]
+    first = incidents(lines, pinned_root="/c/NEW", require_id=False)[0]["id"]
+    second = incidents(lines, pinned_root="/c/NEW", require_id=False)[0]["id"]
+
+    assert first == second
+
+
+def test_migration_does_not_re_import_a_record_that_journalled_itself(
+    tmp_path: Path,
+) -> None:
+    """The double-count 0.21.0 introduced, named in its own CHANGELOG.
+
+    While the ledger key WAS the capture id, re-importing a 0.19+ record hit
+    ON CONFLICT DO NOTHING against the row that record had already written, and
+    was dropped. That dedup was accidental. With per-mutation keys it no longer
+    collides, so a log migrated after its own captures counts one capture twice.
+
+    A record carrying an incident_id journalled itself when it ran; migration is
+    for records that could not.
+    """
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from zotero_capture_health import _migrate_legacy
+    from zotero_capture.health_ledger import count_open
+
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "capture.log").write_text(
+        _legacy_record("2026-08-25T11:40:00-0400", "/c/OLD", incident_id="its-own")
+        + "\n"
+    )
+    ledger = state / "health.db"
+
+    _migrate_legacy(state, ledger, "/c/NEW")
+
+    assert count_open(ledger) == 0, (
+        "a record that already journalled itself was imported again"
+    )
+
+
+def test_migration_still_imports_a_record_that_could_not_journal_itself(
+    tmp_path: Path,
+) -> None:
+    """Positive control: suppressing every open incident at upgrade is the bug
+    this migration exists to prevent."""
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from zotero_capture_health import _migrate_legacy
+    from zotero_capture.health_ledger import count_open
+
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "capture.log").write_text(
+        _legacy_record("2026-08-25T11:40:00-0400", "/c/OLD") + "\n"
+    )
+    ledger = state / "health.db"
+
+    _migrate_legacy(state, ledger, "/c/NEW")
+
+    assert count_open(ledger) == 1

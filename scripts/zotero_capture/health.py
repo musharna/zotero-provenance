@@ -29,6 +29,7 @@ the monitor reporting nothing but its own failure.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -160,6 +161,25 @@ def incident_key(record: dict, ts: datetime) -> str:
     return str(record.get("incident_id"))
 
 
+def _legacy_id(record: dict) -> str:
+    """An acknowledgement handle for a record that never issued one itself.
+
+    Was `legacy:<second>|<root>`, which is the aliasing 0.19.0 deleted, walking
+    back in through the migration path: two writes from one root inside the same
+    second collapsed onto one key, so acknowledging either silenced both --
+    permanently, and without the second ever being shown.
+
+    A digest of the record instead. It distinguishes anything the record itself
+    distinguishes, and it is STABLE across reads, which a line number or byte
+    offset would not be: the id is a handle a person types back, and a rotated
+    or truncated log must not rename an incident they were already shown. Two
+    byte-identical records in the same second remain one id, which is correct --
+    nothing about them differs.
+    """
+    canonical = json.dumps(record, sort_keys=True, default=str)
+    return "legacy:" + hashlib.sha256(canonical.encode()).hexdigest()[:16]
+
+
 def incidents(
     lines: Iterable[str], *, pinned_root: str | None, require_id: bool = True
 ) -> list[dict]:
@@ -173,7 +193,7 @@ def incidents(
             continue
         out.append(
             {
-                "id": record.get("incident_id") or f"legacy:{ts.isoformat()}|{record.get('root')}",
+                "id": record.get("incident_id") or _legacy_id(record),
                 "url": record.get("url"),
                 "ts": ts.isoformat(),
                 "kind": kind,
