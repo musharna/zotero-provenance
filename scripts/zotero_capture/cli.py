@@ -251,8 +251,8 @@ def run_capture(
     title_fetcher: Callable[..., str],
     log_path: Path,
     origin: str = "assistant",
+    ledger_path: Path,
     identity: dict[str, str] | None = None,
-    ledger_path: Path | None = None,
 ) -> CaptureResult:
     text: str = sys.stdin.read() if message is None else message
     # Read the authorisation state BEFORE the work it authorises.
@@ -262,12 +262,15 @@ def run_capture(
     # in the library from a superseded root with no record that it happened.
     incident_id = uuid.uuid4().hex
     running_root = str(Path(__file__).resolve().parent.parent.parent)
-    # Handed in by the caller, never read from the environment here. Deriving
-    # it from log_path.parent put incidents where the checker never looked;
-    # deriving it from os.environ was worse — a function given explicit paths
-    # reaching for a sibling meant the test suite wrote real incidents into the
-    # developer's live ledger. main() owns the environment and passes both.
-    ledger_path = ledger_path or (log_path.parent / "health.db")
+    # Required, not defaulted. Handed in by the caller and never read from the
+    # environment here: deriving it from log_path.parent put incidents where the
+    # checker never looked, and deriving it from os.environ was worse — a
+    # function given explicit paths reaching for a sibling meant the test suite
+    # wrote real incidents into the developer's live ledger. main() owns the
+    # environment and passes both. The fallback that used to sit here made that
+    # agreement a convention every caller had to remember; a caller that forgot
+    # got a ledger next to the LOG, which is exactly where the checker no longer
+    # looks. An invariant a signature can hold should not be left to memory.
     started = time.monotonic()
     result = capture_message(
         message=text,

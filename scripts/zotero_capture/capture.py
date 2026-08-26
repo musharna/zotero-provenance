@@ -321,7 +321,6 @@ def capture_message(
                         ]
                         if title == url:
                             tags.append(UNRESOLVED_TITLE_TAG)
-                        issued = True
                         _record_intent(
                             ledger_path=ledger_path,
                             incident_id=incident_id,
@@ -330,6 +329,15 @@ def capture_message(
                             pinned_root=pinned_root,
                             ts=today_iso,
                         )
+                        # Set AFTER the journal and immediately before the
+                        # request, because it means exactly one thing: a POST
+                        # has gone out and its outcome is unknowable from here.
+                        # Set before _record_intent, a refused journal -- a
+                        # read-only state dir, a full disk -- left the claim
+                        # held for a write that never happened, so every other
+                        # session skipped the URL for the whole stale-claim
+                        # window while nothing existed to complete it.
+                        issued = True
                         key = zotero.post_webpage_item(
                             url_canonical=url,
                             title=title,

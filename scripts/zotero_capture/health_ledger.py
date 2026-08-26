@@ -70,6 +70,16 @@ CREATE INDEX IF NOT EXISTS incidents_open ON incidents(status, opened_at);
 """
 
 
+# Python's sqlite3 default is 5000 ms. A Stop hook has 10000 ms for everything
+# it does, so two journalled URLs contending with another session could consume
+# the entire budget before any work happened -- and the hook's `timeout` kill
+# leaves no record at all, which is the exact outcome this ledger exists to
+# prevent. Failing fast is the right trade here: a refused journal refuses its
+# write, and a skipped citation is recoverable where an unrecorded mutation is
+# not.
+BUSY_TIMEOUT_MS = 1000
+
+
 def _connect(db_path: Path, *, create: bool) -> sqlite3.Connection | None:
     path = Path(db_path)
     if not create and not path.exists():
@@ -78,6 +88,7 @@ def _connect(db_path: Path, *, create: bool) -> sqlite3.Connection | None:
         path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
+    conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
     if create:
         conn.executescript(SCHEMA)
     return conn
