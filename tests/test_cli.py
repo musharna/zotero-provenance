@@ -102,6 +102,9 @@ def test_run_capture_reads_message_from_stdin(tmp_db: Path, monkeypatch):
         zotero=fake_zotero,
         title_fetcher=lambda u, **kw: "T",
         log_path=tmp_db.parent / "log.jsonl",
+        # Required now, and deliberately under tmp: the fallback this replaces
+        # is how the suite once wrote real incidents into the live ledger.
+        ledger_path=tmp_db.parent / "health.db",
     )
     assert result.urls_new == 1
 
@@ -138,6 +141,7 @@ def test_run_capture_reports_failures_in_the_result_and_the_log(tmp_db: Path):
         zotero=fake_zotero,
         title_fetcher=lambda u, **kw: "T",
         log_path=log_path,
+        ledger_path=tmp_db.parent / "health.db",
     )
 
     error_codes = {e.code for e in result.errors}

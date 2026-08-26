@@ -41,6 +41,29 @@ def _record(ts: str, root: str, incident_id: str) -> str:
     )
 
 
+def _seed(state: Path, *ids: str) -> None:
+    """Open ledger incidents directly.
+
+    These tests are about --list-incidents and --ack, not about migration. They
+    used to get their rows by letting _migrate_legacy import log records that
+    carried an incident_id -- which migration no longer does, because a record
+    that journalled itself would be imported a SECOND time under a
+    capture-scoped key now that ledger rows are keyed per mutation.
+    """
+    import sys
+
+    sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
+    from zotero_capture.health_ledger import open_incident
+
+    state.mkdir(parents=True, exist_ok=True)
+    for i in ids:
+        open_incident(
+            state / "health.db", incident_id=i, url="https://fixturehost.org/x",
+            root="/c/0.3.0", pinned_root="/c/0.19.0", kind="stale",
+            ts="2026-08-25T11:40:00-04:00",
+        )
+
+
 def _stale_log(state: Path) -> None:
     state.mkdir(parents=True, exist_ok=True)
     (state / "capture.log").write_text(
@@ -81,6 +104,7 @@ def test_list_incidents_shows_the_ids_that_can_be_acknowledged(tmp_path: Path) -
     show the individual ids, or --ack silences things nobody was shown."""
     state = tmp_path / "state"
     _stale_log(state)
+    _seed(state, "aaa")
 
     proc = _run(state, "--list-incidents")
 
@@ -95,6 +119,7 @@ def test_ack_by_id_silences_only_that_incident(tmp_path: Path) -> None:
         _record("2026-08-25T11:40:00-0400", "/c/0.3.0", "aaa") + "\n"
         + _record("2026-08-25T11:41:00-0400", "/c/0.9.0", "bbb") + "\n"
     )
+    _seed(state, "aaa", "bbb")
 
     assert _run(state, "--ack", "aaa").returncode == 0
 

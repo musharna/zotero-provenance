@@ -18,6 +18,7 @@ from .capture import CaptureResult, capture_message
 from .config import Config, ConfigError, _state_dir, load_config
 from .project_slug import derive_slug
 from .sqlite_cache import IndexIdentityMismatch, lookup_url, require_identity
+from .staleness import installed_version, stale_reason
 from .title_fetcher import fetch_title
 from .url_processing import canonicalize
 from . import __version__
@@ -251,8 +252,8 @@ def run_capture(
     title_fetcher: Callable[..., str],
     log_path: Path,
     origin: str = "assistant",
+    ledger_path: Path,
     identity: dict[str, str] | None = None,
-    ledger_path: Path | None = None,
 ) -> CaptureResult:
     text: str = sys.stdin.read() if message is None else message
     # Read the authorisation state BEFORE the work it authorises.
@@ -262,12 +263,15 @@ def run_capture(
     # in the library from a superseded root with no record that it happened.
     incident_id = uuid.uuid4().hex
     running_root = str(Path(__file__).resolve().parent.parent.parent)
-    # Handed in by the caller, never read from the environment here. Deriving
-    # it from log_path.parent put incidents where the checker never looked;
-    # deriving it from os.environ was worse — a function given explicit paths
-    # reaching for a sibling meant the test suite wrote real incidents into the
-    # developer's live ledger. main() owns the environment and passes both.
-    ledger_path = ledger_path or (log_path.parent / "health.db")
+    # Required, not defaulted. Handed in by the caller and never read from the
+    # environment here: deriving it from log_path.parent put incidents where the
+    # checker never looked, and deriving it from os.environ was worse — a
+    # function given explicit paths reaching for a sibling meant the test suite
+    # wrote real incidents into the developer's live ledger. main() owns the
+    # environment and passes both. The fallback that used to sit here made that
+    # agreement a convention every caller had to remember; a caller that forgot
+    # got a ledger next to the LOG, which is exactly where the checker no longer
+    # looks. An invariant a signature can hold should not be left to memory.
     started = time.monotonic()
     result = capture_message(
         message=text,
@@ -283,6 +287,9 @@ def run_capture(
         pinned_root=pinned_root,
         running_root=running_root,
         ledger_path=ledger_path,
+        # Re-read before every mutation, not once for the message: an upgrade
+        # landing mid-capture must not be forgiven for the writes that follow it.
+        observe_pin=_observed_pinned_root,
     )
     # Failures are NOT enqueued: _retry_handler is a stub that never drains, so
     # enqueuing would grow the file forever. Errors are surfaced in the log below.
@@ -313,7 +320,21 @@ def run_triage(
     read out of the index, and capture was the only caller that ever checked the
     index was OF that library -- so a configuration pointed at another
     collection tagged the wrong item and reported success.
+
+    And it refuses to write from a superseded root. 0.22.0's trampoline handles
+    that structurally by forwarding, but only for roots that CONTAIN the
+    trampoline and only when a target can be resolved at all -- and the
+    unresolvable case is precisely what staleness.py was kept for as defence in
+    depth. `stale_reason` appeared nowhere in this module until now, so the one
+    guard the project built for exactly this had never been asked.
+
+    A refusal here is cheap. Unlike capture, nothing is lost by declining: the
+    row stays untriaged and a person can run it again from a current session.
     """
+    reason = stale_reason(__version__, installed_version())
+    if reason:
+        sys.stderr.write(f"zotero-provenance: refusing to triage: {reason}\n")
+        return 3
     if identity is not None:
         try:
             require_identity(db_path, **identity)

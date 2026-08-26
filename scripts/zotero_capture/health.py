@@ -29,6 +29,7 @@ the monitor reporting nothing but its own failure.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -71,17 +72,30 @@ def _each(lines: Iterable[str], stats: dict | None = None):
     `stats` counts what was seen and what was discarded. A readable log made
     entirely of plaintext parsed to nothing and reported perfect health, which
     is the same blindness as an unreadable one.
+
+    It also records whether the LAST line was newline-terminated. Reading while
+    the writer is mid-append is ordinary, and the half-written line it leaves is
+    not a fault -- but `strip()` discarded the newline, which is the only thing
+    separating that from a line the writer finished and which is still not a
+    record. Losing that evidence is why the threshold had to be a run of three,
+    and why one or two lines of pure junk warned about nothing.
     """
     for line in lines:
-        text = line.strip() if isinstance(line, str) else ""
+        raw = line if isinstance(line, str) else ""
+        text = raw.strip()
         if not text:
             continue
         if stats is not None:
             stats["lines"] = stats.get("lines", 0) + 1
             stats["tail"] = stats.get("tail", 0) + 1
+            # Provisional: overwritten by any later line, so what survives
+            # describes the final one.
+            stats["torn_final"] = 0
         try:
             record = json.loads(text)
         except (ValueError, TypeError):
+            if stats is not None and not raw.endswith("\n"):
+                stats["torn_final"] = 1
             continue
         if not isinstance(record, dict):
             continue
@@ -160,6 +174,25 @@ def incident_key(record: dict, ts: datetime) -> str:
     return str(record.get("incident_id"))
 
 
+def _legacy_id(record: dict) -> str:
+    """An acknowledgement handle for a record that never issued one itself.
+
+    Was `legacy:<second>|<root>`, which is the aliasing 0.19.0 deleted, walking
+    back in through the migration path: two writes from one root inside the same
+    second collapsed onto one key, so acknowledging either silenced both --
+    permanently, and without the second ever being shown.
+
+    A digest of the record instead. It distinguishes anything the record itself
+    distinguishes, and it is STABLE across reads, which a line number or byte
+    offset would not be: the id is a handle a person types back, and a rotated
+    or truncated log must not rename an incident they were already shown. Two
+    byte-identical records in the same second remain one id, which is correct --
+    nothing about them differs.
+    """
+    canonical = json.dumps(record, sort_keys=True, default=str)
+    return "legacy:" + hashlib.sha256(canonical.encode()).hexdigest()[:16]
+
+
 def incidents(
     lines: Iterable[str], *, pinned_root: str | None, require_id: bool = True
 ) -> list[dict]:
@@ -173,7 +206,7 @@ def incidents(
             continue
         out.append(
             {
-                "id": record.get("incident_id") or f"legacy:{ts.isoformat()}|{record.get('root')}",
+                "id": record.get("incident_id") or _legacy_id(record),
                 "url": record.get("url"),
                 "ts": ts.isoformat(),
                 "kind": kind,
@@ -189,10 +222,11 @@ def incident_keys(lines: Iterable[str], *, pinned_root: str | None) -> frozenset
 
 
 MAX_DISTINCT_KINDS = 16
-# A single unparseable last line is ordinary: the writer appends while we read,
-# so a torn final record is expected. A RUN of them is a writer that stopped
-# producing structured telemetry.
-MIN_BROKEN_TAIL = 3
+# One COMPLETE unreadable line is already a fault: the writer finished it and it
+# is not a record. The torn final append -- the genuinely ordinary case -- is
+# excluded by its missing newline rather than by hiding behind a count, so this
+# no longer has to be a run of three to avoid crying wolf.
+MIN_BROKEN_TAIL = 1
 
 
 def evaluate(
@@ -265,7 +299,8 @@ def evaluate(
     # Warning only on the former let one old valid record bless an indefinitely
     # broken telemetry stream — the writer could stop emitting records forever
     # and the monitor stayed silent.
-    tail = stats.get("tail", 0)
+    # The final line, if it was cut off mid-append, is not evidence of anything.
+    tail = stats.get("tail", 0) - stats.get("torn_final", 0)
     if stats.get("lines") and not stats.get("records"):
         warnings.append(
             f"the capture log has {stats['lines']} line(s) but no readable "

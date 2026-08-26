@@ -133,6 +133,14 @@ def _migrate_legacy(state: Path, ledger: Path, pinned: str | None) -> None:
     try:
         with _log_lines(state) as lines:
             found = incidents(lines, pinned_root=pinned, require_id=False)
+        # ONLY records that could not journal themselves. A record carrying an
+        # incident_id wrote its own ledger row when it ran, and re-importing it
+        # under a capture-scoped key now DUPLICATES that row: while the ledger
+        # key was the capture id the re-import hit ON CONFLICT DO NOTHING and
+        # vanished, but 0.21.0 made row ids per-mutation, so it no longer
+        # collides. That accidental dedup was the only thing keeping this
+        # honest, and 0.21.0's CHANGELOG named the gap it left.
+        found = [i for i in found if str(i["id"]).startswith("legacy:")]
         for item in found:
             open_incident(
                 ledger, incident_id=item["id"], url=item.get("url"),

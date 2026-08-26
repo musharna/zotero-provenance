@@ -37,10 +37,18 @@ def _installed_version_matches(monkeypatch):
     must not care what is deployed on the machine running it; the guard's own
     behaviour is exercised deliberately in test_stale_guard.py and
     test_audit_eight_staleness.py, which patch this on purpose.
+
+    Both modules that ask the guard are covered. cli.py started asking it too
+    when triage got a staleness check, and patching only capture.py meant the
+    same machine-dependence came straight back through the second import --
+    three triage tests turned red on a developer whose installed version simply
+    differed from the checkout.
     """
     import zotero_capture.capture as cap
+    import zotero_capture.cli as cli
 
     monkeypatch.setattr(cap, "installed_version", lambda: cap.__version__)
+    monkeypatch.setattr(cli, "installed_version", lambda: cli.__version__)
 
 
 @pytest.fixture

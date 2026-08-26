@@ -225,9 +225,21 @@ def capture_message(
     pinned_root: str | None = None,
     running_root: str | None = None,
     ledger_path: Path | None = None,
+    observe_pin: Callable[[], str | None] | None = None,
 ) -> CaptureResult:
     """Process one message: extract URLs, then create or re-tag each in Zotero."""
     result = CaptureResult()
+    # The pin AUTHORISES each write, so it is read immediately before each one
+    # rather than once for the message. A capture spans several seconds of
+    # network I/O per URL, and an upgrade landing inside that window left every
+    # write after it running from a root the registry no longer pinned --
+    # recorded as healthy, because the authorisation had been cached before it
+    # went stale. Callers that already hold a fixed observation (the tests, and
+    # anything reconstructing a past capture) pass it as `pinned_root` and get
+    # the old behaviour.
+    if observe_pin is None:
+        def observe_pin() -> str | None:
+            return pinned_root
     # Before anything is written: is this root even allowed to write? A session
     # keeps the plugin version it resolved at its own start, and an old one
     # applies rules that have since been corrected — v0.3.0 put eight URLs into
@@ -321,15 +333,23 @@ def capture_message(
                         ]
                         if title == url:
                             tags.append(UNRESOLVED_TITLE_TAG)
-                        issued = True
                         _record_intent(
                             ledger_path=ledger_path,
                             incident_id=incident_id,
                             url=url,
                             running_root=running_root,
-                            pinned_root=pinned_root,
+                            pinned_root=observe_pin(),
                             ts=today_iso,
                         )
+                        # Set AFTER the journal and immediately before the
+                        # request, because it means exactly one thing: a POST
+                        # has gone out and its outcome is unknowable from here.
+                        # Set before _record_intent, a refused journal -- a
+                        # read-only state dir, a full disk -- left the claim
+                        # held for a write that never happened, so every other
+                        # session skipped the URL for the whole stale-claim
+                        # window while nothing existed to complete it.
+                        issued = True
                         key = zotero.post_webpage_item(
                             url_canonical=url,
                             title=title,
@@ -402,7 +422,7 @@ def capture_message(
                 incident_id=incident_id,
                 url=url,
                 running_root=running_root,
-                pinned_root=pinned_root,
+                pinned_root=observe_pin(),
                 ts=today_iso,
             )
             zotero.add_tags(
