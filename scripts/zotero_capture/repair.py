@@ -219,6 +219,20 @@ def apply_repair(
                     )
                     counts["skip"] += 1
                     continue
+                # The queue is keyed by URL and the row just moved out from
+                # under it. Left behind, those sightings sit under an address no
+                # index row will ever revisit: the recurring branch only runs
+                # for a URL that is in the index, and this one no longer is.
+                with connect(db_path) as conn:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO pending_tags (url_canonical, tag)"
+                        " SELECT ?, tag FROM pending_tags WHERE url_canonical = ?",
+                        (step.corrected, step.url),
+                    )
+                    conn.execute(
+                        "DELETE FROM pending_tags WHERE url_canonical = ?",
+                        (step.url,),
+                    )
                 counts["rewrite"] += 1
             else:
                 survivor = lookup_url(db_path, step.corrected)
@@ -254,6 +268,23 @@ def apply_repair(
                     for t in zotero.get_item_tags(step.zotero_key)
                     if t != UNRESOLVED_TITLE_TAG
                 ]
+                # The duplicate's row is about to be deleted, so anything still
+                # queued against it has nowhere to go. Apply it to the survivor
+                # now rather than dropping a sighting on the floor.
+                with connect(db_path) as conn:
+                    queued = [
+                        r[0]
+                        for r in conn.execute(
+                            "SELECT tag FROM pending_tags WHERE url_canonical = ?",
+                            (step.url,),
+                        )
+                    ]
+                    dup = conn.execute(
+                        "SELECT first_seen, last_seen FROM url_index"
+                        " WHERE url_canonical = ?",
+                        (step.url,),
+                    ).fetchone()
+                tags = sorted(set(tags) | set(queued))
                 if tags:
                     zotero.add_tags(survivor_key, tags)
                 if not zotero.trash_item(step.zotero_key, expect_url=step.url):
@@ -270,6 +301,23 @@ def apply_repair(
                         " WHERE url_canonical = ? AND zotero_key = ?",
                         (step.url, step.zotero_key),
                     ).rowcount
+                    if merged:
+                        conn.execute(
+                            "DELETE FROM pending_tags WHERE url_canonical = ?",
+                            (step.url,),
+                        )
+                        # Two rows described ONE source, so the source was first
+                        # seen on the earlier of the two dates and last seen on
+                        # the later. Keeping only the survivor's own dates threw
+                        # away the half of the history the duplicate carried.
+                        if dup is not None:
+                            conn.execute(
+                                "UPDATE url_index SET"
+                                " first_seen = MIN(first_seen, ?),"
+                                " last_seen = MAX(last_seen, ?)"
+                                " WHERE url_canonical = ?",
+                                (dup["first_seen"], dup["last_seen"], step.corrected),
+                            )
                 if not merged:
                     logger.warning(
                         "merged item %s but its index row was replaced; "
