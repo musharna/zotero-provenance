@@ -60,7 +60,7 @@ def _make_handler(patch_statuses: list[int], patches: list[dict]):
 def _flaky_resolver(results: list[str]):
     remaining = list(results)
 
-    def resolve() -> str:
+    def resolve(_url: str = "") -> str:
         return remaining.pop(0)
 
     return resolve
@@ -87,7 +87,7 @@ def test_the_resolver_is_not_called_again_once_it_has_succeeded():
     client = _client(_make_handler([412, 412, 204], patches))
     calls = {"n": 0}
 
-    def resolve() -> str:
+    def resolve(_url: str = "") -> str:
         calls["n"] += 1
         return "Real Title"
 

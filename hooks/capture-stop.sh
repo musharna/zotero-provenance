@@ -121,7 +121,19 @@ case "$ZP_MINE" in
 			zp_tramp_refuse "cannot resolve the installed plugin root"
 		fi
 		export ZP_FORWARDED_FROM="$ZP_MINE"
-		exec bash "$ZP_TARGET/hooks/$ZP_SELF"
+		# Arguments can name paths inside THIS root: the slash commands pass
+		# ${CLAUDE_PLUGIN_ROOT}/scripts/... to run-python.sh. Forwarding those
+		# unchanged would run the superseded root's code from the installed
+		# root's launcher, which delegates nothing at all. The hooks take no
+		# arguments, so this is a no-op for them and the block stays identical.
+		ZP_ARGS=()
+		for ZP_ARG in "$@"; do
+			case "$ZP_ARG" in
+			"$ZP_MINE"/*) ZP_ARGS+=("$ZP_TARGET${ZP_ARG#"$ZP_MINE"}") ;;
+			*) ZP_ARGS+=("$ZP_ARG") ;;
+			esac
+		done
+		exec bash "$ZP_TARGET/hooks/$ZP_SELF" ${ZP_ARGS+"${ZP_ARGS[@]}"}
 	fi
 	;;
 esac

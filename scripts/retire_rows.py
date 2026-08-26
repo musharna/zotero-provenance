@@ -32,7 +32,12 @@ from zotero_capture.retire import (  # noqa: E402
     journal_path,
     plan_retire,
 )
-from zotero_capture.sqlite_cache import init_db  # noqa: E402
+from zotero_capture.sqlite_cache import (  # noqa: E402
+    IndexIdentityMismatch,
+    init_db,
+    require_identity,
+)
+from zotero_capture.zotero_client import api_base  # noqa: E402
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -46,7 +51,14 @@ def _read_rows(db_path: Path) -> list[dict]:
     with closing(_connect(db_path)) as conn:
         return [
             dict(r)
-            for r in conn.execute("SELECT url_canonical, zotero_key FROM url_index")
+            # pending_key and claimed_at are NOT decoration: an empty
+            # zotero_key is also the normal state of a claim in flight, and
+            # without these columns the planner cannot tell that apart from a
+            # row that never had an item. It deleted both.
+            for r in conn.execute(
+                "SELECT url_canonical, zotero_key, pending_key, claimed_at"
+                " FROM url_index"
+            )
         ]
 
 
@@ -61,13 +73,19 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--db-path", default=None)
     p.add_argument("--limit", type=int, default=None, help="only the first N steps")
     args = p.parse_args(argv)
+    # `if args.limit:` -- 0 is falsy, so the cap on a bulk DESTRUCTIVE run
+    # inverted into "no cap" at exactly the value someone reaches for when they
+    # want to be careful. A negative one is worse than useless: steps[:-1] is
+    # every step but the last.
+    if args.limit is not None and args.limit < 0:
+        p.error("--limit must not be negative")
 
     config = load_config()
     db_path = Path(args.db_path) if args.db_path else config.db_path
     init_db(db_path)
     rows = _read_rows(db_path)
     steps = plan_retire(rows, include_policy=args.policy)
-    if args.limit:
+    if args.limit is not None:
         steps = steps[: args.limit]
 
     by_reason = Counter(s.reason for s in steps)
@@ -94,11 +112,30 @@ def main(argv: list[str] | None = None) -> int:
               "not the sighting history.")
         return 0
 
+    # Verify -- never adopt -- before anything is destroyed. Zotero item keys
+    # are library-wide, so a client aimed at another collection still finds and
+    # trashes this one's items; the mismatch does not announce itself by
+    # failing. Gated on the APPLY, not the plan: showing a plan destroys
+    # nothing, and a person diagnosing a mismatch wants to see what it would
+    # have done.
+    try:
+        require_identity(
+            db_path,
+            api_origin=api_base(),
+            library_type=config.library_type,
+            library_id=config.library_id,
+            collection_key=config.collection_key,
+        )
+    except IndexIdentityMismatch as e:
+        print(f"refusing to apply: {e}", file=sys.stderr)
+        return 2
+
     with build_client(config, timeout=30.0) as zotero:
         counts = apply_retire(steps, db_path=db_path, zotero=zotero, connect=_connect)
     print(
         f"\ntrashed {counts['trashed']}, rows dropped without an item "
-        f"{counts['row_only']}, failed {counts['failed']}"
+        f"{counts['row_only']}, skipped {counts['skipped']}, "
+        f"failed {counts['failed']}"
     )
     return 1 if counts["failed"] else 0
 

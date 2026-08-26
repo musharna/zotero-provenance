@@ -217,14 +217,23 @@ class ZoteroClient:
         item_key: str,
         new_tags: list[str],
         *,
-        title_resolver: Callable[[], str] | None = None,
+        title_resolver: Callable[[str], str] | None = None,
         attempts: int = 3,
     ) -> bool:
         """Idempotent: PATCH only if a tag is missing or an unresolved title got resolved.
 
-        `title_resolver` is a zero-arg callable invoked ONLY when the stored title is
-        still the URL-as-fallback sentinel. It reuses the GET this method already
-        performs, so re-enrichment costs no extra Zotero round-trip.
+        `title_resolver` is invoked ONLY when the stored title is still the
+        URL-as-fallback sentinel, and it is given the item's CURRENT url. It
+        reuses the GET this method already performs, so re-enrichment costs no
+        extra Zotero round-trip.
+
+        It used to take no argument, so every caller closed it over a url read
+        from an earlier snapshot. Backfill could then fetch url A's title, find
+        the item had since become url B, write A's title onto B, and clear the
+        unresolved marker -- a wrong title, marked resolved so nothing revisits
+        it. Optimistic versioning cannot catch that: the version guarding the
+        PATCH is fetched after the url changed. Passing the current url removes
+        the stale closure rather than guarding it.
 
         A 412 means another session wrote between our GET and our PATCH — routine
         here, since several Claude sessions capture into one library and the
@@ -240,12 +249,15 @@ class ZoteroClient:
         # contended item spend the run's entire re-enrichment budget.
         memo: dict[str, str] = {}
 
-        def resolve_once() -> str:
+        def resolve_once(current_url: str) -> str:
             if title_resolver is None:
                 return ""
-            if "title" not in memo:
-                memo["title"] = title_resolver()
-            return memo["title"]
+            # Keyed by the url actually asked about: a retry after a 412 refetches
+            # the item, and if that changed the url the memo must not answer for
+            # the old one.
+            if current_url not in memo:
+                memo[current_url] = title_resolver(current_url)
+            return memo[current_url]
 
         for attempt in range(1, attempts + 1):
             outcome = self._try_add_tags(
@@ -264,7 +276,7 @@ class ZoteroClient:
         self,
         item_key: str,
         new_tags: list[str],
-        title_resolver: Callable[[], str] | None,
+        title_resolver: Callable[[str], str] | None,
     ) -> bool | None:
         """One read-modify-write. None means "version moved, try again"."""
         resp = self._client.get(f"/items/{item_key}")
@@ -296,7 +308,7 @@ class ZoteroClient:
                 # happened to return. Retire the stale claim, keep the evidence.
                 merged.discard(UNRESOLVED_TITLE_TAG)
             else:
-                candidate = title_resolver()
+                candidate = title_resolver(data.get("url") or "")
                 # The fetcher returns the URL itself when it fails; only a
                 # different, non-empty string counts as a real title.
                 if candidate and candidate != (data.get("url") or ""):
@@ -321,7 +333,9 @@ class ZoteroClient:
             )
         return True
 
-    def update_url(self, item_key: str, url: str) -> bool:
+    def update_url(
+        self, item_key: str, url: str, *, expect_url: str | None = None
+    ) -> bool:
         """Correct the stored URL of an item.
 
         Needed because a URL truncated at capture time cannot be repaired by any
@@ -345,6 +359,16 @@ class ZoteroClient:
             body.get("version", 0)
         )
         data = body.get("data", {})
+        # See trash_item: the decision was made on a snapshot, and rewriting an
+        # item that has since become something else is not a repair.
+        if expect_url is not None and (data.get("url") or "").strip() != expect_url.strip():
+            logger.warning(
+                "refusing to rewrite %s: selected as %r but it is now %r",
+                item_key,
+                expect_url,
+                data.get("url"),
+            )
+            return False
         payload: dict[str, Any] = {"url": url}
         # title_is_unresolved detects a failed fetch by title == url. Moving the
         # URL without the title breaks that equality, and the item silently stops
@@ -365,12 +389,23 @@ class ZoteroClient:
             )
         return True
 
-    def trash_item(self, item_key: str) -> None:
-        """Move an item to the Zotero trash.
+    def trash_item(self, item_key: str, *, expect_url: str | None = None) -> bool:
+        """Move an item to the Zotero trash. True if it was trashed.
 
         Deliberately not delete_item: the API's DELETE is permanent, while
         `deleted: 1` leaves the item recoverable from the trash in any Zotero
         client. Anything that removes items in bulk should be undoable.
+
+        `expect_url` is the URL the caller DECIDED on. Every caller selects from
+        a snapshot and destroys later by key, and optimistic versioning does not
+        cover that gap: it stops a write racing the final GET, not an edit that
+        landed before it. Without this, a sweep could report trashing a font
+        asset while it actually trashed the paper the item had become. Given an
+        expectation, the item must still be the one that was chosen.
+
+        The annotation used to say `-> None` while two paths returned False, so
+        the check was invisible to anyone reading the signature -- and all three
+        callers ignored the result.
         """
         resp = self._client.get(f"/items/{item_key}")
         if resp.status_code == 404:
@@ -383,8 +418,18 @@ class ZoteroClient:
             raise ZoteroError(
                 f"GET /items/{item_key} failed: {resp.status_code} {resp.text}"
             )
+        body = resp.json()
+        current_url = (body.get("data", {}).get("url") or "").strip()
+        if expect_url is not None and current_url != expect_url.strip():
+            logger.warning(
+                "refusing to trash %s: selected as %r but it is now %r",
+                item_key,
+                expect_url,
+                current_url,
+            )
+            return False
         version = resp.headers.get("Last-Modified-Version") or str(
-            resp.json().get("version", 0)
+            body.get("version", 0)
         )
         resp = self._client.patch(
             f"/items/{item_key}",
@@ -398,6 +443,7 @@ class ZoteroClient:
                 f"PATCH /items/{item_key} (trash) failed: "
                 f"{resp.status_code} {resp.text}"
             )
+        return True
 
     def delete_item(self, item_key: str) -> None:
         resp = self._client.get(f"/items/{item_key}")

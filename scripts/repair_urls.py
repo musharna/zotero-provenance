@@ -22,7 +22,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from zotero_capture.cli import build_client  # noqa: E402
 from zotero_capture.config import load_config  # noqa: E402
 from zotero_capture.repair import apply_repair, plan_repair  # noqa: E402
-from zotero_capture.sqlite_cache import init_db  # noqa: E402
+from zotero_capture.sqlite_cache import (  # noqa: E402
+    IndexIdentityMismatch,
+    init_db,
+    require_identity,
+)
+from zotero_capture.zotero_client import api_base  # noqa: E402
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -46,6 +51,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--db-path", default=None)
     p.add_argument("--limit", type=int, default=None, help="only the first N steps")
     args = p.parse_args(argv)
+    # `if args.limit:` -- 0 is falsy, so the cap on a bulk DESTRUCTIVE run
+    # inverted into "no cap" at exactly the value someone reaches for when they
+    # want to be careful. A negative one is worse than useless: steps[:-1] is
+    # every step but the last.
+    if args.limit is not None and args.limit < 0:
+        p.error("--limit must not be negative")
 
     config = load_config()
     db_path = Path(args.db_path) if args.db_path else config.db_path
@@ -55,7 +66,7 @@ def main(argv: list[str] | None = None) -> int:
     init_db(db_path)
     rows = _read_rows(db_path)
     steps = plan_repair(rows)
-    if args.limit:
+    if args.limit is not None:
         steps = steps[: args.limit]
 
     by_action: dict[str, int] = {}
@@ -74,6 +85,24 @@ def main(argv: list[str] | None = None) -> int:
     if not args.apply:
         print("\nDry run. Nothing was changed. Re-run with --apply to carry this out.")
         return 0
+
+    # Verify -- never adopt -- before anything is destroyed. Zotero item keys
+    # are library-wide, so a client aimed at another collection still finds and
+    # trashes this one's items; the mismatch does not announce itself by
+    # failing. Gated on the APPLY, not the plan: showing a plan destroys
+    # nothing, and a person diagnosing a mismatch wants to see what it would
+    # have done.
+    try:
+        require_identity(
+            db_path,
+            api_origin=api_base(),
+            library_type=config.library_type,
+            library_id=config.library_id,
+            collection_key=config.collection_key,
+        )
+    except IndexIdentityMismatch as e:
+        print(f"refusing to apply: {e}", file=sys.stderr)
+        return 2
 
     with build_client(config, timeout=30.0) as zotero:
         counts = apply_repair(

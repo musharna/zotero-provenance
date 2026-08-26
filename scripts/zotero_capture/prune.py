@@ -29,6 +29,8 @@ class PruneResult:
     trashed: int = 0
     would_trash: int = 0
     errors: int = 0
+    # Selected from the snapshot, but no longer the item that was selected.
+    skipped: int = 0
     urls: list[str] = field(default_factory=list)
 
 
@@ -70,7 +72,11 @@ def prune(
             result.would_trash += 1
             continue
         try:
-            zotero.trash_item(key)
+            # The snapshot url is the evidence this item was chosen on. The walk
+            # completes before any write, so minutes can pass in between.
+            if not zotero.trash_item(key, expect_url=url):
+                result.skipped += 1
+                continue
             result.trashed += 1
         except Exception as e:  # one bad item must not abort the pass
             logger.warning("prune failed for %s: %s", url, e)
