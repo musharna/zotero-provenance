@@ -286,6 +286,9 @@ def run_capture(
         pinned_root=pinned_root,
         running_root=running_root,
         ledger_path=ledger_path,
+        # Re-read before every mutation, not once for the message: an upgrade
+        # landing mid-capture must not be forgiven for the writes that follow it.
+        observe_pin=_observed_pinned_root,
     )
     # Failures are NOT enqueued: _retry_handler is a stub that never drains, so
     # enqueuing would grow the file forever. Errors are surfaced in the log below.
