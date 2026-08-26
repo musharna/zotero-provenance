@@ -17,7 +17,7 @@ from pathlib import Path
 from .capture import CaptureResult, capture_message
 from .config import Config, ConfigError, _state_dir, load_config
 from .project_slug import derive_slug
-from .sqlite_cache import lookup_url
+from .sqlite_cache import IndexIdentityMismatch, lookup_url, require_identity
 from .title_fetcher import fetch_title
 from .url_processing import canonicalize
 from . import __version__
@@ -300,7 +300,26 @@ def run_capture(
     return result
 
 
-def run_triage(*, url: str, db_path: Path, zotero: ZoteroClient) -> int:
+def run_triage(
+    *,
+    url: str,
+    db_path: Path,
+    zotero: ZoteroClient,
+    identity: dict[str, str] | None = None,
+) -> int:
+    """Tag one captured row as triaged.
+
+    Verifies the index identity first. This mutates the library from a row it
+    read out of the index, and capture was the only caller that ever checked the
+    index was OF that library -- so a configuration pointed at another
+    collection tagged the wrong item and reported success.
+    """
+    if identity is not None:
+        try:
+            require_identity(db_path, **identity)
+        except IndexIdentityMismatch as e:
+            sys.stderr.write(f"zotero-provenance: {e}\n")
+            return 2
     canon = canonicalize(url)
     row = lookup_url(db_path, canon)
     if row is None:
@@ -332,7 +351,17 @@ def main(argv: list[str] | None = None) -> int:
     try:
         with build_client(config) as zotero:
             if args.triage:
-                return run_triage(url=args.triage, db_path=db_path, zotero=zotero)
+                return run_triage(
+                    url=args.triage,
+                    db_path=db_path,
+                    zotero=zotero,
+                    identity={
+                        "api_origin": api_base(),
+                        "library_type": config.library_type,
+                        "library_id": config.library_id,
+                        "collection_key": config.collection_key,
+                    },
+                )
             run_capture(
                 ledger_path=_state_dir(os.environ) / "health.db",
                 message=args.message,

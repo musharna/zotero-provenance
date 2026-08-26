@@ -339,3 +339,120 @@ def test_an_ordinary_capture_reports_no_claim_loss(tmp_path: Path) -> None:
     )
     assert result.urls_new == 1
     assert result.errors == []
+
+
+# --- identity: a destructive tool must not adopt an index it cannot vouch for
+
+
+IDENT_A = {
+    "api_origin": "https://api.zotero.org",
+    "library_type": "user",
+    "library_id": "1",
+    "collection_key": "AAAAAAAA",
+}
+IDENT_B = {**IDENT_A, "collection_key": "BBBBBBBB"}
+
+
+def test_a_destructive_tool_refuses_an_index_bound_elsewhere(tmp_path: Path) -> None:
+    """Item keys are library-wide, so trash_item(K) finds A's item regardless.
+
+    Capture binds identity before it touches the index. Triage, repair and
+    retire never did, so a configuration pointed at collection B would happily
+    trash collection A's items.
+    """
+    from zotero_capture.sqlite_cache import (
+        IndexIdentityMismatch,
+        bind_identity,
+        require_identity,
+    )
+
+    db = tmp_path / "idx.db"
+    init_db(db)
+    bind_identity(db, **IDENT_A)
+    _insert(db, JUNK_URL, "K1")
+
+    require_identity(db, **IDENT_A)  # positive control: the matching case works
+
+    with pytest.raises(IndexIdentityMismatch):
+        require_identity(db, **IDENT_B)
+
+
+def test_a_populated_index_with_no_identity_is_not_adopted_destructively(
+    tmp_path: Path,
+) -> None:
+    """bind_identity ADOPTS an unbound index, which is right for capture.
+
+    It is wrong here: adopting during a destructive command means the first
+    thing an unverifiable index does is have rows trashed out of it. Capture can
+    bind it, and then this succeeds.
+    """
+    from zotero_capture.sqlite_cache import IndexIdentityMismatch, require_identity
+
+    db = tmp_path / "idx.db"
+    init_db(db)
+    _insert(db, JUNK_URL, "K1")
+
+    with pytest.raises(IndexIdentityMismatch):
+        require_identity(db, **IDENT_A)
+
+
+def test_an_empty_index_with_no_identity_is_allowed(tmp_path: Path) -> None:
+    """Positive control: there is nothing to protect, and nothing to destroy."""
+    from zotero_capture.sqlite_cache import require_identity
+
+    db = tmp_path / "idx.db"
+    init_db(db)
+    require_identity(db, **IDENT_A)
+
+
+def _bind(db: Path, collection: str, monkeypatch) -> None:
+    from zotero_capture.sqlite_cache import bind_identity
+    from zotero_capture.zotero_client import api_base
+
+    monkeypatch.setenv("ZOTERO_API_BASE", "http://127.0.0.1:9")
+    bind_identity(
+        db,
+        api_origin=api_base(),
+        library_type="user",
+        library_id="0",
+        collection_key=collection,
+    )
+
+
+def test_apply_refuses_when_the_index_belongs_to_another_collection(
+    tmp_path: Path, capsys, monkeypatch, _creds
+) -> None:
+    """The unit test proves the predicate; this proves it is actually wired in."""
+    db = _index(tmp_path)
+    _bind(db, "OTHERKEY", monkeypatch)
+
+    rc = retire_rows.main(["--db-path", str(db), "--apply"])
+
+    assert rc == 2, "a destructive apply ran against an index bound elsewhere"
+    assert "refusing to apply" in capsys.readouterr().err
+    with closing(_connect(db)) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM url_index").fetchone()[0] == len(JUNK)
+
+
+def test_apply_is_not_blocked_when_the_index_matches(
+    tmp_path: Path, capsys, monkeypatch, _creds
+) -> None:
+    """Positive control: the guard must not refuse the case it exists to allow."""
+    db = _index(tmp_path)
+    _bind(db, "FAKE0000", monkeypatch)
+
+    # --limit 0 so the guard is reached with an empty plan: this asserts the
+    # guard's verdict, not Zotero's reachability.
+    retire_rows.main(["--db-path", str(db), "--apply", "--limit", "0"])
+
+    assert "refusing to apply" not in capsys.readouterr().err
+
+
+def test_a_dry_run_still_works_on_an_unverifiable_index(
+    tmp_path: Path, capsys, _creds
+) -> None:
+    """Showing a plan destroys nothing, and is what a person needs to diagnose."""
+    db = _index(tmp_path)
+
+    assert retire_rows.main(["--db-path", str(db)]) == 0
+    assert _planned(capsys) == len(JUNK)

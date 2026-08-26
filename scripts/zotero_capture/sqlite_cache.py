@@ -103,6 +103,59 @@ def read_identity(db_path: Path) -> dict[str, str] | None:
     return {k: row[k] for k in IDENTITY_FIELDS} if row else None
 
 
+def require_identity(
+    db_path: Path,
+    *,
+    api_origin: str,
+    library_type: str,
+    library_id: str,
+    collection_key: str,
+) -> None:
+    """Verify, never adopt. For tools that DESTROY rather than accumulate.
+
+    `bind_identity` adopts an index that has never been told what it is, because
+    the deployed index holds thousands of rows written before identity existed
+    and refusing them would break the working case to guard a hypothetical one.
+    That trade is right for capture, whose worst case is a row in the wrong
+    collection.
+
+    It is wrong for a tool that trashes items. Adopting there means the first
+    thing an index nobody can vouch for does is have rows destroyed out of it,
+    on the strength of an assumption made one line earlier. Zotero item keys are
+    library-wide, so a client aimed at collection B still finds and trashes
+    collection A's item -- the mismatch does not announce itself by failing.
+
+    So: a populated index must already carry an identity, and it must match.
+    An EMPTY index is allowed through -- there is nothing to protect and nothing
+    to destroy -- and a person can bind a legacy index by letting capture run
+    once against the library those rows actually came from.
+    """
+    incoming = {
+        "api_origin": api_origin.rstrip("/"),
+        "library_type": library_type,
+        "library_id": library_id,
+        "collection_key": collection_key,
+    }
+    current = read_identity(db_path)
+    if current == incoming:
+        return
+    with closing(_connect(db_path)) as conn:
+        rows = conn.execute("SELECT COUNT(*) AS n FROM url_index").fetchone()["n"]
+    if not rows:
+        return
+    if current is None:
+        raise IndexIdentityMismatch(
+            f"{db_path} holds {rows} row(s) but has never recorded which library "
+            f"they belong to, and this command destroys rows. Run a capture "
+            f"against the library those rows came from to bind it first."
+        )
+    differing = [k for k in IDENTITY_FIELDS if current[k] != incoming[k]]
+    raise IndexIdentityMismatch(
+        f"{db_path} indexes {current} but this command is configured for "
+        f"{incoming} (differing: {', '.join(differing)})"
+    )
+
+
 def bind_identity(
     db_path: Path,
     *,

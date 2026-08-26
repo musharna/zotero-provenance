@@ -22,7 +22,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from zotero_capture.cli import build_client  # noqa: E402
 from zotero_capture.config import load_config  # noqa: E402
 from zotero_capture.repair import apply_repair, plan_repair  # noqa: E402
-from zotero_capture.sqlite_cache import init_db  # noqa: E402
+from zotero_capture.sqlite_cache import (  # noqa: E402
+    IndexIdentityMismatch,
+    init_db,
+    require_identity,
+)
+from zotero_capture.zotero_client import api_base  # noqa: E402
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -80,6 +85,24 @@ def main(argv: list[str] | None = None) -> int:
     if not args.apply:
         print("\nDry run. Nothing was changed. Re-run with --apply to carry this out.")
         return 0
+
+    # Verify -- never adopt -- before anything is destroyed. Zotero item keys
+    # are library-wide, so a client aimed at another collection still finds and
+    # trashes this one's items; the mismatch does not announce itself by
+    # failing. Gated on the APPLY, not the plan: showing a plan destroys
+    # nothing, and a person diagnosing a mismatch wants to see what it would
+    # have done.
+    try:
+        require_identity(
+            db_path,
+            api_origin=api_base(),
+            library_type=config.library_type,
+            library_id=config.library_id,
+            collection_key=config.collection_key,
+        )
+    except IndexIdentityMismatch as e:
+        print(f"refusing to apply: {e}", file=sys.stderr)
+        return 2
 
     with build_client(config, timeout=30.0) as zotero:
         counts = apply_repair(
