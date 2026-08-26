@@ -217,14 +217,23 @@ class ZoteroClient:
         item_key: str,
         new_tags: list[str],
         *,
-        title_resolver: Callable[[], str] | None = None,
+        title_resolver: Callable[[str], str] | None = None,
         attempts: int = 3,
     ) -> bool:
         """Idempotent: PATCH only if a tag is missing or an unresolved title got resolved.
 
-        `title_resolver` is a zero-arg callable invoked ONLY when the stored title is
-        still the URL-as-fallback sentinel. It reuses the GET this method already
-        performs, so re-enrichment costs no extra Zotero round-trip.
+        `title_resolver` is invoked ONLY when the stored title is still the
+        URL-as-fallback sentinel, and it is given the item's CURRENT url. It
+        reuses the GET this method already performs, so re-enrichment costs no
+        extra Zotero round-trip.
+
+        It used to take no argument, so every caller closed it over a url read
+        from an earlier snapshot. Backfill could then fetch url A's title, find
+        the item had since become url B, write A's title onto B, and clear the
+        unresolved marker -- a wrong title, marked resolved so nothing revisits
+        it. Optimistic versioning cannot catch that: the version guarding the
+        PATCH is fetched after the url changed. Passing the current url removes
+        the stale closure rather than guarding it.
 
         A 412 means another session wrote between our GET and our PATCH — routine
         here, since several Claude sessions capture into one library and the
@@ -240,12 +249,15 @@ class ZoteroClient:
         # contended item spend the run's entire re-enrichment budget.
         memo: dict[str, str] = {}
 
-        def resolve_once() -> str:
+        def resolve_once(current_url: str) -> str:
             if title_resolver is None:
                 return ""
-            if "title" not in memo:
-                memo["title"] = title_resolver()
-            return memo["title"]
+            # Keyed by the url actually asked about: a retry after a 412 refetches
+            # the item, and if that changed the url the memo must not answer for
+            # the old one.
+            if current_url not in memo:
+                memo[current_url] = title_resolver(current_url)
+            return memo[current_url]
 
         for attempt in range(1, attempts + 1):
             outcome = self._try_add_tags(
@@ -264,7 +276,7 @@ class ZoteroClient:
         self,
         item_key: str,
         new_tags: list[str],
-        title_resolver: Callable[[], str] | None,
+        title_resolver: Callable[[str], str] | None,
     ) -> bool | None:
         """One read-modify-write. None means "version moved, try again"."""
         resp = self._client.get(f"/items/{item_key}")
@@ -296,7 +308,7 @@ class ZoteroClient:
                 # happened to return. Retire the stale claim, keep the evidence.
                 merged.discard(UNRESOLVED_TITLE_TAG)
             else:
-                candidate = title_resolver()
+                candidate = title_resolver(data.get("url") or "")
                 # The fetcher returns the URL itself when it fails; only a
                 # different, non-empty string counts as a real title.
                 if candidate and candidate != (data.get("url") or ""):

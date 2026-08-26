@@ -176,3 +176,38 @@ def test_retire_passes_the_url_it_planned_on() -> None:
     with sqlite3.connect(db) as conn:
         left = [r[0] for r in conn.execute("SELECT url_canonical FROM url_index")]
     assert left == [url], "the row was dropped for an item that was not trashed"
+
+
+# --- the same bug in the title path: a resolver closed over a stale URL -------
+
+
+def test_the_title_resolver_is_asked_about_the_item_it_is_writing_to() -> None:
+    """Backfill closed its resolver over the SNAPSHOT url; add_tags refetches.
+
+    So it could fetch url A's title, find the item is now url B, and write A's
+    title onto B -- then clear the unresolved marker and count it fixed. The
+    version guard cannot see this: the current version is fetched after the URL
+    changed.
+    """
+    asked: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                headers={"Last-Modified-Version": "9"},
+                json={"key": "ITEM1234", "version": 9,
+                      "data": {"key": "ITEM1234", "version": 9,
+                               "url": LEGITIMATE, "title": LEGITIMATE, "tags": []}},
+            )
+        return httpx.Response(204)
+
+    def resolver(url: str) -> str:
+        asked.append(url)
+        return "Title of whatever it was asked about"
+
+    _client(handler).add_tags("ITEM1234", [], title_resolver=resolver)
+
+    assert asked == [LEGITIMATE], (
+        f"the resolver was asked about the wrong item's url: {asked}"
+    )

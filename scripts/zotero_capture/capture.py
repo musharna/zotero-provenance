@@ -275,18 +275,23 @@ def capture_message(
     # has seconds, and a message can cite many permanently-unfetchable URLs.
     reenrich_budget = [MAX_REENRICH_PER_RUN]
 
-    def make_title_resolver(url: str) -> Callable[[], str]:
-        """Resolve this URL's title, but only while the per-run budget lasts.
+    def make_title_resolver(url: str) -> Callable[[str], str]:
+        """Resolve the title of the url add_tags is actually writing to.
 
-        Returning the URL means "still unresolved", so an exhausted budget simply
+        Returning the url means "still unresolved", so an exhausted budget simply
         defers the retry to a later run rather than spending hook time now.
+
+        The url argument comes from the item as add_tags just fetched it, and it
+        wins over the one captured here: closing over the caller's url is how a
+        title for one source got written onto another.
         """
 
-        def resolve() -> str:
+        def resolve(current_url: str = "") -> str:
+            target = current_url or url
             if reenrich_budget[0] <= 0:
-                return url
+                return target
             reenrich_budget[0] -= 1
-            return title_fetcher(url)
+            return title_fetcher(target)
 
         return resolve
 
