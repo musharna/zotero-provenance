@@ -324,7 +324,7 @@ def test_add_tags_reenriches_an_unresolved_title():
         "tags": ["context:general", "title:unresolved"],
     }
     client = _stateful_item_client(state, [])
-    client.add_tags("ITEM1", ["seen:2026-05-05"], title_resolver=lambda: "Real Title")
+    client.add_tags("ITEM1", ["seen:2026-05-05"], title_resolver=lambda _url: "Real Title")
 
     assert state["title"] == "Real Title"
     assert "title:unresolved" not in state["tags"]
@@ -363,7 +363,7 @@ def test_add_tags_keeps_unresolved_tag_when_resolution_fails_again():
     client.add_tags(
         "ITEM1",
         ["seen:2026-05-05"],
-        title_resolver=lambda: "https://fixturehost.org/foo",
+        title_resolver=lambda _url: "https://fixturehost.org/foo",
     )
 
     assert state["title"] == "https://fixturehost.org/foo"
@@ -381,7 +381,7 @@ def test_add_tags_patches_title_even_when_no_tags_are_new():
     requests_made: list = []
     client = _stateful_item_client(state, requests_made)
     patched = client.add_tags(
-        "ITEM1", ["seen:2026-05-05"], title_resolver=lambda: "Real Title"
+        "ITEM1", ["seen:2026-05-05"], title_resolver=lambda _url: "Real Title"
     )
 
     assert patched is True
@@ -424,7 +424,7 @@ def test_live_unresolved_title_is_reenriched(live_zotero_creds: dict[str, str]):
     )
     try:
         patched = client.add_tags(
-            key, ["seen:2026-08-21"], title_resolver=lambda: fetch_title(url)
+            key, ["seen:2026-08-21"], title_resolver=lambda _url: fetch_title(url)
         )
         assert patched is True
 

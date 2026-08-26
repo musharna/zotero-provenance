@@ -1,5 +1,73 @@
 # Changelog
 
+## 0.22.0 — 2026-08-26
+
+Round 8 of external review, and a change of target: the maintenance passes.
+Seven rounds had all audited capture and health. `repair`, `prune`, `retire`,
+`backfill` and `run_triage` hold every destructive call in the project and had
+never been read adversarially once. Nine defects, six of them High. Live
+exposure was measured first and was nil — 4801 rows, none selected by any of
+the broken predicates — so this is mechanism, not damage.
+
+- **`--limit 0` applied the entire plan.** Both destructive entry points wrote
+  `if args.limit:` against `default=None`, so 0 — the value someone reaches for
+  when they want to be careful — was falsy and skipped the slice. Negatives are
+  now refused too: `steps[:-1]` is every step but the last.
+
+- **Retire deleted claims that were still in flight.** `zotero_key == ""` is
+  also the normal state between `reserve_url()` and the POST returning, and
+  `plan_retire` asserted the opposite. It dropped the row, capture's POST landed,
+  `set_zotero_key` matched nothing, and the item sat in Zotero with nothing
+  indexing it — invisible to dedup forever, so every later citation makes
+  another copy. The planner could not even see the claim: `_read_rows` selected
+  only url and key. A guard the production reader cannot feed is not a guard.
+
+- **Capture now reads the answer it was already given.** `set_zotero_key` is a
+  compare-and-swap returning True only if it took, and its result went unread —
+  the one moment the system could notice an item had been stranded. It is
+  recorded as a `claim_lost` error, which the health check surfaces.
+
+- **Every finalize is compare-and-swap on the pair that was planned.** Retire
+  and repair wrote `WHERE url_canonical = ?`, which touches whatever row holds
+  that URL now. Another session can replace the row between plan and apply, so
+  retire trashed K1 and deleted K2's row.
+
+- **Destructive tools verify the index belongs to this library.** `bind_identity`
+  was called in exactly one place: capture. Item keys are library-wide, so a
+  client aimed at collection B still finds and trashes A's item, and nothing
+  errors. These tools now VERIFY rather than bind — adopting an unvouched-for
+  index during a destructive command means the first thing it does is have rows
+  destroyed out of it. Gated on the apply, not the plan.
+
+- **A destructive call re-checks the evidence it was selected on.** Optimistic
+  versioning looked like it covered the snapshot-to-delete gap and does not: the
+  version it sends is the one the final GET just fetched, so an edit landing
+  before that is invisible. Prune could report trashing a font asset while
+  actually trashing the paper the item had become. `trash_item` and `update_url`
+  take `expect_url` and refuse when the item is no longer the one chosen.
+  `trash_item` was also annotated `-> None` while two paths returned False.
+
+- **The title resolver is asked about the item being written to.** It took no
+  argument, so callers closed it over a snapshot URL while `add_tags` decides
+  from the item's current state — backfill could write URL A's title onto B and
+  clear the unresolved marker. It now receives the URL `add_tags` just read.
+
+- **A repair carries the provenance across.** A rewrite left queued sightings
+  under an address no row would revisit again; a merge deleted the row they were
+  attached to; and a merge kept only the survivor's dates, discarding exactly
+  the half of the history the duplicate carried.
+
+- **The slash commands got the trampoline.** 0.13.0 covered the hooks and never
+  the command path, so a superseded session ran superseded code that mutates the
+  library. Unlike capture, a typed command has no availability argument for
+  proceeding: it refuses loudly and exits 3. The forwarding also remaps
+  root-qualified arguments, or delegation would delegate nothing.
+
+Reserved names split by the tier's own definition: `localhost`, `.local`,
+`.onion`, `.internal` and `.arpa` all resolve for whoever is on the right
+network, so they are POLICY, not proof. `_is_reserved_name` is untouched —
+capture is right to exclude them; only the destructive tier was wrong.
+
 ## 0.21.0 — 2026-08-26
 
 Round 7 of external review, against 0.20.0-0.20.2 — the write-ahead ledger
