@@ -1,5 +1,67 @@
 # Changelog
 
+## 0.26.0 — 2026-08-27
+
+Wave 1: decide the unknown, then measure. Both answers contradicted something
+this project believed.
+
+- **A documented limitation was false.** From its first commit the README said
+  sessions bridged with `/remote-control` fire no local `Stop` hook, so "nothing
+  is captured in those sessions." It traced back to "Add README" with no
+  evidence behind it. Remote Control bridges a session that goes on running
+  locally; the hooks documentation says hooks "run wherever Claude Code runs",
+  and `CLAUDE_CODE_BRIDGE_SESSION_ID` is set on the LOCAL session while the
+  bridge is attached.
+
+  Disproved by execution rather than by reading: a session with that variable
+  set captured its own citations, five URLs from one assistant turn, all in the
+  library the same day. The real limitation is a different one — a CLOUD session
+  does not read local `~/.claude/settings.json`, so a user-scope plugin is not
+  installed there at all. The README now says that instead.
+
+- **Every capture records which surface it came from** (`local`, `bridged`,
+  `remote`) so the next such claim is a query rather than a belief. The class
+  only, never the bridge session id.
+
+- **`dev/measure_coverage.py` answers the question the tests could not.** "Capture
+  works" was a happy-path claim: the suite proves a URL in a message reaches
+  Zotero and the health check proves the hook ran, but nothing asked what
+  fraction of everything actually cited is in the library.
+
+  It reports two numbers, because they mean different things. Coverage of
+  ELIGIBLE citations — the final message of a turn, which is what the Stop hook
+  is handed — where a miss means capture is broken. And the STRUCTURAL gap, URLs
+  cited mid-turn that the design cannot see at all. Conflating them would either
+  hide a real failure or invent one.
+
+  Same three rules as its neighbour: the real pipeline (`extract_urls`,
+  `canonicalize`, `is_excluded`, the generated-report guard), a window bounded by
+  the index's own earliest row, and a `--control` that looks every URL up in an
+  empty decoy index where coverage MUST collapse. The byte budget is reported
+  rather than silent — a harness that quietly skips the big transcripts reads as
+  "I looked at everything".
+
+- **Coverage since 2026-08-26 is 100.0%** (29/29 eligible URLs over 3,001 turns
+  and 400 MB of real transcripts, control confirming 0.0% against an empty
+  index). Measured across the longer window it is 55.8%, and every miss falls
+  before 08-26 — the 29-hour outage when the registry pinned a neutered v0.3.0
+  root, already found and fixed. An outage in the window understates current
+  health, which is why the window is a flag.
+
+- **The structural gap is empirically ~0**, which was not the expectation. The
+  prediction on building this was that agentic turns leak citations from
+  intermediate messages; across 3,001 turns almost nothing is cited anywhere but
+  the final message. The measurement corrected the intuition, which is the only
+  reason to build one.
+
+- **The harness got its own turn boundaries wrong first.** Claude Code records
+  tool results as `type: "user"` records, so treating any user record as a
+  boundary put every assistant message at the end of its own turn — every
+  message eligible, structural gap exactly zero, across a corpus of agentic
+  sessions. The number was plausible, which is what made it dangerous; an
+  implausible zero was the only tell. Nine tests pin the discriminator now, and
+  the first mutation written to check them was itself too weak to fail.
+
 ## 0.25.0 — 2026-08-27
 
 Wave 0 of the programme opened after 0.24.0: hygiene, and one defect hiding

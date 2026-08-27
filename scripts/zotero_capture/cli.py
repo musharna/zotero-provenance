@@ -10,7 +10,7 @@ import signal
 import sys
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import date
 from pathlib import Path
 
@@ -171,11 +171,32 @@ def _observed_pinned_root() -> str | None:
 
         root, _ = resolve_pinned(
             own_root=Path(__file__).resolve().parent.parent.parent,
-            registry_path=Path.home() / ".claude" / "plugins" / "installed_plugins.json",
+            registry_path=Path.home()
+            / ".claude"
+            / "plugins"
+            / "installed_plugins.json",
         )
         return str(root) if root else None
     except Exception:  # never let bookkeeping break a capture
         return None
+
+
+def _surface(env: Mapping[str, str]) -> str:
+    """Which surface drove this session: local CLI, bridged, or a cloud session.
+
+    `CLAUDE_CODE_BRIDGE_SESSION_ID` is set on the LOCAL session for as long as a
+    Remote Control connection is attached (Claude Code v2.1.199+), because
+    Remote Control bridges a session that goes on running locally rather than
+    moving it anywhere. `CLAUDE_CODE_REMOTE` is set in remote web environments.
+
+    Checked in that order: a bridged session may plausibly carry both, and the
+    interesting fact about it is that it is bridged, not that it is remote.
+    """
+    if env.get("CLAUDE_CODE_BRIDGE_SESSION_ID"):
+        return "bridged"
+    if env.get("CLAUDE_CODE_REMOTE") == "true":
+        return "remote"
+    return "local"
 
 
 def _emit_log(
@@ -207,6 +228,17 @@ def _emit_log(
         "root": str(Path(__file__).resolve().parent.parent.parent),
         "project": project,
         "context": context,
+        # Which surface the session was driven from. The README asserted from its
+        # first commit that a session bridged with /remote-control fires no local
+        # Stop hook, so "nothing is captured in those sessions" -- an assumption
+        # that shipped as a documented limitation and was never measured. It is
+        # false: Remote Control bridges a session that keeps running locally, and
+        # the docs say hooks "run wherever Claude Code runs". It was disproved by
+        # a bridged session capturing its own citations.
+        #
+        # Recorded so the next such claim is a query rather than a belief. Only
+        # the class, never the bridge session id.
+        "surface": _surface(os.environ),
         "urls_seen": result.urls_seen,
         "urls_new": result.urls_new,
         "urls_recurring": result.urls_recurring,

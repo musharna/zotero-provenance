@@ -240,8 +240,16 @@ lookup and the connection — a rebinding attack — is not covered.
 
 ## Known limitations
 
-- **Sessions bridged with `/remote-control` do not fire local `Stop` hooks**, so nothing
-  is captured in those sessions. Plain local CLI sessions work.
+- **Cloud sessions capture nothing**, because [Claude Code on the
+  web](https://code.claude.com/docs/en/claude-code-on-the-web) does not read your local
+  `~/.claude/settings.json` — a user-scope plugin is not installed there at all. Hooks in
+  a cloud session come from the repo and from server-managed settings.
+
+  Sessions bridged with `/remote-control` **do** capture, contrary to what this list said
+  from its first commit. Remote Control bridges a session that goes on running locally,
+  and hooks "run wherever Claude Code runs". Every capture now records which surface it
+  came from (`local`, `bridged`, `remote`), so this is a query rather than a belief.
+
 - **The retry queue is inert.** A failed Zotero write is logged and dropped, not retried.
   Nothing is enqueued today, precisely so a queue nothing drains cannot grow forever.
 - Title lookup has a one-second budget; on timeout the item is stored with the URL as its
@@ -274,7 +282,7 @@ loud failure rather than a clean-looking run.
 predate it — a release cannot fix a root that already exists — and `--verify`
 proves forwarding by behaviour rather than by grep.
 
-690 tests run by default and need no network. The 10 live ones are opted _into_
+707 tests run by default and need no network. The 10 live ones are opted _into_
 with `-m live` rather than out of — `addopts = -m "not live"` is set, because
 they used to run on a bare `pytest -q` and reach the internet despite this
 section promising otherwise. The hook tests execute the real shell scripts as
