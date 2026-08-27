@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.27.0 — 2026-08-27
+
+Wave 2: cover the destructive path before building more destructive things. The
+coverage gap had a defect sitting in it.
+
+- **Prune said it trashed items it had refused to trash.** Every URL the
+  exclusion rules rejected was appended to one list BEFORE the write was
+  attempted, and the CLI printed that list as `trashed: <url>`. So an item the
+  CAS guard declined — the guard that exists because the collection walk
+  finishes minutes before the writes begin, by which time an item may have moved
+  — was itemised as removed directly above a summary counting zero:
+
+  ```
+    trashed: https://evil.example.com/x
+  trashed   : 0
+  ```
+
+  Both lines from the same run, reproduced by execution before anything changed.
+
+- **A safety guard that fires in silence is not a safety guard.** `skipped` was
+  never printed at all. The operator was told an item had been removed and never
+  told that the refusal happened, so there was nothing to prompt them to go look
+  at what had changed underneath. `retire_rows.py` has reported its skips all
+  along; prune was the one breaking the convention.
+
+- **The list is split by outcome, not by selection.** `trashed_urls`,
+  `skipped_urls` and `error_urls` replace the single ambiguous `urls`, which is
+  now `selected` and used only for the dry-run listing. There is no longer a
+  list meaning "selected, outcome unknown" for a consumer to misread — the fix
+  removes the ambiguity rather than guarding it.
+
+- **Rendering moved out of the CLI** into `format_prune_report`, because the CLI
+  is where the misreport lived: it kept its own idea of what the result meant,
+  and that idea was wrong. Eight tests, three of which were watched failing
+  against the regressed code with the original symptom.
+
+  `test_selection_toctou.py` had promised exactly this in its own docstring — "a
+  refused delete must not be reported as one" — and asserted it only of the
+  counters. One layer up, the itemised list went on breaking that promise for as
+  long as the counters stayed right.
+
 ## 0.26.0 — 2026-08-27
 
 Wave 1: decide the unknown, then measure. Both answers contradicted something

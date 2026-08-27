@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from zotero_capture.backfill import backfill  # noqa: E402
 from zotero_capture.cli import build_client  # noqa: E402
 from zotero_capture.config import load_config  # noqa: E402
-from zotero_capture.prune import prune  # noqa: E402
+from zotero_capture.prune import format_prune_report, prune  # noqa: E402
 from zotero_capture.title_fetcher import (  # noqa: E402
     build_fetch_client,
     fetch_title,
@@ -124,15 +124,8 @@ def _run_prune(config, *, dry_run: bool, limit: int | None, sleep_s: float) -> i
     with build_client(config, timeout=ZOTERO_TIMEOUT_S) as zotero:
         result = prune(zotero, dry_run=dry_run, limit=limit, sleep_s=sleep_s)
 
-    for url in result.urls:
-        print(f"  {'would trash' if dry_run else 'trashed'}: {url}")
-    verb = "would trash" if dry_run else "trashed"
-    count = result.would_trash if dry_run else result.trashed
-    print(f"examined  : {result.examined}")
-    print(f"{verb:<10}: {count}")
-    print(f"errors    : {result.errors}")
-    if not dry_run and count:
-        print("\nThese are in the Zotero trash, not deleted. Restore from any client.")
+    for line in format_prune_report(result, dry_run=dry_run):
+        print(line)
     return 0
 
 
