@@ -96,7 +96,7 @@ def test_prune_reports_what_it_would_remove():
     ]
     result = prune(_client(items, []), dry_run=True, sleep_s=0)
 
-    assert result.urls == ["https://evil.example.com/x"]
+    assert result.selected == ["https://evil.example.com/x"]
 
 
 def test_prune_skips_items_with_no_url():

@@ -31,7 +31,16 @@ class PruneResult:
     errors: int = 0
     # Selected from the snapshot, but no longer the item that was selected.
     skipped: int = 0
-    urls: list[str] = field(default_factory=list)
+    # Split by OUTCOME, not by selection. There used to be one `urls` list,
+    # appended before the trash was attempted, and the CLI printed all of it as
+    # "trashed: <url>" -- so an item the CAS guard refused was itemised as
+    # removed above a summary that counted zero. One ambiguous list read by a
+    # consumer that could only guess is the whole defect; there is no longer a
+    # list that means "selected, outcome unknown" for anyone to misread.
+    selected: list[str] = field(default_factory=list)
+    trashed_urls: list[str] = field(default_factory=list)
+    skipped_urls: list[str] = field(default_factory=list)
+    error_urls: list[str] = field(default_factory=list)
 
 
 def prune(
@@ -67,7 +76,7 @@ def prune(
         result.examined += 1
         if not is_excluded(url):
             continue
-        result.urls.append(url)
+        result.selected.append(url)
         if dry_run:
             result.would_trash += 1
             continue
@@ -76,11 +85,49 @@ def prune(
             # completes before any write, so minutes can pass in between.
             if not zotero.trash_item(key, expect_url=url):
                 result.skipped += 1
+                result.skipped_urls.append(url)
                 continue
             result.trashed += 1
+            result.trashed_urls.append(url)
         except Exception as e:  # one bad item must not abort the pass
             logger.warning("prune failed for %s: %s", url, e)
             result.errors += 1
+            result.error_urls.append(url)
         if sleep_s:
             time.sleep(sleep_s)
     return result
+
+
+def format_prune_report(result: PruneResult, *, dry_run: bool) -> list[str]:
+    """The lines a human reads, each URL under the outcome it actually had.
+
+    Rendering lives here rather than in the CLI because the CLI is where the
+    misreport happened: it held its own idea of what the result meant, and that
+    idea was wrong. A refusal is named rather than counted in silence -- the CAS
+    guard exists to stop a destructive write against an item that moved, and an
+    operator who is not told it fired has no way to go look at what changed.
+    """
+    lines: list[str] = []
+    if dry_run:
+        lines += [f"  would trash: {url}" for url in result.selected]
+    else:
+        lines += [f"  trashed: {url}" for url in result.trashed_urls]
+        lines += [
+            f"  refused: {url}  (moved since it was selected)"
+            for url in result.skipped_urls
+        ]
+        lines += [f"  error:   {url}" for url in result.error_urls]
+
+    verb = "would trash" if dry_run else "trashed"
+    count = result.would_trash if dry_run else result.trashed
+    lines.append(f"examined  : {result.examined}")
+    lines.append(f"{verb:<10}: {count}")
+    if not dry_run:
+        lines.append(f"refused   : {result.skipped}")
+    lines.append(f"errors    : {result.errors}")
+    if not dry_run and count:
+        lines.append("")
+        lines.append(
+            "These are in the Zotero trash, not deleted. Restore from any client."
+        )
+    return lines
