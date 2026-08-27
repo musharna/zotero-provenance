@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.24.0 — 2026-08-27
+
+Two developer harnesses. Neither changes what the plugin does; both change what
+can safely be done TO it. Written after a probe of this project's own trampoline
+put a fake capture fault into the production log, where it then greeted every new
+session for 24 hours.
+
+- **`dev/probe_root.sh` runs a command against a deployed root with every
+  side-effect channel closed, and proves they were closed.** The 2026-08-26
+  probe drove the loop-refusal branch on purpose — the right instinct, proving a
+  guard fires — with `ZOTERO_API_BASE` pointed at a dead port and the state
+  directory still pointed at the live one. So it minted a real
+  `forward-loop-refused` record in the production capture.log. A probe careful
+  enough to build a negative control is exactly the probe that reaches
+  production, because it deliberately drives the paths that only fire in anger.
+
+  Nothing needed building. `ZOTERO_CAPTURE_STATE_DIR` was already honoured by
+  every hook, and `sqlite_cache.py` already prints advice to use it; the knob
+  existed and went unused, which is what a harness is for.
+
+- **The probe's seam check runs first, on both channels.** Setting a variable the
+  code under probe does not read is what makes a harness report a comfortable
+  zero forever — `dev/measure_extraction.py` spent four releases swapping a regex
+  nothing called. So the root's OWN expressions are evaluated: the shell's
+  `ZP_LOG=` line, because the leak was a shell write rather than a Python one,
+  and the Python `_state_dir`. If either resolves outside the sandbox the command
+  is refused rather than run. All 25 cache roots honour the redirect back to
+  0.1.0, but that is a grep, and a grep is not an execution.
+
+- **`--control` proves the production fingerprint guard can fail.** A detector
+  nobody has watched detect is not evidence: an unarmed guard reports the same
+  clean run as a working one. Every guard in both scripts was mutated and watched
+  failing for its stated reason before being trusted.
+
+- **`dev/backport_trampoline.sh` is the 2026-08-26 backport, tracked.** A release
+  cannot fix a root that predates it: 0.13.0 gave the hooks a trampoline and
+  0.22.0 gave the command path one, and neither reached backwards, so fourteen
+  live processes were holding 0.20.2's pre-guard `/triage`. The current launcher
+  was copied by hand into 23 roots that night and the knowledge lived only in a
+  memory file. Now it is reproducible, reviewable, and re-runnable after the next
+  release lays down another root — dry-run by default, per-root backups, atomic
+  rename because live processes re-read these scripts on every fire.
+
+- **`--verify` asks behaviour, not grep.** A root is handed a script path that
+  exists in neither root; whichever root the resulting error names is the root
+  that ran. It writes nothing, and the pinned root is required to DECLINE to
+  forward — without something capable of not forwarding, "everything forwards" is
+  not a result. Roots that already carry an older trampoline are left alone
+  deliberately: the only difference is an argv-remapping loop, and hooks are
+  handed JSON on stdin with no argv.
+
 ## 0.23.0 — 2026-08-26
 
 The round-7 findings 0.21.0 left open, cleared from the notes already in hand
@@ -332,7 +383,7 @@ record is judged only by its own contents, under two rules:
 
 - **The monitor no longer reads its own blindness as health.** Every `OSError`
   on the log meant exit 0 and silence — permission denied, a directory in place
-  of the file, a failing disk. Only a *missing* log is healthy now. The bootstrap
+  of the file, a failing disk. Only a _missing_ log is healthy now. The bootstrap
   event emitter also reports its own failure instead of swallowing it.
 
 - **The reader streams.** Materialising the whole log cost about 0.9 s and
@@ -451,7 +502,7 @@ live.
   afterwards let a registry change mid-capture record a pin the write never ran
   under, fabricating a stale write that never happened — and, reversed, hiding a
   real one. When it cannot be resolved the record says `pin_observation:
-  "unknown"` rather than silently omitting the field.
+"unknown"` rather than silently omitting the field.
 
 Hook cost fell from about 37 ms to about 26 ms per fire, measured interleaved,
 by replacing four `basename`/`dirname` subshells with parameter expansion and
@@ -521,14 +572,14 @@ it against the live log rather than by a test.
 
 0.14.0 warned whenever the most recent capture came from a plugin root that is
 not the installed one. Thirty seconds after shipping it, it fired: the newest
-capture had come from 0.13.0 because it happened *before* 0.14.0 was pinned.
+capture had come from 0.13.0 because it happened _before_ 0.14.0 was pinned.
 Nothing was wrong. Left alone, the check would have raised a false alarm on
 every release it ever saw — which is precisely the way a check earns being
 ignored, and the failure mode 0.14.0's own notes said would kill it.
 
 The signal was asking the wrong question. "Did the last capture come from an
 unpinned root" has a legitimate yes right after any upgrade; the real question
-is whether anything has captured from an unpinned root *since* the upgrade. The
+is whether anything has captured from an unpinned root _since_ the upgrade. The
 check now takes the registry's own `lastUpdated` and suppresses the warning for
 captures that predate it. The other three signals — refusals, silence, errors —
 were never affected and still fire.
@@ -595,7 +646,7 @@ is in that file at the moment it fires is what runs.
 
 - **A trampoline at the top of `capture-stop.sh` and `capture-prompt.sh`.** If
   this root is not the one `installed_plugins.json` pins, the hook `exec`s the
-  same hook in the root that *is* pinned, and the current rules apply. Nothing
+  same hook in the root that _is_ pinned, and the current rules apply. Nothing
   is deleted and nothing restarts.
 
   The authority is the pinned `installPath`, not a version comparison: it is
@@ -718,7 +769,7 @@ know about itself.
   because the code fixing them was not the code running. The capture hook
   executes a cache entry keyed by version, and a session holds whichever entry
   it resolved at its own start — so a session still on **v0.3.0** wrote eight
-  junk URLs on 2026-08-23, ``https://example.org/bar`` among them. Every release
+  junk URLs on 2026-08-23, `https://example.org/bar` among them. Every release
   since v0.8 refuses that address; v0.3.0 predates the rule, so nothing stopped
   it, and nothing reported a problem either. The index gained rows and the log
   recorded a successful capture.
@@ -747,11 +798,11 @@ reproduced against HEAD before being accepted.
 - **Where a bare URL ends is now linkify-it-py's judgement, not ours.** Three
   hand-rolled attempts at that boundary each shipped a corruption:
 
-  ``https://en.wikipedia.org/wiki/People's_Republic_of_China`` was stored as
-  ``.../wiki/People`` — a DIFFERENT real Wikipedia page, so it resolved a
+  `https://en.wikipedia.org/wiki/People's_Republic_of_China` was stored as
+  `.../wiki/People` — a DIFFERENT real Wikipedia page, so it resolved a
   plausible title and read as a citation nobody made. The apostrophe is an RFC
   3986 sub-delimiter; excluding it on seven corpus observations did not survive
-  one live counterexample. ``{{ID}}.pdb`` defeated the continuation guard,
+  one live counterexample. `{{ID}}.pdb` defeated the continuation guard,
   because that guard looked exactly one character past the illegal one and the
   next character was also illegal. And a curly quote, an em dash and U+00A0 were
   all absorbed into the address — the IRI range began AT the non-breaking space,
@@ -759,7 +810,7 @@ reproduced against HEAD before being accepted.
 
   linkify-it-py is markdown-it-py's own linkifier. Matches are sliced out of the
   original text rather than read from a token href, because going through
-  markdown-it percent-encodes the result (``München`` → ``M%C3%BCnchen``), which
+  markdown-it percent-encodes the result (`München` → `M%C3%BCnchen`), which
   changes the dedup key and would duplicate every non-ASCII row already stored.
   A bracketed IPv6 literal keeps its own pattern and is taken out of the text
   first: linkify does not recognise that form at all.
@@ -769,73 +820,73 @@ reproduced against HEAD before being accepted.
 
   Measured over the same 1,370 real messages: **4,009 URLs before, 4,009 after,
   one message different**, and that one is an elided URL containing a literal
-  ``...`` and an unbalanced paren, junk under both. Disabling bare matching
+  `...` and an unbalanced paren, junk under both. Disabling bare matching
   drops 852, so the comparison can see a difference.
 
-  A known cost, recorded rather than hidden: an *unpadded* table cell
-  (``|repo|https://…|``) is no longer captured, because linkify needs a boundary
+  A known cost, recorded rather than hidden: an _unpadded_ table cell
+  (`|repo|https://…|`) is no longer captured, because linkify needs a boundary
   in front of the scheme. Padded rows, which is what generators emit, work.
   Losing a citation is loud absence; the alternative was the corruptions above.
 
 - **Repair can no longer emit what capture would reject.** It shared no
-  predicate with the tokenizer, so ``…/filter[name]|`` was "repaired" to
-  ``…/filter`` — shorter, resolvable, and something extraction would never have
+  predicate with the tokenizer, so `…/filter[name]|` was "repaired" to
+  `…/filter` — shorter, resolvable, and something extraction would never have
   produced. Both paths now strip the same illegal tail and ask the same
-  ``is_storable_url``. An illegal character in the MIDDLE is refused outright
+  `is_storable_url`. An illegal character in the MIDDLE is refused outright
   rather than truncated into an address nobody cited.
 
 - **ANSI sequences are removed, not cut at.** An escape wraps an address rather
-  than ending one, so ``…/a\x1b[31mcontinued`` is one URL wearing a colour code;
+  than ending one, so `…/a\x1b[31mcontinued` is one URL wearing a colour code;
   cutting at the ESC invented the shorter one. CSI, OSC (including OSC 8
   hyperlinks) and two-byte escapes are all stripped, in capture and in repair.
 
-- **A merge is refused unless the survivor is a real item.** ``plan_repair``
+- **A merge is refused unless the survivor is a real item.** `plan_repair`
   chose merge because the corrected URL was present in the index — not because
-  that row's claim had ever completed. With an empty ``zotero_key`` the tag carry
+  that row's claim had ever completed. With an empty `zotero_key` the tag carry
   was skipped and the duplicate was trashed anyway, destroying the only real item
-  and leaving an orphan row. It now requires a nonempty key that ``item_exists``
+  and leaving an orphan row. It now requires a nonempty key that `item_exists`
   confirms, decided at apply time, and skips otherwise. Never a downgrade to
   rewrite: the corrected URL already holds the primary key, so the UPDATE would
   fail after the Zotero item had already changed.
 
 - **A title counts only once its closing tag has arrived.** Making a blown
-  deadline ``break`` in 0.11.5 fixed one problem and created a worse one — the
+  deadline `break` in 0.11.5 fixed one problem and created a worse one — the
   partial body still went to BeautifulSoup, which accepts an unclosed
-  ``<title>``, so ``Real Tit`` was stored as resolved metadata. That is worse
-  than storing the URL: it clears ``title:unresolved`` and nothing revisits the
+  `<title>`, so `Real Tit` was stored as resolved metadata. That is worse
+  than storing the URL: it clears `title:unresolved` and nothing revisits the
   item. Matching the whole element also makes the stop case-insensitive and stops
-  a stray ``</title>`` inside a script ending the read early.
+  a stray `</title>` inside a script ending the read early.
 
 - **Retirement is now two tiers, and its reversibility claim is honest.** HARD is
   proof the text cannot be an address — a placeholder, a control byte, a reserved
   name, a host no resolver could look up — and applies by default. POLICY is a
   real address this collection declines to keep — an asset, a font CDN, an
   intranet or private name — which CAN resolve for whoever is on that network, so
-  it is opt-in behind ``--policy``. Declining to capture something going forward
+  it is opt-in behind `--policy`. Declining to capture something going forward
   is a weaker claim than reaching back and trashing what is stored.
 
   The docs said the pass was recoverable from any Zotero client. Only its Zotero
-  half is: the trash does not hold ``first_seen``, ``last_seen`` or queued
+  half is: the trash does not hold `first_seen`, `last_seen` or queued
   provenance. Every applied run now journals each removed row to
-  ``url_index.db.retired.jsonl`` before destroying anything.
+  `url_index.db.retired.jsonl` before destroying anything.
 
   The dotless rule is stated as what it is. Not "can never identify a document" —
-  a local DNS zone or a corporate proxy makes ``https://wiki/runbook`` perfectly
+  a local DNS zone or a corporate proxy makes `https://wiki/runbook` perfectly
   real for whoever is on that network — but "this collection tracks globally
   addressable sources", which is a policy.
 
 ## 0.11.5 — 2026-08-23
 
 - **A title behind a large inline script is no longer missed.** The reader
-  stopped at 32 KiB. experian.com serves 200 with a perfectly good ``<title>`` —
+  stopped at 32 KiB. experian.com serves 200 with a perfectly good `<title>` —
   at byte 167,895, behind a long inline script — so three rows in the live index
   stored their URL as the title, which is precisely the junk this plugin exists
   to remove. The cap was the cause and the 1s budget was not: 32 KiB arrived in
   0.49s and the whole 271 KB page in 0.63s.
 
-  The cap is now 256 KiB, and the read stops the moment ``</title>`` arrives, so
+  The cap is now 256 KiB, and the read stops the moment `</title>` arrives, so
   an ordinary page still reads about a kilobyte and pays nothing for the higher
-  ceiling. A blown deadline now *stops* the read instead of discarding it —
+  ceiling. A blown deadline now _stops_ the read instead of discarding it —
   without that, raising the cap would have made things worse for a slow page,
   which used to stop at 32 KiB with a title in hand and would instead have
   streamed past the clock and thrown it away.
@@ -845,11 +896,11 @@ reproduced against HEAD before being accepted.
   now; myaccount.google.com correctly does not, since it needs a login.
 
   The existing cap test was written against a literal 32 KiB and would have
-  silently become a test of nothing. It is written against ``MAX_BYTES`` now.
+  silently become a test of nothing. It is written against `MAX_BYTES` now.
 
 ### Triage of what remains
 
-16 items carried ``title:unresolved``. Every one was fetched, against a positive
+16 items carried `title:unresolved`. Every one was fetched, against a positive
 control — ten straight failures is also what a broken fetcher looks like, and
 four of the five controls resolved, including the same hosts as some failures.
 
@@ -866,10 +917,10 @@ The remaining 6 cannot resolve, for reasons that are not the plugin's:
 
 - HTTP 404 — a private repository's pull request, and a Wikipedia page that never
   existed (one of this repo's own test fixtures, still in the library);
-- authentication — ``myaccount.google.com`` and ``myadcenter.google.com``;
-- HTTP 403 — ``tradersunion.com`` refuses non-browser clients;
-- a broken certificate chain on ``mirror.oit.ncsu.edu``, which fails identically
-  under plain ``httpx``, so it is the host's and not the guard's.
+- authentication — `myaccount.google.com` and `myadcenter.google.com`;
+- HTTP 403 — `tradersunion.com` refuses non-browser clients;
+- a broken certificate chain on `mirror.oit.ncsu.edu`, which fails identically
+  under plain `httpx`, so it is the host's and not the guard's.
 
 An earlier note here recorded Fortune as a dead 404. That was wrong: the probe
 that produced it used a URL truncated by the terminal listing it came from, not
@@ -878,26 +929,26 @@ the URL actually stored. Fetched properly, it resolves.
 ## 0.11.4 — 2026-08-23
 
 - **A host with no dot is never a public document.** 19 rows in the live index
-  had one and not one was a source: intranet services (``prometheus:9090``,
-  ``homelab:3000``, Ollama on ``host:11434``), a machine name, and this repo's
-  own test fixtures (``https://h/R&D``, ``https://a``). A single-label name
+  had one and not one was a source: intranet services (`prometheus:9090`,
+  `homelab:3000`, Ollama on `host:11434`), a machine name, and this repo's
+  own test fixtures (`https://h/R&D`, `https://a`). A single-label name
   resolves only inside a network that already knows it, so it cannot identify a
   document anyone else can read — the same thing the localhost, tailnet and
   reserved-name rules already say. It goes with them rather than becoming a new
-  kind of check, which also means ``prune`` sweeps the backlog with it.
+  kind of check, which also means `prune` sweeps the backlog with it.
 
   The rule runs only after an IP literal has been ruled out. A bracketed IPv6
   host has no dot either, and catching it here would exclude every IPv6 URL —
-  the same damage as the ``]`` truncation that once stored them all as
-  ``https://[::1``. There is a test for exactly that.
+  the same damage as the `]` truncation that once stored them all as
+  `https://[::1`. There is a test for exactly that.
 
 - **A merge no longer carries the duplicate's title state onto the survivor.**
-  Repairing ``…/ARFDSynInt.git|`` merged it into the clean row and tagged that
-  row ``title:unresolved`` — although its title was perfectly good — because the
-  merge carried every tag across. Provenance (``project:``, ``seen:``,
-  ``context:``) belongs to the sighting and should move; ``title:unresolved``
+  Repairing `…/ARFDSynInt.git|` merged it into the clean row and tagged that
+  row `title:unresolved` — although its title was perfectly good — because the
+  merge carried every tag across. Provenance (`project:`, `seen:`,
+  `context:`) belongs to the sighting and should move; `title:unresolved`
   describes the duplicate's own title and should not. It sticks, too:
-  ``title_is_unresolved()`` trusts the tag over the title in front of it, so one
+  `title_is_unresolved()` trusts the tag over the title in front of it, so one
   bad carry marks a healthy item as junk permanently.
 
 - **An indented code block is not a citation, and there is now a test saying so.**
@@ -921,83 +972,83 @@ new damage; these two passes deal with the 96 rows already there.
   tail begins and cutting there recovers it rather than inventing it. Four rows
   in the live index qualify, all as merges into the clean URL already present.
 
-  It refuses the case that looks identical and is not: if URL text *resumes*
+  It refuses the case that looks identical and is not: if URL text _resumes_
   after the illegal character, the run was one literal.
-  ``https://files.rcsb.org/download/{ID}.pdb`` cut at ``{`` would manufacture
-  ``https://files.rcsb.org/download/`` — a real, fetchable directory nobody
+  `https://files.rcsb.org/download/{ID}.pdb` cut at `{` would manufacture
+  `https://files.rcsb.org/download/` — a real, fetchable directory nobody
   cited. So would a cut that leaves no host at all. Both return "no repair".
 
   The blanket "a backslash means a regex" rule is gone with it. That was too
-  broad: it also skipped ``https://cloud.r-project.org\``, where the backslash is
+  broad: it also skipped `https://cloud.r-project.org\`, where the backslash is
   a shell line-continuation and the address in front of it is real.
 
 - **A new retirement pass removes rows that can never be a source.**
-  ``scripts/retire_rows.py``, dry run by default. Repair corrects a URL that has
+  `scripts/retire_rows.py`, dry run by default. Repair corrects a URL that has
   a right answer; retirement removes one that has none, and the two deliberately
   do not share a predicate. 92 rows qualify: 31 API templates
-  (``{locus}``, ``${VERSION}``), and 61 addresses today's rules already refuse —
+  (`{locus}`, `${VERSION}`), and 61 addresses today's rules already refuse —
   fixture names, font CDNs, DNS-over-HTTPS endpoints, badge SVGs, image files —
   captured before those rules existed.
 
   The predicate is "can never resolve to a document", **not** "contains a
   character RFC 3986 forbids". The two overlap and are not the same test, and
   using the character test to decide deletion is how a real row eventually gets
-  thrown away. Retirement also asks repair first: ``https://cloud.r-project.org\``
+  thrown away. Retirement also asks repair first: `https://cloud.r-project.org\`
   fails the address test, yet the citation behind it is recoverable, and judging
   it without asking would have trashed it for a reason that reads convincingly in
   a log.
 
-  Trashing is ``deleted: 1``, recoverable from any Zotero client, never the
+  Trashing is `deleted: 1`, recoverable from any Zotero client, never the
   permanent DELETE.
 
 ## 0.11.2 — 2026-08-23
 
 - **A URL cut short by a template is dropped, not stored as its prefix.** The
   0.11.1 whitelist changed how a template in plain prose fails, and not for the
-  better: ``https://files.rcsb.org/download/{ID}.pdb`` used to be stored whole,
+  better: `https://files.rcsb.org/download/{ID}.pdb` used to be stored whole,
   where no exclusion rule caught it but it could never resolve, so it failed
-  loudly as the URL-as-title junk this plugin removes. Stopping at ``{`` instead
-  stored ``https://files.rcsb.org/download/`` — a real, fetchable directory that
+  loudly as the URL-as-title junk this plugin removes. Stopping at `{` instead
+  stored `https://files.rcsb.org/download/` — a real, fetchable directory that
   acquires a genuine title and reads as a citation nobody made. Quiet wrong data
   is worse than loud junk.
 
-  A match is now discarded when URL text *resumes* after the illegal character:
-  ``{`` followed by ``ID}.pdb`` means the run was one literal. Whitespace never
-  counts, since that is how a URL normally ends, and neither does a *closing*
+  A match is now discarded when URL text _resumes_ after the illegal character:
+  `{` followed by `ID}.pdb` means the run was one literal. Whitespace never
+  counts, since that is how a URL normally ends, and neither does a _closing_
   delimiter — a closer can only appear after the thing it closes, so the URL had
   already ended. That second rule is not decoration: without it,
-  ``[https://example.org/bar].`` lost a real citation, because the match stops at
-  ``]`` and the sentence period reads as resumed URL text. An existing test
+  `[https://example.org/bar].` lost a real citation, because the match stops at
+  `]` and the sentence period reads as resumed URL text. An existing test
   caught it.
 
   Measured over the same 1,370 real assistant messages: **0 messages change, 0
   URLs dropped**. Forcing the guard to fire on every bare URL drops 852 of the
   4,009, so the measurement can tell a difference when there is one.
 
-  A regex literal still escapes both rules — CommonMark unescapes ``\.``, so
-  ``https://data\.gramene\.org/...`` arrives with no illegal character left and
-  ``*`` is a legal sub-delimiter. Two such rows are in the live index. That is
+  A regex literal still escapes both rules — CommonMark unescapes `\.`, so
+  `https://data\.gramene\.org/...` arrives with no illegal character left and
+  `*` is a legal sub-delimiter. Two such rows are in the live index. That is
   the wildcard class, which needs the code-block judgement rather than the
-  grammar; ``test_a_regex_literal_survives_because_commonmark_unescapes_it``
+  grammar; `test_a_regex_literal_survives_because_commonmark_unescapes_it`
   records the limit instead of hiding it.
 
 ## 0.11.1 — 2026-08-23
 
 - **The URL tokenizer asks the grammar instead of a list of exclusions.** The
   bare-URL matcher was a character blacklist, ``[^\s<>"'`\]]+``, so anything
-  nobody had thought to exclude was taken as URL data: a trailing ``|`` from an
-  unpadded table cell, ``{ID}`` from a template, a raw ANSI escape from pasted
+  nobody had thought to exclude was taken as URL data: a trailing `|` from an
+  unpadded table cell, `{ID}` from a template, a raw ANSI escape from pasted
   terminal output. Those addresses can never resolve a title, so they decay into
   the URL-as-title junk this plugin exists to remove — 49 such rows are in the
-  live index. Lengthening ``TRAILING_PUNCT`` is the wrong layer: it consumes the
+  live index. Lengthening `TRAILING_PUNCT` is the wrong layer: it consumes the
   bad boundary rather than preventing it, and only ever in trailing position.
   The character class is now derived from RFC 3986, with three departures, each
-  argued in the source: ``[`` and ``]`` stay out (legal only in an IPv6 host,
-  which has its own branch), ``'`` stays out (legal, but across 1,370 real
+  argued in the source: `[` and `]` stay out (legal only in an IPv6 host,
+  which has its own branch), `'` stays out (legal, but across 1,370 real
   messages all seven apostrophes adjacent to a URL were shell, Python or English
   delimiters and none was URL data), and non-ASCII is admitted per RFC 3987,
-  because a strict-ASCII class truncates ``.../wiki/München`` to ``.../wiki/M``
-  — the same damage as the ``]`` truncation that once broke every IPv6 URL.
+  because a strict-ASCII class truncates `.../wiki/München` to `.../wiki/M`
+  — the same damage as the `]` truncation that once broke every IPv6 URL.
 
   Measured over 1,370 real assistant messages and the 4,009 URLs 0.11.0 extracts
   from them, the change is a **no-op: 0 messages differ, output byte-identical**.
@@ -1016,7 +1067,7 @@ nor I had ranked, which turned out to be the largest.
 - **A parser now decides where a URL ends.** Extraction scanned raw text: a
   line-oriented fence state machine and hand-paired backtick runs. Measured
   against a CommonMark reference over 1,415 real assistant messages, that lost a
-  citation on 0.14% of them but mangled the *boundary* of **10.72%** of the URLs
+  citation on 0.14% of them but mangled the _boundary_ of **10.72%** of the URLs
   it found. Trailing punctuation was trimmed from markdown that had never been
   parsed, so `**[text](url)**` kept its emphasis — `*` is in no trim set, and by
   leaving the URL ending in `*` it also stopped the paren-balance rule from ever
@@ -1059,7 +1110,7 @@ nor I had ranked, which turned out to be the largest.
   tags for whoever completes the item, instead of dropping the sighting silently.
 
 - **Fetches connect to the address that was checked.** The guard resolved a name,
-  then handed the *name* onward, so the inner transport resolved it again —
+  then handed the _name_ onward, so the inner transport resolved it again —
   letting an attacker-controlled DNS answer public for the check and private for
   the connect. The validated address is now pinned for the request, with the Host
   header and TLS SNI preserved so virtual hosts and certificate verification
