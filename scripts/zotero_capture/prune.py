@@ -15,6 +15,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 
+from .opjournal import OperationJournal
 from .url_processing import is_excluded
 from .zotero_client import ZoteroClient
 
@@ -50,6 +51,7 @@ def prune(
     limit: int | None = None,
     sleep_s: float = DEFAULT_SLEEP_S,
     progress: object = None,
+    journal: OperationJournal | None = None,
 ) -> PruneResult:
     """Trash every item in the collection whose URL the exclusion rules reject.
 
@@ -80,16 +82,31 @@ def prune(
         if dry_run:
             result.would_trash += 1
             continue
+        # Journalled BEFORE the write. The items land in Zotero's trash and a
+        # human can get them back, but "which of these did that run put here"
+        # was unanswerable — and that is the question you have when a pass
+        # surprises you.
+        seq = (
+            journal.step(target=key, action="trash", before={"url": url})
+            if journal
+            else 0
+        )
         try:
             # The snapshot url is the evidence this item was chosen on. The walk
             # completes before any write, so minutes can pass in between.
             if not zotero.trash_item(key, expect_url=url):
+                if journal:
+                    journal.outcome(seq, "refused", "item moved since selection")
                 result.skipped += 1
                 result.skipped_urls.append(url)
                 continue
+            if journal:
+                journal.outcome(seq, "done")
             result.trashed += 1
             result.trashed_urls.append(url)
         except Exception as e:  # one bad item must not abort the pass
+            if journal:
+                journal.outcome(seq, "failed", str(e))
             logger.warning("prune failed for %s: %s", url, e)
             result.errors += 1
             result.error_urls.append(url)

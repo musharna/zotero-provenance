@@ -40,11 +40,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from .opjournal import OperationJournal
 from .sqlite_cache import lookup_url
 from .url_processing import _TEMPLATE_RE
 from urllib.parse import urlsplit
 
-from .url_processing import canonicalize, is_storable_url, strip_ansi, strip_illegal_tail
+from .url_processing import (
+    canonicalize,
+    is_storable_url,
+    strip_ansi,
+    strip_illegal_tail,
+)
 from .zotero_client import UNRESOLVED_TITLE_TAG, ZoteroClient
 
 logger = logging.getLogger(__name__)
@@ -180,18 +186,56 @@ def apply_repair(
     db_path: Path,
     zotero: ZoteroClient,
     connect,
+    journal: OperationJournal | None = None,
 ) -> dict[str, int]:
-    """Carry out a plan. `connect` yields a sqlite connection to the index."""
+    """Carry out a plan. `connect` yields a sqlite connection to the index.
+
+    Every rewrite is journalled with the URL it is about to replace. This is the
+    one maintenance path whose damage is not recoverable by a human who
+    disagrees with it: a trashed item sits in Zotero's trash and a retired row
+    sits in the retire journal, but an overwritten URL was recorded nowhere at
+    all — it existed only in this plan, in memory, and on stdout.
+    """
+    owned = journal is None
+    journal = journal or OperationJournal(db_path, "repair")
+    if owned:
+        journal.__enter__()
+    try:
+        return _apply_repair(
+            steps, db_path=db_path, zotero=zotero, connect=connect, journal=journal
+        )
+    finally:
+        if owned:
+            journal.__exit__(None, None, None)
+
+
+def _apply_repair(
+    steps: list[RepairStep],
+    *,
+    db_path: Path,
+    zotero: ZoteroClient,
+    connect,
+    journal: OperationJournal,
+) -> dict[str, int]:
     counts = {"rewrite": 0, "merge": 0, "skip": 0, "failed": 0}
     for step in steps:
         if step.action == "skip":
             counts["skip"] += 1
             continue
+        seq = journal.step(
+            target=step.zotero_key,
+            action=step.action,
+            # What is about to be destroyed, not what replaces it. The corrected
+            # URL is derivable from the stored one; the stored one is not
+            # derivable from anything once it is gone.
+            before={"url": step.url, "corrected": step.corrected},
+        )
         try:
             if step.action == "rewrite":
                 if not zotero.update_url(
                     step.zotero_key, step.corrected, expect_url=step.url
                 ):
+                    journal.outcome(seq, "refused", "item no longer exists")
                     # The item is gone. Rewriting the index row anyway would
                     # leave it claiming a corrected URL with nothing behind it,
                     # and the pass would report a repair that did not happen.
@@ -212,6 +256,7 @@ def apply_repair(
                         (step.corrected, step.url, step.zotero_key),
                     ).rowcount
                 if not moved:
+                    journal.outcome(seq, "refused", "index row was replaced")
                     logger.warning(
                         "rewrote item %s but its index row was replaced; "
                         "leaving the new row alone",
@@ -233,6 +278,7 @@ def apply_repair(
                         "DELETE FROM pending_tags WHERE url_canonical = ?",
                         (step.url,),
                     )
+                journal.outcome(seq, "done")
                 counts["rewrite"] += 1
             else:
                 survivor = lookup_url(db_path, step.corrected)
@@ -324,8 +370,10 @@ def apply_repair(
                         "leaving the new row alone",
                         step.zotero_key,
                     )
+                journal.outcome(seq, "done" if merged else "refused")
                 counts["merge"] += 1
         except Exception as e:  # noqa: BLE001 - one bad row must not stop the pass
+            journal.outcome(seq, "failed", str(e))
             logger.error("repair failed for %s: %s", step.url, e)
             counts["failed"] += 1
     return counts
