@@ -120,21 +120,21 @@ Sources get bucketed by their `seen:` history:
 
 ## Configuration
 
-| Variable                           | Meaning                                                                  |
-| ---------------------------------- | ------------------------------------------------------------------------ |
-| `ZOTERO_API_KEY`                   | Required. Key with write access.                                         |
-| `ZOTERO_LIBRARY_ID`                | Required. **No default** — a default would write into the wrong library. |
-| `ZOTERO_WEBSOURCES_COLLECTION_KEY` | Required. Target collection.                                             |
-| `ZOTERO_LIBRARY_TYPE`              | `user` (default) or `group`.                                             |
-| `ZOTERO_CAPTURE_DISABLE=1`         | Turn capture off entirely.                                               |
-| `ZOTERO_CAPTURE_PROJECT`           | Force the `project:` tag instead of deriving it.                         |
-| `ZOTERO_CAPTURE_PROJECT_ROOTS`     | Extra path roots (`:`-separated) that projects live under.               |
-| `ZOTERO_CAPTURE_STATE_DIR`         | Where the dedup database and log live.                                   |
-| `ZOTERO_SECRETS_FILE`              | Alternate credentials file.                                              |
-| `ZOTERO_PROVENANCE_PYTHON`         | Interpreter to use, if the default `python3` lacks the deps.             |
-| `ZOTERO_API_BASE`                  | Alternate API root, for tests or an API-compatible server.               |
-| `ZOTERO_CAPTURE_HEALTH_DISABLE=1`  | Turn off the session-start health check only.                            |
-| `ZOTERO_CAPTURE_HEALTH_WINDOW_HOURS` | How far back operational faults are reported. Default 24.             |
+| Variable                             | Meaning                                                                  |
+| ------------------------------------ | ------------------------------------------------------------------------ |
+| `ZOTERO_API_KEY`                     | Required. Key with write access.                                         |
+| `ZOTERO_LIBRARY_ID`                  | Required. **No default** — a default would write into the wrong library. |
+| `ZOTERO_WEBSOURCES_COLLECTION_KEY`   | Required. Target collection.                                             |
+| `ZOTERO_LIBRARY_TYPE`                | `user` (default) or `group`.                                             |
+| `ZOTERO_CAPTURE_DISABLE=1`           | Turn capture off entirely.                                               |
+| `ZOTERO_CAPTURE_PROJECT`             | Force the `project:` tag instead of deriving it.                         |
+| `ZOTERO_CAPTURE_PROJECT_ROOTS`       | Extra path roots (`:`-separated) that projects live under.               |
+| `ZOTERO_CAPTURE_STATE_DIR`           | Where the dedup database and log live.                                   |
+| `ZOTERO_SECRETS_FILE`                | Alternate credentials file.                                              |
+| `ZOTERO_PROVENANCE_PYTHON`           | Interpreter to use, if the default `python3` lacks the deps.             |
+| `ZOTERO_API_BASE`                    | Alternate API root, for tests or an API-compatible server.               |
+| `ZOTERO_CAPTURE_HEALTH_DISABLE=1`    | Turn off the session-start health check only.                            |
+| `ZOTERO_CAPTURE_HEALTH_WINDOW_HOURS` | How far back operational faults are reported. Default 24.                |
 
 Hooks do not inherit MCP-scoped environment from `~/.claude.json`, which is why
 credentials come from the secrets file.
@@ -147,7 +147,7 @@ that, and they are deliberately different in kind.
 **Integrity incidents are journalled before the write they describe.** If a
 capture is about to touch Zotero from a plugin root that is not the installed
 one — or one it cannot verify — the incident is written to a small SQLite ledger
-*first*. It used to be recorded afterwards, which meant a hook timeout at the
+_first_. It used to be recorded afterwards, which meant a hook timeout at the
 wrong moment could leave a row in your library with nothing anywhere saying so.
 An intent for a write that never happens is a false positive you can close in
 one command; a write with no intent is corruption nobody can find.
@@ -161,8 +161,8 @@ an incident, so its ledger stays empty.
 
 **Operational faults decay.** Refusals, configuration errors and capture errors
 are read from the log inside a recency window (24 h,
-`ZOTERO_CAPTURE_HEALTH_WINDOW_HOURS`). Timing a *presence* is sound; timing an
-*absence* is not, and nothing here does it. Records dated in the future are
+`ZOTERO_CAPTURE_HEALTH_WINDOW_HOURS`). Timing a _presence_ is sound; timing an
+_absence_ is not, and nothing here does it. Records dated in the future are
 reported as a clock problem rather than treated as perpetually recent.
 
 Keeping these apart is what makes the check bounded: open incidents are a small
@@ -253,7 +253,28 @@ lookup and the connection — a rebinding attack — is not covered.
 python3 -m pytest -q
 ```
 
-493 tests run by default and need no network. The 10 live ones are opted _into_
+### Probing a deployed root
+
+Never hand-roll the environment for this. A hook has two channels to the outside
+— the Zotero API and the state directory — and closing only the first is how a
+probe of the trampoline's refusal branch wrote a real fault record into the
+production log, where it was then reported as a capture failure for 24 hours.
+
+```bash
+dev/probe_root.sh --control                    # prove the guard can fail
+dev/probe_root.sh 0.20.2 -- hooks/run-python.sh scripts/foo.py
+```
+
+Both channels are closed, and a seam check evaluates the root's _own_
+expressions first, refusing to run if either resolves outside the sandbox. The
+production state directory is fingerprinted before and after, so a leak is a
+loud failure rather than a clean-looking run.
+
+`dev/backport_trampoline.sh` installs the current launcher into cache roots that
+predate it — a release cannot fix a root that already exists — and `--verify`
+proves forwarding by behaviour rather than by grep.
+
+690 tests run by default and need no network. The 10 live ones are opted _into_
 with `-m live` rather than out of — `addopts = -m "not live"` is set, because
 they used to run on a bare `pytest -q` and reach the internet despite this
 section promising otherwise. The hook tests execute the real shell scripts as

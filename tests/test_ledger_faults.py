@@ -34,9 +34,15 @@ CHECKER = PLUGIN_ROOT / "scripts" / "zotero_capture_health.py"
 
 
 def _healthy(db: Path) -> Path:
-    open_incident(db, incident_id="a1", url="https://fixturehost.org/one",
-                  root="/c/OLD", pinned_root="/c/NEW", kind="stale",
-                  ts="2026-08-26T00:00:00-04:00")
+    open_incident(
+        db,
+        incident_id="a1",
+        url="https://fixturehost.org/one",
+        root="/c/OLD",
+        pinned_root="/c/NEW",
+        kind="stale",
+        ts="2026-08-26T00:00:00-04:00",
+    )
     return db
 
 
@@ -91,15 +97,20 @@ def _run(state: Path, *args: str):
     env["ZOTERO_CAPTURE_STATE_DIR"] = str(state)
     return subprocess.run(
         [sys.executable, str(CHECKER), *args],
-        env=env, capture_output=True, text=True, timeout=60,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
 
 
 def _state(tmp_path: Path, *, corrupt: bool) -> Path:
     state = tmp_path / "state"
     state.mkdir(parents=True, exist_ok=True)
-    # Skip the legacy import, so this exercises the readers and not the migration.
-    (state / "health-migrated").write_text("0\n")
+    # A log holding nothing the importer can act on, so this exercises the
+    # readers and not the migration. This used to write a `health-migrated`
+    # marker to force that; the marker is gone -- it was a second copy of a
+    # truth the ledger already holds, and it outlived the ledger it described.
     (state / "capture.log").write_text(
         json.dumps({"ts": "2026-08-26T00:00:00-04:00", "event": "noop"}) + "\n"
     )
@@ -116,9 +127,7 @@ def test_the_checker_reports_a_corrupt_ledger_instead_of_a_clean_bill(
     )
 
     bad = _run(_state(tmp_path / "bad", corrupt=True).parent, "--list-incidents")
-    assert bad.returncode != 0, (
-        f"a corrupt ledger reported success: {bad.stdout!r}"
-    )
+    assert bad.returncode != 0, f"a corrupt ledger reported success: {bad.stdout!r}"
     assert "no open integrity incidents" not in bad.stdout, (
         "a corrupt ledger claimed there was nothing to report"
     )
