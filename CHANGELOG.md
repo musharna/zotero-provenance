@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.31.0 — 2026-08-27
+
+Wave 7: a captured DOI has to be a DOI, and it has to still stand. Both checks
+found live damage.
+
+- **Four doi.org URLs in the library were not DOIs at all.** `10.1/ABC` and
+  `10.x` (placeholders typed in prose), `GSE12345` (a GEO accession given a
+  doi.org prefix by mistake), and a bare `…` — an ellipsis the extractor lifted
+  out of truncated text and filed as a source. `is_excluded` now rejects a
+  doi.org URL whose path is not syntactically a DOI, which means `prune` sweeps
+  the four already in the collection: the same mechanism the RFC-2606
+  reserved-name rule used, where adding the rule cleaned the backlog instead of
+  needing a second list of what counts as junk.
+
+  Syntax only. It rejects strings that cannot be a DOI and never asks whether a
+  well-formed one resolves — `doi.org` answers that, and a valid DOI that 404s
+  is a dead source rather than a malformed one.
+
+- **`scripts/verify_dois.py` asks CrossRef and Retraction Watch.** A provenance
+  library records what was consulted; it does not notice on its own that one of
+  those sources was retracted six months ago. `ghostcite` does that work and is
+  audited, so this shells out to it — a second implementation of a byline gate
+  is a second thing to be wrong.
+
+- **It found four truncated DOIs on its first real run**, in a 40-DOI sample:
+  `10.1016/0022-2836(70`, `(81`, `s0022-2836(05`, `s0092-8674(00` — all cut at
+  an unbalanced opening parenthesis. **Legacy, not ongoing**: the current
+  extractor was checked against four parenthesised-DOI spellings and handles
+  every one, and all four bad rows predate the 0.11.x boundary move to
+  linkify-it-py. The truncated suffix is not derivable from what was stored, so
+  `repair` cannot correct them; surfacing them is the point.
+
+  The two layers separate cleanly — the syntax rule leaves these alone because
+  they are _plausible_ DOIs, and the resolution gate catches them because they
+  do not resolve.
+
+- **A tool that could not run is not a pass.** Zero findings from a missing
+  binary would otherwise be byte-identical to a clean corpus, which is how a
+  broken check becomes a silent all-clear. `unavailable` is reported, the exit
+  code is 2, and a DOI ghostcite could not resolve is counted as _unknown_
+  rather than folded into the clean total.
+
+- **Read-only.** It reports; it does not tag, trash or rewrite. What to do about
+  a retracted source is a judgement about your own bibliography, and the tool
+  that finds it is the wrong place to make that call automatically.
+
+- Twenty-one tests, two mutations watched failing: disabling the syntax rule,
+  and letting a missing binary read as clean.
+
 ## 0.30.0 — 2026-08-27
 
 Wave 5: where a maintenance run got to, and what it destroyed on the way. The
