@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.33.0 — 2026-08-27
+
+The exclusion rules lived in two copies, and the cleanup tools held the stale one.
+
+- **A rule capture enforced could be invisible to every tool that cleans up.**
+  `url_processing.is_excluded` decides what capture refuses; `retire.classify`
+  decided what maintenance could reach, as a second hand-maintained copy of the
+  same rule set. Nothing kept them in step.
+
+  0.31.0 is the proof, and it was this project's own release note that was wrong:
+  it added the malformed-DOI rule and said prune would sweep the junk rows it
+  described. Six rows — `10.1/ABC`, `10.x`, `GSE12345`, a bare `…`, and two
+  spellings of `doi.org` with no DOI at all — were still in the live collection
+  afterwards. Capture refused them; `retire --policy` reported "0 to retire,
+  4826 left alone", because `classify` had never heard of the rule. The note was
+  written from what the code should have implied rather than from a run.
+
+  (The count in that note was also wrong: four, not six. Two bare `doi.org` rows
+  had no path to notice. This surface has now been miscounted five times running,
+  and the lesson has not changed — derive the set from the definition, not from
+  the instances already in hand.)
+
+- **Fixed at the mechanism, not the instance.** Adding a `doi.org` branch to
+  `classify` would leave the second copy in place and hand the identical gap to
+  whichever rule is added next. Instead `classify`'s fallthrough now asks
+  `is_excluded` directly, so a rule added to the capture path is reachable by
+  maintenance the moment it exists. This is the third time a defect here has been
+  a stale second copy of the truth rather than a missing guard.
+
+- **Opt-in, and bounded in both directions.** The fallthrough returns the POLICY
+  tier, which requires `--policy`: reaching back to trash a row on the strength
+  of a rule written after it was captured is a product decision, not a proof
+  about the address. And `test_exclusion_reachability` asserts the property in
+  both directions — everything capture refuses must be nameable by maintenance,
+  and everything capture accepts must be left alone. A fallthrough that named
+  every row would satisfy the first half completely while deleting the library.
+
 ## 0.32.0 — 2026-08-27
 
 Wave 6: what a source was cited FOR, kept on this machine.

@@ -56,6 +56,7 @@ from .url_processing import (
     _is_asset_path,
     _is_real_hostname,
     _is_reserved_name,
+    is_excluded,
     is_unsafe_address,
     parse_ip_literal,
 )
@@ -127,6 +128,24 @@ def classify(url: str) -> tuple[str, str]:
         # whoever is on that network. It is excluded because this collection
         # tracks globally addressable sources: a policy, not a fact.
         return POLICY, "a single-label name, not globally addressable"
+
+    # Anything the CAPTURE path would refuse today that no branch above named.
+    #
+    # Without this the rules live in two copies and this is the stale one: a rule
+    # added to `is_excluded` protects new captures but can never reach the rows
+    # already in the library. That is not hypothetical. 0.31.0 added the
+    # malformed-DOI rule and its release notes said prune would sweep the junk
+    # rows it described; six of them sat in the live collection afterwards,
+    # refused by capture and invisible to every maintenance tool, because
+    # `classify` had never heard of the rule. Guarding the specific case would
+    # leave the mechanism in place for whichever rule is added next.
+    #
+    # POLICY rather than HARD, deliberately. This predicate is open-ended by
+    # construction, and reaching back to trash a row on the strength of a rule
+    # written after it was captured is a product decision, not a proof about the
+    # address. It needs --policy, and the dry run names every row it would take.
+    if is_excluded(url):
+        return POLICY, "the capture path would refuse this URL today"
     return "", ""
 
 
