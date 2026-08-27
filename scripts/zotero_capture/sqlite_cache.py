@@ -66,6 +66,13 @@ RETRY_MAX_ATTEMPTS = 5
 MIGRATIONS = (
     "ALTER TABLE url_index ADD COLUMN pending_key TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE url_index ADD COLUMN claimed_at TEXT NOT NULL DEFAULT ''",
+    # What the page said when it was read, and when that was. A captured item is
+    # a URL and a title; if the page changes or dies, nothing in the library can
+    # show what was actually consulted. The hash does not preserve the content --
+    # it makes a change DETECTABLE, which is the difference between a citation
+    # you can defend and one you can only hope about.
+    "ALTER TABLE url_index ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE url_index ADD COLUMN hashed_at TEXT NOT NULL DEFAULT ''",
 )
 
 # The alphabet the Zotero API accepts for an object key: base32 without the
@@ -498,7 +505,9 @@ def retry_queue_depth(db_path: Path) -> int:
         return 0
     with closing(_connect(db_path)) as conn:
         try:
-            return int(conn.execute("SELECT COUNT(*) AS n FROM retry_queue").fetchone()["n"])
+            return int(
+                conn.execute("SELECT COUNT(*) AS n FROM retry_queue").fetchone()["n"]
+            )
         except sqlite3.OperationalError:
             # An index predating the table. Not an error: nothing is queued.
             return 0
@@ -524,3 +533,45 @@ def dequeue_retry(db_path: Path, url_canonical: str) -> bool:
             "DELETE FROM retry_queue WHERE url_canonical = ?", (url_canonical,)
         )
     return cursor.rowcount == 1
+
+
+def set_content_hash(
+    db_path: Path, url_canonical: str, *, content_hash: str, hashed_at: str
+) -> bool:
+    """Record what the page said, and when it was read. True if the row existed."""
+    with closing(_connect(db_path)) as conn:
+        cursor = conn.execute(
+            "UPDATE url_index SET content_hash = ?, hashed_at = ?"
+            " WHERE url_canonical = ?",
+            (content_hash, hashed_at, url_canonical),
+        )
+    return cursor.rowcount == 1
+
+
+def rows_needing_hash(db_path: Path, *, limit: int | None = None) -> list[dict]:
+    """Completed rows that have never been hashed, oldest sighting first.
+
+    An in-flight row (`zotero_key = ''`) is excluded: it has no item to write the
+    hash onto, and the capture that owns it may still be mid-POST.
+    """
+    sql = (
+        "SELECT url_canonical, zotero_key, first_seen FROM url_index"
+        " WHERE content_hash = '' AND zotero_key != ''"
+        " ORDER BY first_seen, url_canonical"
+    )
+    if limit is not None:
+        sql += f" LIMIT {int(limit)}"
+    with closing(_connect(db_path)) as conn:
+        return [dict(row) for row in conn.execute(sql)]
+
+
+def rows_with_hash(db_path: Path, *, limit: int | None = None) -> list[dict]:
+    """Rows that carry a hash, so a verify pass can ask whether it still holds."""
+    sql = (
+        "SELECT url_canonical, zotero_key, content_hash, hashed_at FROM url_index"
+        " WHERE content_hash != '' ORDER BY hashed_at, url_canonical"
+    )
+    if limit is not None:
+        sql += f" LIMIT {int(limit)}"
+    with closing(_connect(db_path)) as conn:
+        return [dict(row) for row in conn.execute(sql)]
