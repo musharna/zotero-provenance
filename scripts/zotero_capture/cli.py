@@ -243,6 +243,9 @@ def _emit_log(
         "urls_new": result.urls_new,
         "urls_recurring": result.urls_recurring,
         "urls_excluded": result.urls_excluded,
+        # Local claim links written. The COUNT is logged; the claim text is
+        # not, here or anywhere outside the sqlite index.
+        "claims_recorded": result.claims_recorded,
         # Identity comes from the writer. Reconstructing it afterwards from
         # timestamp+root aliased distinct incidents that happened in the same
         # second, so acknowledging one silenced another that was never shown.
