@@ -116,7 +116,7 @@ def test_a_hashed_row_is_recorded_and_stamped(db: Path) -> None:
     insert_url(db, URL, "KEY1", date(2026, 5, 5))
     zotero = _Stamper()
 
-    result = snapshot(db, zotero=zotero, hasher=lambda url: DIGEST, now="NOW")
+    result = snapshot(db, zotero=zotero, hasher=lambda url: DIGEST, clock=lambda: "NOW")
 
     assert result.hashed_urls == [URL]
     assert zotero.stamped == [("KEY1", DIGEST)]
@@ -133,7 +133,7 @@ def test_the_index_is_not_written_when_the_stamp_is_refused(db: Path) -> None:
     insert_url(db, URL, "KEY1", date(2026, 5, 5))
     zotero = _Stamper(accepts=False)
 
-    result = snapshot(db, zotero=zotero, hasher=lambda url: DIGEST, now="NOW")
+    result = snapshot(db, zotero=zotero, hasher=lambda url: DIGEST, clock=lambda: "NOW")
 
     assert result.stamp_refused_urls == [URL]
     assert rows_with_hash(db) == []
@@ -148,7 +148,7 @@ def test_an_unreachable_page_is_counted_not_hashed(db: Path) -> None:
     def boom(url: str) -> str:
         raise httpx.ConnectError("dead link")
 
-    result = snapshot(db, zotero=_Stamper(), hasher=boom, now="NOW")
+    result = snapshot(db, zotero=_Stamper(), hasher=boom, clock=lambda: "NOW")
 
     assert result.unreachable_urls == [URL]
     assert rows_with_hash(db) == []
@@ -162,7 +162,7 @@ def test_a_too_large_page_records_no_hash(db: Path) -> None:
     def too_big(url: str) -> str:
         raise TooLarge(url)
 
-    result = snapshot(db, zotero=_Stamper(), hasher=too_big, now="NOW")
+    result = snapshot(db, zotero=_Stamper(), hasher=too_big, clock=lambda: "NOW")
 
     assert result.too_large_urls == [URL]
     assert rows_with_hash(db) == []
@@ -193,7 +193,7 @@ def test_a_dry_run_fetches_nothing(db: Path) -> None:
     def _unreachable(url: str) -> str:
         raise AssertionError("a dry run must not fetch")
 
-    result = snapshot(db, zotero=None, hasher=_unreachable, now="NOW", dry_run=True)
+    result = snapshot(db, zotero=None, hasher=_unreachable, clock=lambda: "NOW", dry_run=True)
 
     assert result.would_hash == 1
     assert rows_with_hash(db) == []
@@ -349,3 +349,72 @@ def test_delete_item_reports_whether_the_item_was_there() -> None:
         transport=httpx.MockTransport(lambda req: httpx.Response(404)),
     )
     assert gone.delete_item("GHOST") is False
+
+
+# --- when the page was read -------------------------------------------------
+#
+# Found 2026-08-27 by looking at the live index mid-run: 1348 rows shared ONE
+# `hashed_at`. `snapshot` took `now: str` and threaded it through every row, so
+# every page in a pass carried the timestamp the pass STARTED. A full run over
+# this corpus takes hours, and `set_content_hash` documents the field as "what
+# the page said, and when it was read" — a signature promising a per-page fact
+# while the caller handed it a batch constant.
+#
+# Every test above injects a CONSTANT clock, which is exactly why none of them
+# could catch it: a batch constant and a per-page clock are indistinguishable
+# when the clock never moves.
+
+
+class _Ticking:
+    """A clock that moves, and counts how often it was asked."""
+
+    def __init__(self) -> None:
+        self.reads = 0
+
+    def __call__(self) -> str:
+        self.reads += 1
+        return f"T{self.reads}"
+
+
+def test_each_page_is_stamped_when_it_was_read(db: Path) -> None:
+    """THE property. Two pages hashed in one pass must not share a timestamp."""
+    from datetime import date
+
+    insert_url(db, "https://fixturehost.org/a", "KEY1", date(2026, 5, 5))
+    insert_url(db, "https://fixturehost.org/b", "KEY2", date(2026, 5, 6))
+
+    result = snapshot(db, zotero=_Stamper(), hasher=lambda url: DIGEST, clock=_Ticking())
+
+    assert result.hashed == 2
+    stamps = {r["hashed_at"] for r in rows_with_hash(db)}
+    assert len(stamps) == 2, f"both pages carry one timestamp: {stamps}"
+
+
+def test_the_clock_is_read_once_per_page_not_once_per_run(db: Path) -> None:
+    from datetime import date
+
+    for i, key in enumerate(("KEY1", "KEY2", "KEY3")):
+        insert_url(db, f"https://fixturehost.org/{i}", key, date(2026, 5, 5))
+    clock = _Ticking()
+
+    snapshot(db, zotero=_Stamper(), hasher=lambda url: DIGEST, clock=clock)
+
+    assert clock.reads == 3
+
+
+def test_a_page_that_could_not_be_read_consumes_no_timestamp(db: Path) -> None:
+    """Positive control on the count above. A timestamp is a record that a page
+    WAS read; spending one on a fetch that failed would make the clock's reading
+    meaningless as evidence."""
+    from datetime import date
+
+    insert_url(db, URL, "KEY1", date(2026, 5, 5))
+    clock = _Ticking()
+
+    def boom(url: str) -> str:
+        raise RuntimeError("dead link")
+
+    result = snapshot(db, zotero=_Stamper(), hasher=boom, clock=clock)
+
+    assert result.unreachable == 1
+    assert clock.reads == 0

@@ -58,7 +58,10 @@ def main() -> int:
 
     config = load_config()
     db_path = config.db_path
-    now = datetime.now(timezone.utc).isoformat()
+    # Read per page inside the loop: `hashed_at` is when THAT page was read,
+    # and a run over the whole corpus takes hours.
+    def clock() -> str:
+        return datetime.now(timezone.utc).isoformat()
 
     with build_fetch_client(timeout=FETCH_TIMEOUT_S) as http:
 
@@ -78,7 +81,7 @@ def main() -> int:
                     db_path,
                     zotero=None,
                     hasher=hasher,
-                    now=now,
+                    clock=clock,
                     dry_run=True,
                     limit=args.limit,
                 ),
@@ -89,7 +92,7 @@ def main() -> int:
 
         with build_client(config, timeout=ZOTERO_TIMEOUT_S) as zotero:
             result = snapshot(
-                db_path, zotero=zotero, hasher=hasher, now=now, limit=args.limit
+                db_path, zotero=zotero, hasher=hasher, clock=clock, limit=args.limit
             )
 
     for line in format_snapshot_report(result, dry_run=False):

@@ -95,11 +95,24 @@ def snapshot(
     *,
     zotero,
     hasher: Callable[[str], str],
-    now: str,
+    clock: Callable[[], str],
     dry_run: bool = False,
     limit: int | None = None,
 ) -> SnapshotResult:
-    """Hash every completed row that has never been hashed."""
+    """Hash every completed row that has never been hashed.
+
+    `clock` is read once per page rather than once per run, because `hashed_at`
+    records WHEN THE PAGE WAS READ and that is a fact about the fetch, not about
+    the batch it happened to be in. A single timestamp threaded through the whole
+    loop was wrong by up to the length of the run: a full pass over this corpus
+    takes hours, so a page read at the end was stamped with the hour it started.
+    A provenance timestamp that is confidently wrong is worse than a coarse one,
+    because nothing downstream can tell.
+
+    It is sampled immediately after the fetch returns, not after the Zotero
+    stamp: the stamp is a separate round trip and its latency is not part of when
+    the page was read.
+    """
     result = SnapshotResult()
     for row in rows_needing_hash(db_path, limit=limit):
         url = row["url_canonical"]
@@ -109,6 +122,7 @@ def snapshot(
             continue
         try:
             digest = hasher(url)
+            read_at = clock()
         except TooLarge:
             logger.info("%s is larger than the hash cap; not recording a hash", url)
             result.too_large += 1
@@ -128,7 +142,7 @@ def snapshot(
             result.stamp_refused += 1
             result.stamp_refused_urls.append(url)
             continue
-        set_content_hash(db_path, url, content_hash=digest, hashed_at=now)
+        set_content_hash(db_path, url, content_hash=digest, hashed_at=read_at)
         result.hashed += 1
         result.hashed_urls.append(url)
     return result
