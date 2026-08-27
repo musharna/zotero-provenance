@@ -361,7 +361,10 @@ class ZoteroClient:
         data = body.get("data", {})
         # See trash_item: the decision was made on a snapshot, and rewriting an
         # item that has since become something else is not a repair.
-        if expect_url is not None and (data.get("url") or "").strip() != expect_url.strip():
+        if (
+            expect_url is not None
+            and (data.get("url") or "").strip() != expect_url.strip()
+        ):
             logger.warning(
                 "refusing to rewrite %s: selected as %r but it is now %r",
                 item_key,
@@ -386,6 +389,70 @@ class ZoteroClient:
         if resp.status_code != 204:
             raise ZoteroError(
                 f"PATCH /items/{item_key} (url) failed: {resp.status_code} {resp.text}"
+            )
+        return True
+
+    EXTRA_HASH_PREFIX = "Content-SHA256:"
+
+    def record_content_hash(
+        self, item_key: str, digest: str, *, expect_url: str | None = None
+    ) -> bool:
+        """Write the content hash onto the item's `extra` field.
+
+        `extra` because the live API says so: `webpage` has no `archive` or
+        `archiveLocation` field. That was checked against
+        `/itemTypeFields?itemType=webpage` rather than assumed -- the obvious
+        guess would have been wrong, and the write would have been silently
+        dropped by Zotero.
+
+        Other `extra` lines are preserved and only a previous hash line is
+        replaced. `extra` is a field people put their own notes in, and a
+        provenance tool that eats them is not one anybody keeps using.
+        """
+        resp = self._client.get(f"/items/{item_key}")
+        if resp.status_code == 404:
+            return False
+        if resp.status_code >= 400:
+            raise ZoteroError(
+                f"GET /items/{item_key} failed: {resp.status_code} {resp.text}"
+            )
+        body = resp.json()
+        version = resp.headers.get("Last-Modified-Version") or str(
+            body.get("version", 0)
+        )
+        data = body.get("data", {})
+        # Same reasoning as trash_item and update_url: the row was selected on a
+        # snapshot, and an item that has since become something else is not the
+        # item whose content was hashed.
+        if (
+            expect_url is not None
+            and (data.get("url") or "").strip() != expect_url.strip()
+        ):
+            logger.warning(
+                "refusing to stamp %s: selected as %r but it is now %r",
+                item_key,
+                expect_url,
+                data.get("url"),
+            )
+            return False
+
+        kept = [
+            line
+            for line in (data.get("extra") or "").splitlines()
+            if not line.strip().startswith(self.EXTRA_HASH_PREFIX)
+        ]
+        kept.append(f"{self.EXTRA_HASH_PREFIX} {digest}")
+        resp = self._client.patch(
+            f"/items/{item_key}",
+            json={"extra": "\n".join(kept)},
+            headers={"If-Unmodified-Since-Version": version},
+        )
+        if resp.status_code == 404:
+            return False
+        if resp.status_code != 204:
+            raise ZoteroError(
+                f"PATCH /items/{item_key} (extra) failed: "
+                f"{resp.status_code} {resp.text}"
             )
         return True
 
@@ -445,13 +512,22 @@ class ZoteroClient:
             )
         return True
 
-    def delete_item(self, item_key: str) -> None:
+    def delete_item(self, item_key: str) -> bool:
+        """Permanently delete an item. True if it was there, False if already gone.
+
+        The signature said `-> None` while returning False on both 404 paths, so
+        success and already-gone were both falsy and indistinguishable to any
+        caller that checked. Nothing checks today — `zotero_setup` ignores the
+        result — which is exactly why it was worth correcting before something
+        did: `if not client.delete_item(k)` would have read a successful delete
+        as a failure. Round 8 fixed this same shape elsewhere.
+
+        The comment here previously described rewriting a SQLite row and
+        counting a repair, which is `update_url`'s story; it had been copied
+        wholesale into a method that deletes.
+        """
         resp = self._client.get(f"/items/{item_key}")
         if resp.status_code == 404:
-            # NOT success. Returning None here read as "done" to repair, which
-            # then rewrote its SQLite row and counted a rewrite for an item that
-            # does not exist — an index entry claiming a corrected URL with
-            # nothing behind it.
             return False
         if resp.status_code >= 400:
             raise ZoteroError(
@@ -471,6 +547,7 @@ class ZoteroClient:
             raise ZoteroError(
                 f"DELETE /items/{item_key} failed: {resp.status_code} {resp.text}"
             )
+        return True
 
 
 def _title_is_real(data: dict[str, Any]) -> bool:

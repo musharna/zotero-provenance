@@ -58,6 +58,33 @@ At most three re-fetches are attempted per capture run, so a message citing many
 unfetchable URLs cannot blow the Stop hook's time budget. The rest are retried on
 later runs.
 
+### Proving a page still says what it said
+
+A captured item is a URL and a title. If the page is edited, paywalled or taken down,
+nothing in the library shows what was actually consulted — which is the one job a
+provenance record has.
+
+```
+python3 scripts/snapshot_pages.py --dry-run   # how many items lack a hash
+python3 scripts/snapshot_pages.py             # hash them
+python3 scripts/snapshot_pages.py --verify    # what has changed since
+```
+
+The hash is stored in the index and stamped onto the Zotero item's `extra` field as
+`Content-SHA256: …` — `extra` because the live API says `webpage` has no `archive` or
+`archiveLocation` field. Other `extra` lines are preserved.
+
+Two things worth knowing. **The hash covers the complete document or it is not
+recorded**: a page over 5 MB is reported and skipped rather than hashed to its first few
+megabytes, because a prefix hash compares equal for two long documents that differ after
+the cap — a false negative in exactly the case the hash exists to catch. And **a verify
+pass never rewrites a stored hash**: that hash is the evidence of what was consulted, and
+replacing it with what the page says today would destroy the finding at the moment it was
+made.
+
+This runs unattended, never from the Stop hook. Hashing means reading the whole document,
+and the hook's budget is why the title fetch stops at `</title>` after one second.
+
 ## Install
 
 ```
@@ -297,7 +324,7 @@ loud failure rather than a clean-looking run.
 predate it — a release cannot fix a root that already exists — and `--verify`
 proves forwarding by behaviour rather than by grep.
 
-732 tests run by default and need no network. The 10 live ones are opted _into_
+750 tests run by default and need no network. The 10 live ones are opted _into_
 with `-m live` rather than out of — `addopts = -m "not live"` is set, because
 they used to run on a bare `pytest -q` and reach the internet despite this
 section promising otherwise. The hook tests execute the real shell scripts as

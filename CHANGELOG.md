@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.29.0 — 2026-08-27
+
+Wave 4: a captured item stops being just a URL and a title.
+
+- **What the page said when it was read is now recorded.** If a page is edited,
+  paywalled or taken down, nothing in the library could show what was actually
+  consulted — the one job a provenance record has. A hash does not preserve the
+  content, but it turns "this citation might have said anything" into "this
+  citation no longer says what it said", which is the difference between a
+  reference you can defend and one you can only hope about.
+
+- **The hash covers the COMPLETE document or it is not recorded.** A page over
+  5 MB is reported and skipped rather than hashed to its first few megabytes. A
+  prefix hash compares equal for two long documents that differ after the cap —
+  a false negative in precisely the case the hash exists to catch, a long page
+  quietly edited near the end.
+
+- **A verify pass never rewrites a stored hash.** The stored hash is the
+  evidence of what was consulted; replacing it with what the page says today
+  would destroy the finding at the moment it was made.
+
+- **`extra`, because the live API says so.** `webpage` has no `archive` or
+  `archiveLocation` field — checked against `/itemTypeFields?itemType=webpage`
+  rather than assumed, and the obvious guess would have been silently dropped by
+  Zotero. Other `extra` lines are preserved: it is a field people keep their own
+  notes in, and a provenance tool that eats them is not one anybody keeps using.
+
+- **Unattended, never from the Stop hook.** `fetch_title` deliberately stops
+  reading at `</title>`, so there is no full body lying around to hash for free,
+  and getting one means reading the whole document. The hook's budget is the
+  reason the title fetch is capped at a second in the first place.
+
+- **The index is written only after the item is stamped.** Reversed, a refused
+  stamp would leave the index claiming a hash that appears nowhere in the
+  library, and the next pass would skip the row for having one — a row
+  permanently marked done that was never done.
+
+- **Incidental find: `delete_item` had a signature that lied.** Annotated
+  `-> None` while returning `False` on both 404 paths, so a successful delete
+  and an already-gone item were both falsy and indistinguishable to any caller
+  that checked. Nothing checks today — `zotero_setup` ignores the result — which
+  is exactly why it was worth correcting before something did. Its comment
+  described rewriting a SQLite row and counting a repair, which is `update_url`'s
+  story, copied wholesale into a method that deletes. Round 8 fixed this same
+  shape elsewhere; this is the second instance.
+
+- Eighteen tests, three mutations watched failing: hashing a prefix instead of
+  refusing, letting verify overwrite the stored hash, and writing the index
+  before the stamp.
+
 ## 0.28.0 — 2026-08-27
 
 Wave 3: the durability floor. A failed Zotero write is no longer lost.
