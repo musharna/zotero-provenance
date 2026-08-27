@@ -58,9 +58,7 @@ IPV6_URL_RE = re.compile(
 
 # Kept for callers and tests that still ask "what shape is a URL": it is no
 # longer the tokenizer.
-URL_RE = re.compile(
-    rf"{IPV6_URL_RE.pattern}|https?://[{_URL_CHARS}]+", re.IGNORECASE
-)
+URL_RE = re.compile(rf"{IPV6_URL_RE.pattern}|https?://[{_URL_CHARS}]+", re.IGNORECASE)
 
 # Terminal output pasted into a message carries escape sequences, and they are
 # not URL data: "https://example.org/a\x1b[31mcontinued" is one address wearing a
@@ -88,8 +86,14 @@ _LINKIFY.set({"fuzzy_link": False, "fuzzy_email": False, "fuzzy_ip": False})
 # in front of the match. An unmatched quote or bracket proves nothing, which is
 # why the previous unconditional closer list mis-handled
 # "https://example.org/path}suffix".
-_QUOTE_PAIRS = {"'": "'", '"': '"', "\u2018": "\u2019", "\u201c": "\u201d",
-                "\u00ab": "\u00bb", "\u300c": "\u300d"}
+_QUOTE_PAIRS = {
+    "'": "'",
+    '"': '"',
+    "\u2018": "\u2019",
+    "\u201c": "\u201d",
+    "\u00ab": "\u00bb",
+    "\u300c": "\u300d",
+}
 
 # A brace never appears unencoded in a real address; it means a template. Such a
 # row can never resolve, and — worse — cutting it at the brace manufactures a
@@ -105,9 +109,7 @@ _UNCITED_INLINE = frozenset({"code_inline"})
 
 # href from a raw HTML anchor. Deliberately narrow: only <a href=...>, only
 # quoted, because a bare attribute value has no reliable end in a fragment.
-_HTML_HREF_RE = re.compile(
-    r"""<a\s[^>]*?href\s*=\s*["']([^"']+)["']""", re.IGNORECASE
-)
+_HTML_HREF_RE = re.compile(r"""<a\s[^>]*?href\s*=\s*["']([^"']+)["']""", re.IGNORECASE)
 
 # This plugin's own reports list URLs it already holds, and the Stop hook reads
 # Claude's output — so displaying a report re-captured everything in it, stamping
@@ -539,6 +541,11 @@ def _is_real_hostname(host: str) -> bool:
     return True
 
 
+# A DOI is a registrant prefix "10." plus four or more digits, then "/", then a
+# suffix that must not be empty. Anything else on doi.org names no document.
+DOI_PATH_RE = re.compile(r"^10\.\d{4,9}/\S+$")
+
+
 def _is_asset_path(path: str) -> bool:
     """True when the path points at an asset rather than a page.
 
@@ -548,6 +555,25 @@ def _is_asset_path(path: str) -> bool:
     if PAGE_PATH_RE.search(path):
         return False
     return path.lower().endswith(ASSET_EXTENSIONS)
+
+
+def _is_malformed_doi(host: str, path: str) -> bool:
+    """A doi.org URL whose path is not a DOI identifies no document.
+
+    The live library held four: `10.1/ABC` and `10.x` (placeholders someone
+    typed in prose), `GSE12345` (a GEO accession given a doi.org prefix by
+    mistake), and a bare `…` — an ellipsis the extractor lifted out of truncated
+    text and stored as a source.
+
+    The syntax is the whole check and it is not a guess: a DOI is a registrant
+    prefix `10.` followed by four or more digits, then `/`, then a suffix. This
+    rejects only strings that cannot be a DOI at all, so it never has to ask
+    whether a well-formed one resolves — `doi.org` answers that, and a valid DOI
+    that 404s is a dead source rather than a malformed one.
+    """
+    if host not in ("doi.org", "dx.doi.org"):
+        return False
+    return not DOI_PATH_RE.match((path or "").lstrip("/"))
 
 
 def is_excluded(url: str) -> bool:
@@ -563,6 +589,8 @@ def is_excluded(url: str) -> bool:
     if _is_reserved_name(host):
         return True
     if _is_asset_path(parts.path or ""):
+        return True
+    if _is_malformed_doi(host, parts.path or ""):
         return True
     ip = parse_ip_literal(host)
     if ip is None:
