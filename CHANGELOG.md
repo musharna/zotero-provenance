@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.34.0 — 2026-08-27
+
+`hashed_at` recorded when the RUN started, not when the page was read.
+
+- **Found by looking at the live index during the first real hashing pass**, not
+  by review: 1348 rows shared a single `hashed_at`. `snapshot` took `now: str`
+  and threaded that one value through every row, so every page in a pass carried
+  the timestamp the pass began. A full run over this corpus takes hours; a page
+  read at the end was stamped with the hour it started.
+
+  `set_content_hash` documents the field as "what the page said, **and when it
+  was read**". The signature promised a per-page fact and the caller handed it a
+  batch constant — the same shape as the `-> None` that returned `False` in round
+  8. A provenance timestamp that is confidently wrong is worse than a coarse one,
+  because nothing downstream can tell.
+
+- **`now: str` is gone, replaced by a `clock` callable read once per page.**
+  Removing the parameter removes the mechanism: there is no longer a value that
+  *could* be threaded through the loop. Tests keep their determinism by injecting
+  a fixed clock, which is what made the bug invisible — every existing test
+  passed a CONSTANT, and a batch constant is indistinguishable from a per-page
+  clock when the clock never moves.
+
+- **Sampled after the fetch returns, not before**, so a dead link spends no
+  timestamp: a `hashed_at` is a record that a page *was* read. Asserted with a
+  counting clock, and mutation-tested in both directions.
+
+- Rows hashed before this fix carry the start time of their run rather than their
+  own read time — wrong by up to the run's length. The hashes themselves are
+  correct; only the reading time is coarse, and re-fetching thousands of pages to
+  sharpen a timestamp is not worth the traffic.
+
 ## 0.33.0 — 2026-08-27
 
 The exclusion rules lived in two copies, and the cleanup tools held the stale one.
