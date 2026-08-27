@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.30.0 — 2026-08-27
+
+Wave 5: where a maintenance run got to, and what it destroyed on the way. The
+gap turned out to be narrower than "there is no journal" and worse in one place
+than expected.
+
+- **`repair` overwrote a URL with no record of what it was.** This is the find.
+  A rewrite changes the Zotero item's URL _and_ the index row, and the previous
+  address was recorded nowhere on disk — not in a trash, not in a journal. It
+  existed only in the in-memory plan and on stdout. A trashed item sits in
+  Zotero's trash and a retired row sits in the retire journal, so a human who
+  disagrees can undo those; an overwritten URL simply could not be recovered.
+  Every rewrite now journals the URL it is about to replace, before it replaces
+  it.
+
+- **`retire` already journalled; `prune`, `repair` and `backfill` did not.**
+  Worth stating precisely rather than as "nothing journals". Prune's items land
+  in Zotero's trash and are recoverable, but "which of these did that run put
+  here" was unanswerable — which is the question you have when a pass surprises
+  you.
+
+- **No run of any kind marked its own start or finish**, so an interrupted pass
+  left no way to ask where it stopped. The counts printed at the end were the
+  only record, and an interrupted run never prints them.
+
+- **A run whose body raises still finishes.** The end record is written with the
+  exception named, because a run that died IS finished. Only a process that
+  never reached its handlers — SIGKILL, a power cut — leaves an open run. Without
+  that distinction every ordinary failure would be reported forever as an
+  unexplained interruption, which is exactly the noise 0.15.0–0.18.0 kept having
+  to cut back out of the health check.
+
+- **The health check names an unfinished run**, its command, its step count and
+  the last thing it touched. Same reasoning as the retry queue in 0.28.0: the
+  surest way to have a record nobody acts on is to keep one nobody is told about.
+
+- Append-only JSONL, fsynced per line — a journal that buffers loses precisely
+  the tail you needed, the steps closest to the interruption. A torn final line
+  is skipped rather than making the whole journal unreadable, because a torn
+  write is what an interruption looks like.
+
+- Nine tests, two mutations watched failing: dropping the end record, and
+  dropping the before-state from a repair.
+
 ## 0.29.0 — 2026-08-27
 
 Wave 4: a captured item stops being just a URL and a title.

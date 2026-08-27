@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from zotero_capture.backfill import backfill  # noqa: E402
 from zotero_capture.cli import build_client  # noqa: E402
 from zotero_capture.config import load_config  # noqa: E402
+from zotero_capture.opjournal import OperationJournal  # noqa: E402
 from zotero_capture.prune import format_prune_report, prune  # noqa: E402
 from zotero_capture.title_fetcher import (  # noqa: E402
     build_fetch_client,
@@ -122,7 +123,15 @@ def main() -> int:
 def _run_prune(config, *, dry_run: bool, limit: int | None, sleep_s: float) -> int:
     """Sweep the exclusion rules back over items captured before they existed."""
     with build_client(config, timeout=ZOTERO_TIMEOUT_S) as zotero:
-        result = prune(zotero, dry_run=dry_run, limit=limit, sleep_s=sleep_s)
+        if dry_run:
+            result = prune(zotero, dry_run=True, limit=limit, sleep_s=sleep_s)
+        else:
+            # Journalled only when it writes. A dry run destroys nothing, and a
+            # journal of runs that changed nothing buries the ones that did.
+            with OperationJournal(
+                config.db_path, "prune", args=f"limit={limit}"
+            ) as journal:
+                result = prune(zotero, limit=limit, sleep_s=sleep_s, journal=journal)
 
     for line in format_prune_report(result, dry_run=dry_run):
         print(line)

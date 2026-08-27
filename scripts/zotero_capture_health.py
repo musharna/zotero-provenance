@@ -29,6 +29,7 @@ from zotero_capture.health_ledger import (  # noqa: E402
     open_incident,
     open_incidents,
 )
+from zotero_capture.opjournal import unfinished_operations  # noqa: E402
 from zotero_capture.registry import resolve_pinned  # noqa: E402
 from zotero_capture.sqlite_cache import retry_queue_depth  # noqa: E402
 
@@ -233,6 +234,17 @@ def main(argv: list[str] | None = None) -> int:
         warnings.append(
             f"{depth} capture(s) failed and are queued for retry — "
             f"run `python3 scripts/drain_queue.py --dry-run` to see them"
+        )
+
+    # A run that started and never ended could not run its handlers at all --
+    # SIGKILL, a power cut. A run whose body merely raised writes its end record
+    # with the exception named, so this reports the genuinely unexplained ones
+    # rather than every failure.
+    for op in unfinished_operations(state / "url_index.db"):
+        warnings.append(
+            f"a `{op['command']}` run started {op['started']} never finished "
+            f"({op['steps']} step(s); last touched {op['last_target']}) — "
+            f"see {state / 'url_index.db.operations.jsonl'}"
         )
 
     if not warnings:
