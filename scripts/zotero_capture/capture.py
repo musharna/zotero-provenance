@@ -13,9 +13,11 @@ from . import __version__
 from .health_ledger import mutation_id, open_incident
 from .staleness import installed_version, stale_reason
 from .sqlite_cache import (
+    RETRY_QUEUE_MAX,
     IndexIdentityMismatch,
     bind_identity,
     drop_row,
+    enqueue_retry,
     init_db,
     new_zotero_key,
     queue_pending_tags,
@@ -238,8 +240,10 @@ def capture_message(
     # anything reconstructing a past capture) pass it as `pinned_root` and get
     # the old behaviour.
     if observe_pin is None:
+
         def observe_pin() -> str | None:
             return pinned_root
+
     # Before anything is written: is this root even allowed to write? A session
     # keeps the plugin version it resolved at its own start, and an old one
     # applies rules that have since been corrected — v0.3.0 put eight URLs into
@@ -454,6 +458,37 @@ def capture_message(
             result.errors.append(
                 CaptureFailure(url=url, code="zotero_error", message=str(e))
             )
+            # Queue it, because every other recovery path here needs the URL to
+            # be cited AGAIN: an unissued claim is released so a later run can
+            # retry, and an issued one is settled by _resolve_claim on the next
+            # citation. A source cited once, which fails once, was simply lost.
+            #
+            # The queue stores the inputs, not the write. A drain replays the
+            # URL through this same function, so it inherits the reservation and
+            # the claim resolution that already exist to answer "did that POST
+            # commit?" -- re-posting blind is how duplicates are made.
+            if not enqueue_retry(
+                db_path,
+                url_canonical=url,
+                project=project_slug,
+                context=context,
+                seen_date=today_iso,
+                error=str(e),
+                now=now.isoformat(),
+            ):
+                # Overflow is reported, never swallowed. Dropping it quietly
+                # would rebuild "logged and dropped" one level up, which is the
+                # behaviour this exists to replace.
+                result.errors.append(
+                    CaptureFailure(
+                        url=url,
+                        code="retry_queue_full",
+                        message=(
+                            f"the retry queue is full ({RETRY_QUEUE_MAX} entries); "
+                            f"this URL was dropped. Drain it to make room."
+                        ),
+                    )
+                )
         except Exception as e:
             logger.error("Unexpected error for %s: %s", url, e)
             result.errors.append(
