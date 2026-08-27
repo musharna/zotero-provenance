@@ -30,7 +30,36 @@ CREATE TABLE IF NOT EXISTS pending_tags (
     tag           TEXT NOT NULL,
     PRIMARY KEY (url_canonical, tag)
 );
+CREATE TABLE IF NOT EXISTS retry_queue (
+    url_canonical TEXT PRIMARY KEY,
+    project       TEXT NOT NULL,
+    context       TEXT,
+    seen_date     TEXT NOT NULL,
+    first_failed  TEXT NOT NULL,
+    last_failed   TEXT NOT NULL,
+    attempts      INTEGER NOT NULL DEFAULT 1,
+    last_error    TEXT NOT NULL
+);
 """
+
+# What the queue stores is deliberately NOT the write. It stores the inputs a
+# capture needs -- url, project, context, and the date the URL was actually
+# seen -- so a drain can replay the URL through `capture_message` itself rather
+# than re-issuing a POST of its own. A failed POST may or may not have
+# committed, and re-posting blind is how duplicates are made; replaying through
+# the real path inherits the reservation, the claim resolution and the dedup
+# that already exist to answer exactly that question.
+#
+# `seen_date` is stored because it is the provenance. Replaying with today's
+# date would file the source under the day the retry ran rather than the day it
+# was cited, which is the one fact the library exists to record.
+
+# A queue nothing drains grows forever, which is why there was no queue at all
+# before this. Both bounds exist so that it cannot: a full queue refuses new
+# entries loudly rather than evicting silently, and an entry that keeps failing
+# is given up on instead of being retried until the end of time.
+RETRY_QUEUE_MAX = 500
+RETRY_MAX_ATTEMPTS = 5
 
 # Added after the original table shipped, so they arrive by migration rather than
 # in SCHEMA: the deployed index already holds thousands of rows.
@@ -407,3 +436,91 @@ def update_last_seen(db_path: Path, url_canonical: str, seen: date) -> None:
         )
     if cursor.rowcount == 0:
         raise KeyError(f"url_canonical not found in cache: {url_canonical!r}")
+
+
+class RetryEntry(TypedDict):
+    url_canonical: str
+    project: str
+    context: str | None
+    seen_date: str
+    first_failed: str
+    last_failed: str
+    attempts: int
+    last_error: str
+
+
+def enqueue_retry(
+    db_path: Path,
+    *,
+    url_canonical: str,
+    project: str,
+    context: str | None,
+    seen_date: str,
+    error: str,
+    now: str,
+) -> bool:
+    """Remember a write that failed, so recovery does not need a re-citation.
+
+    Returns False when the queue is FULL and the entry was refused. The caller
+    must surface that: silently dropping the overflow would rebuild, one level
+    up, exactly the "logged and dropped" behaviour this replaces.
+
+    Re-queueing a URL already in the queue updates it in place and counts an
+    attempt rather than adding a second row, so a URL failing every day cannot
+    crowd out everything else.
+    """
+    with closing(_connect(db_path)) as conn:
+        existing = conn.execute(
+            "SELECT attempts FROM retry_queue WHERE url_canonical = ?",
+            (url_canonical,),
+        ).fetchone()
+        if existing is not None:
+            conn.execute(
+                "UPDATE retry_queue SET attempts = attempts + 1, last_failed = ?,"
+                " last_error = ? WHERE url_canonical = ?",
+                (now, error[:500], url_canonical),
+            )
+            return True
+        depth = conn.execute("SELECT COUNT(*) AS n FROM retry_queue").fetchone()["n"]
+        if depth >= RETRY_QUEUE_MAX:
+            return False
+        conn.execute(
+            "INSERT INTO retry_queue (url_canonical, project, context, seen_date,"
+            " first_failed, last_failed, attempts, last_error)"
+            " VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
+            (url_canonical, project, context, seen_date, now, now, error[:500]),
+        )
+        return True
+
+
+def retry_queue_depth(db_path: Path) -> int:
+    if not db_path.exists():
+        return 0
+    with closing(_connect(db_path)) as conn:
+        try:
+            return int(conn.execute("SELECT COUNT(*) AS n FROM retry_queue").fetchone()["n"])
+        except sqlite3.OperationalError:
+            # An index predating the table. Not an error: nothing is queued.
+            return 0
+
+
+def retry_queue_entries(db_path: Path, *, limit: int | None = None) -> list[RetryEntry]:
+    """Oldest failure first, so a drain works through the backlog in order."""
+    sql = (
+        "SELECT url_canonical, project, context, seen_date, first_failed,"
+        " last_failed, attempts, last_error FROM retry_queue"
+        " ORDER BY first_failed, url_canonical"
+    )
+    if limit is not None:
+        sql += f" LIMIT {int(limit)}"
+    with closing(_connect(db_path)) as conn:
+        return [cast(RetryEntry, dict(row)) for row in conn.execute(sql)]
+
+
+def dequeue_retry(db_path: Path, url_canonical: str) -> bool:
+    """Drop an entry. True if it was there, so a caller can tell a no-op apart."""
+    with closing(_connect(db_path)) as conn:
+        cursor = conn.execute(
+            "DELETE FROM retry_queue WHERE url_canonical = ?", (url_canonical,)
+        )
+    return cursor.rowcount == 1

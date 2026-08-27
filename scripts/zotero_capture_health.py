@@ -30,6 +30,7 @@ from zotero_capture.health_ledger import (  # noqa: E402
     open_incidents,
 )
 from zotero_capture.registry import resolve_pinned  # noqa: E402
+from zotero_capture.sqlite_cache import retry_queue_depth  # noqa: E402
 
 ACK_FILE = "health-acknowledged"
 DEFAULT_WINDOW_HOURS = 24.0
@@ -222,6 +223,18 @@ def main(argv: list[str] | None = None) -> int:
             window=_window(),
             ledger_path=ledger,
         )
+    # A queue nothing drains grows forever, and the surest way to have one is to
+    # build a queue nobody is told about. This is the telling. It is actionable
+    # and it clears itself the moment the drain runs, which is what separates it
+    # from the health-check noise 0.15.0-0.18.0 kept having to suppress: those
+    # spoke about states the operator could not act on.
+    depth = retry_queue_depth(state / "url_index.db")
+    if depth:
+        warnings.append(
+            f"{depth} capture(s) failed and are queued for retry — "
+            f"run `python3 scripts/drain_queue.py --dry-run` to see them"
+        )
+
     if not warnings:
         return 0
 

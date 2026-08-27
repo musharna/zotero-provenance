@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.28.0 — 2026-08-27
+
+Wave 3: the durability floor. A failed Zotero write is no longer lost.
+
+- **A source cited once, which failed once, used to be gone.** Capture has two
+  recovery paths and both need the URL to be cited AGAIN: an unissued claim is
+  released so a later run can retry it, and an issued one is settled by
+  `_resolve_claim` on the next citation. Neither helps a URL nobody mentions
+  twice. For a library whose entire purpose is recording what was actually
+  consulted, that loss was silent and invisible to the person relying on it.
+
+- **The queue ships with its drain and two bounds.** The README named the reason
+  there wasn't one — "a queue nothing drains cannot grow forever" — and that
+  reasoning was right, so it is answered rather than ignored. A full queue (500)
+  refuses new entries and reports `retry_queue_full` as a capture error rather
+  than evicting silently, because dropping the overflow quietly would rebuild
+  "logged and dropped" one level up. An entry that has failed 5 times is given
+  up on and named, because retrying forever is the failure a bound exists to
+  prevent and a sixth attempt from the same command will not succeed where five
+  did not.
+
+- **The drain issues no write of its own.** It replays each URL through
+  `capture_message` — the same function the Stop hook calls — so it inherits the
+  reservation, the claim resolution and the dedup that already exist to answer
+  "did that POST commit?". Re-posting blind is how duplicates are made, and a
+  test pins that a replayed URL whose first POST did commit is not posted twice.
+
+- **A recovered source keeps its original sighting date.** The queue stores the
+  capture's inputs rather than its write, `seen_date` among them. Replaying
+  under today's date would file the source under the day the retry ran instead
+  of the day it was cited, destroying the one fact the library exists to record.
+
+- **The health check names the queue depth.** The surest way to end up with a
+  queue nothing drains is to build one nobody is told about. It is actionable
+  and clears itself the moment the drain runs — which is what separates it from
+  the health-check noise 0.15.0–0.18.0 kept having to suppress, all of which
+  spoke about states the operator could do nothing about.
+
+- Seventeen tests. Three mutations were run and watched failing for their stated
+  reasons: removing the queue bound, removing the attempt limit, and dequeueing
+  an entry that had failed again.
+
 ## 0.27.0 — 2026-08-27
 
 Wave 2: cover the destructive path before building more destructive things. The

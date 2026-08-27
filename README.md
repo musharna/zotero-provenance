@@ -250,8 +250,23 @@ lookup and the connection — a rebinding attack — is not covered.
   and hooks "run wherever Claude Code runs". Every capture now records which surface it
   came from (`local`, `bridged`, `remote`), so this is a query rather than a belief.
 
-- **The retry queue is inert.** A failed Zotero write is logged and dropped, not retried.
-  Nothing is enqueued today, precisely so a queue nothing drains cannot grow forever.
+- A failed Zotero write is **queued**, not dropped. Capture's own recovery paths both
+  need the URL to be cited again, so a source cited once that failed once used to be lost
+  outright. Work the queue with:
+
+  ```
+  python3 scripts/drain_queue.py --dry-run   # what is queued
+  python3 scripts/drain_queue.py             # retry it
+  ```
+
+  The drain issues no write of its own: it replays each URL through the same capture path
+  the hook uses, under its **original sighting date**, so the reservation and claim
+  resolution that answer "did that POST commit?" answer it here too, and a recovered
+  source is filed under the day it was cited. The queue is bounded at 500 entries and
+  gives up on an entry after 5 attempts — a queue nothing drains cannot be allowed to grow
+  forever, which is why there was none before this. The session health check names the
+  depth so it cannot be forgotten.
+
 - Title lookup has a one-second budget; on timeout the item is stored with the URL as its
   title rather than delaying your session.
 
@@ -282,7 +297,7 @@ loud failure rather than a clean-looking run.
 predate it — a release cannot fix a root that already exists — and `--verify`
 proves forwarding by behaviour rather than by grep.
 
-715 tests run by default and need no network. The 10 live ones are opted _into_
+732 tests run by default and need no network. The 10 live ones are opted _into_
 with `-m live` rather than out of — `addopts = -m "not live"` is set, because
 they used to run on a bare `pytest -q` and reach the internet despite this
 section promising otherwise. The hook tests execute the real shell scripts as
