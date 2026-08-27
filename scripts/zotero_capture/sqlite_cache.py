@@ -30,6 +30,17 @@ CREATE TABLE IF NOT EXISTS pending_tags (
     tag           TEXT NOT NULL,
     PRIMARY KEY (url_canonical, tag)
 );
+CREATE TABLE IF NOT EXISTS claim_link (
+    url_canonical TEXT NOT NULL,
+    claim         TEXT NOT NULL,
+    project       TEXT NOT NULL,
+    context       TEXT NOT NULL DEFAULT '',
+    origin        TEXT NOT NULL DEFAULT '',
+    first_seen    TEXT NOT NULL,
+    last_seen     TEXT NOT NULL,
+    times_seen    INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (url_canonical, claim)
+);
 CREATE TABLE IF NOT EXISTS retry_queue (
     url_canonical TEXT PRIMARY KEY,
     project       TEXT NOT NULL,

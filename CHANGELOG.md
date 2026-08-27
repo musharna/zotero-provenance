@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.32.0 — 2026-08-27
+
+Wave 6: what a source was cited FOR, kept on this machine.
+
+- **The library could say a source was consulted, never what for.** That is the
+  question an audit of your own bibliography actually asks, six months after the
+  conversation that produced the citation, and a list of URLs cannot answer it.
+  Capture now records the sentence each URL appeared in.
+
+- **Local-only, deliberately.** Three designs were possible — a Zotero child
+  note, a short quote in `extra`, or the local index — and the difference between
+  them is privacy, not effort. The Zotero library SYNCS, so the first two push
+  fragments of conversations to a third party's servers. Local-only is also the
+  reversible one: a local row can be promoted to a note later, but a note that
+  has already synced cannot be recalled. Claim text is written to `claim_link` in
+  the sqlite index and nowhere else — not tagged, not in `extra`, not in the
+  capture log, which records only the COUNT.
+
+  The property is asserted by execution rather than by convention: `test_claims`
+  runs a real capture and checks every outbound payload for the claim text, with
+  a positive control in the same test so it cannot pass by recording nothing.
+  Made to fail first by leaking the claim into a tag.
+
+- **The extraction is deliberately dumb.** The sentence around the URL, as
+  written — no summarising, no inference, no asking a model what the claim
+  "really" was. A stored sentence can be read and judged by a person; a generated
+  paraphrase is one more thing that can be wrong about a source, filed under
+  provenance. Scanning never enters the URL's own span, or a URL's dots would
+  split it into a sentence of its own tail.
+
+- **A URL alone on a line records nothing.** Storing the bare URL back as its own
+  justification would answer the question with the question.
+
+- **Bounded, and refusing rather than evicting at the bound.** 400 characters per
+  claim (truncation is marked), 50 distinct claims per URL — repeats collapse onto
+  one row and count. At the cap new claims are refused, which is the choice the
+  retry queue already makes and for the same reason: the earliest claim is the
+  provenance, and a later mention is not a better record of it. An existing claim
+  still updates at the cap, or the bound would freeze a row's history too.
+
+- **Recorded before any network call**, so a run in which every Zotero write
+  fails still leaves a record of what was being cited. A fault in claim recording
+  is reported in `errors`, not raised: losing the primary library capture because
+  a secondary annotation failed is the worse outcome.
+
+- **`scripts/show_claims.py`** asks the questions: coverage, one URL's claims, or
+  a search across all of them. Read-only.
+
+- Claims are captured going forward only. There is no way to recover the sentence
+  around a URL cited before this existed — the conversation is not kept — and the
+  tool says so rather than reporting an empty result as if it meant something.
+
 ## 0.31.0 — 2026-08-27
 
 Wave 7: a captured DOI has to be a DOI, and it has to still stand. Both checks

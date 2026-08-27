@@ -10,6 +10,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from . import __version__
+from .claims import claim_for, record_claim
 from .health_ledger import mutation_id, open_incident
 from .staleness import installed_version, stale_reason
 from .sqlite_cache import (
@@ -65,6 +66,8 @@ class CaptureResult:
     urls_new: int = 0
     urls_recurring: int = 0
     urls_excluded: int = 0
+    # Claim links written to the LOCAL index. Never sent anywhere: see claims.py.
+    claims_recorded: int = 0
     errors: list[CaptureFailure] = field(default_factory=list)
     # Why this run wrote nothing, when the reason was a deliberate refusal
     # rather than an absence of URLs. Without it a refusal is byte-identical to
@@ -271,6 +274,10 @@ def capture_message(
     raw_urls = extract_urls(message)
     canonicals: list[str] = []
     seen_canonicals: set[str] = set()
+    # The claim is found by locating the URL AS WRITTEN, which canonicalisation
+    # has already changed by the time the list is built. First spelling wins:
+    # the first mention is the one whose sentence introduced the source.
+    raw_by_canonical: dict[str, str] = {}
     for raw in raw_urls:
         c = canonicalize(raw)
         if is_excluded(c):
@@ -280,7 +287,32 @@ def capture_message(
             continue
         seen_canonicals.add(c)
         canonicals.append(c)
+        raw_by_canonical[c] = raw
     result.urls_seen = len(canonicals)
+
+    # What each URL was cited FOR, recorded locally before any network call --
+    # this is the one part of a capture that does not depend on Zotero being
+    # reachable, and it should survive a run in which every write fails.
+    #
+    # A fault here is reported, not raised: losing the library capture (the
+    # primary record) because a secondary annotation failed is the worse
+    # outcome, and `errors` puts it in the log either way.
+    for canonical in canonicals:
+        try:
+            if record_claim(
+                db_path,
+                url_canonical=canonical,
+                claim=claim_for(message, raw_by_canonical[canonical]),
+                project=project_slug,
+                context=context or DEFAULT_CONTEXT,
+                origin=origin,
+                now=now.isoformat(),
+            ):
+                result.claims_recorded += 1
+        except Exception as e:
+            result.errors.append(
+                CaptureFailure(url=canonical, code="claim_link", message=str(e))
+            )
 
     today_iso = today.isoformat()
     seen_tag = f"seen:{today_iso}"

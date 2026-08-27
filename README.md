@@ -85,6 +85,34 @@ made.
 This runs unattended, never from the Stop hook. Hashing means reading the whole document,
 and the hook's budget is why the title fetch stops at `</title>` after one second.
 
+### What a source was cited for
+
+The library records that a source was consulted. It cannot say what *for* — which is
+what anyone auditing their own bibliography actually wants to know, six months on.
+Capture stores the sentence each URL appeared in.
+
+```
+python3 scripts/show_claims.py                      # coverage
+python3 scripts/show_claims.py --url <canonical>    # one source's claims
+python3 scripts/show_claims.py --search retraction  # search across all of them
+```
+
+**This stays on your machine.** The Zotero library syncs, and a claim is a fragment of
+a conversation, so it is stored in the local sqlite index and nowhere else: not as a
+child note, not in `extra`, not as a tag, and not in the capture log, which records only
+how many were written. That is also the reversible choice — a local row can be promoted
+to a Zotero note later, but a note that has already synced cannot be recalled. The
+property is enforced by a test that runs a real capture and inspects every outbound
+payload, not by convention.
+
+The extraction is deliberately dumb: the sentence as written, never a summary. A stored
+sentence is something you can read and judge; a paraphrase is one more thing that can be
+wrong about a source, filed under provenance. A URL alone on a line records nothing,
+because the bare URL is not a claim about anything.
+
+Claims are recorded going forward only. The sentence around a URL cited before this
+existed cannot be recovered — the conversation is not kept.
+
 ## Install
 
 ```
