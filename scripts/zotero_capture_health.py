@@ -100,36 +100,56 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(
-        "--list-incidents", action="store_true",
+        "--list-incidents",
+        action="store_true",
         help="show open integrity incidents and their ids",
     )
     mode.add_argument(
-        "--ack", nargs="+", metavar="ID",
+        "--ack",
+        nargs="+",
+        metavar="ID",
         help="resolve the named incident(s); see --list-incidents",
     )
     mode.add_argument(
-        "--ack-all", action="store_true",
+        "--ack-all",
+        action="store_true",
         help="resolve EVERY open incident, including any not shown",
     )
     parser.add_argument(
-        "--limit", type=int, default=50,
+        "--limit",
+        type=int,
+        default=50,
         help="how many incidents to list (the remainder is counted, not hidden)",
     )
     return parser.parse_args(argv)
 
 
 def _migrate_legacy(state: Path, ledger: Path, pinned: str | None) -> None:
-    """Import incidents proven by pre-0.19 records, once.
+    """Import incidents proven by pre-0.19 records. Replayed on every start.
 
     A 0.15-0.18 record with `root != pinned_root` and evidence of a write
     already proves an integrity incident; only its acknowledgement identity was
     missing. Rejecting it for having no id silently suppressed every open
     incident at the moment of upgrade, which is not the same as rejecting a
     record that cannot prove anything.
+
+    This used to run once, gated by a `health-migrated` marker file. The marker
+    was a second copy of a truth the ledger already holds, and the two could
+    disagree: deleting `health.db` left the marker behind, so the ledger never
+    rebuilt and any legacy incident in the log was invisible for good. On the
+    machine where that was found the marker read `0` against an absent ledger --
+    harmless only because the log genuinely held no legacy incidents, which was
+    measured rather than assumed.
+
+    Replaying is safe, and `open_incident` is where that is guaranteed rather
+    than here: `incident_id` is the PRIMARY KEY, the insert is ON CONFLICT DO
+    NOTHING, and acknowledgement UPDATEs the row instead of deleting it, so a
+    resolved incident stays resolved across any number of replays. Legacy ids
+    are derived from the record, not minted per run, which is what makes the
+    conflict fire. The marker was therefore not protecting the invariant it
+    appeared to protect -- deleting it removes state that could go stale rather
+    than adding a guard to keep it fresh.
     """
-    marker = state / "health-migrated"
-    if marker.exists():
-        return
     try:
         with _log_lines(state) as lines:
             found = incidents(lines, pinned_root=pinned, require_id=False)
@@ -143,12 +163,14 @@ def _migrate_legacy(state: Path, ledger: Path, pinned: str | None) -> None:
         found = [i for i in found if str(i["id"]).startswith("legacy:")]
         for item in found:
             open_incident(
-                ledger, incident_id=item["id"], url=item.get("url"),
-                root=item["root"], pinned_root=pinned, kind=item["kind"],
+                ledger,
+                incident_id=item["id"],
+                url=item.get("url"),
+                root=item["root"],
+                pinned_root=pinned,
+                kind=item["kind"],
                 ts=item["ts"],
             )
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text(f"{len(found)}\n")
     except OSError:
         pass
 

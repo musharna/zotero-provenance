@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.25.0 — 2026-08-27
+
+Wave 0 of the programme opened after 0.24.0: hygiene, and one defect hiding
+inside it.
+
+- **The `health-migrated` marker is gone, not guarded.** The legacy import was
+  gated to run once, ever, by a marker file beside the ledger. That is a second
+  copy of a truth the ledger already holds, and the two could disagree: delete
+  `health.db` and the marker survives, so the ledger never rebuilds and any
+  legacy incident in the log is invisible for good. On this machine the marker
+  read `0` against an absent ledger.
+
+  Replaying is safe, and `open_incident` already guaranteed it — `incident_id`
+  is the PRIMARY KEY, the insert is `ON CONFLICT DO NOTHING`, acknowledgement
+  UPDATEs the row rather than deleting it, and legacy ids are derived from the
+  record rather than minted per run. Its docstring says so outright: "the log it
+  came from is replayed on every start." The marker was contradicting the
+  invariant it appeared to protect. Removing it deletes state that could go
+  stale instead of adding a guard to keep it fresh — the shape round 8 punished
+  twice.
+
+  The consequence was measured before it was called harmless: the live log holds
+  **0** legacy incidents, so nothing was lost here. That measurement got a
+  positive control, because a detector that finds nothing looks identical to a
+  log that contains nothing — a synthetic pre-0.19 record was detected as
+  `legacy:` on the same code path.
+
+  Codex reported this in an earlier consult and it was never fixed; it was
+  re-derived independently before the transcript was found.
+
+- **Five tests, two of which failed for the stated reason first.** A deleted
+  ledger now rebuilds from the log, and a replay does not reopen an acknowledged
+  incident — the permanent-chatter failure 0.15.0 introduced and 0.16.0 had to
+  cut back. That second test passed vacuously before the fix, because the marker
+  short-circuited the second call; it only acquired teeth once the marker went.
+
+- **README drift.** It advertised 493 default tests against an actual 690, in a
+  repo whose own version guard warns that "a copy is a thing that silently
+  drifts." The `dev/` harnesses 0.24.0 shipped are now documented there too.
+
 ## 0.24.0 — 2026-08-27
 
 Two developer harnesses. Neither changes what the plugin does; both change what
