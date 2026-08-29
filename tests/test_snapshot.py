@@ -41,6 +41,7 @@ from zotero_capture.snapshot import (
 from zotero_capture.sqlite_cache import (
     init_db,
     insert_url,
+    row_for_url,
     rows_needing_hash,
     rows_with_hash,
     set_content_hash,
@@ -402,10 +403,18 @@ def test_the_clock_is_read_once_per_page_not_once_per_run(db: Path) -> None:
     assert clock.reads == 3
 
 
-def test_a_page_that_could_not_be_read_consumes_no_timestamp(db: Path) -> None:
-    """Positive control on the count above. A timestamp is a record that a page
-    WAS read; spending one on a fetch that failed would make the clock's reading
-    meaningless as evidence."""
+def test_a_page_that_could_not_be_read_spends_no_READ_timestamp(db: Path) -> None:
+    """Positive control on the count above. `hashed_at` is a record that a page
+    WAS read; spending one on a fetch that failed would make it meaningless as
+    evidence.
+
+    This test used to assert `clock.reads == 0`, which was a PROXY for that
+    property and stopped being true when a failed attempt began recording
+    `last_attempt_at` -- a fact about us, not about the page, and legitimately
+    timestamped. The proxy is replaced by the property itself, which is stronger:
+    a stored `hashed_at` would fail here even if it came from a value the loop
+    never asked the clock for.
+    """
     from datetime import date
 
     insert_url(db, URL, "KEY1", date(2026, 5, 5))
@@ -417,7 +426,13 @@ def test_a_page_that_could_not_be_read_consumes_no_timestamp(db: Path) -> None:
     result = snapshot(db, zotero=_Stamper(), hasher=boom, clock=clock)
 
     assert result.unreachable == 1
-    assert clock.reads == 0
+    row = row_for_url(db, URL)
+    assert row["hashed_at"] == "", "a failed fetch must not look like a read"
+    assert row["content_hash"] == ""
+    # The attempt IS recorded, and costs exactly one clock read -- not one per
+    # failure branch, and not the two a careless refactor would spend.
+    assert row["last_attempt_at"] == "T1"
+    assert clock.reads == 1
 
 
 # --- politeness -------------------------------------------------------------

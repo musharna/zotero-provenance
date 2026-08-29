@@ -32,7 +32,12 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from .sqlite_cache import rows_needing_hash, rows_with_hash, set_content_hash
+from .sqlite_cache import (
+    rows_needing_hash,
+    rows_with_hash,
+    set_content_hash,
+    set_fetch_outcome,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +72,44 @@ def hash_page(url: str, *, client: httpx.Client) -> str:
     return digest.hexdigest()
 
 
+# What the last read of a page ended as. Stored per row, because "could not
+# read it" was one word covering two findings that mean opposite things.
+OK = "ok"
+GONE = "gone"                    # 404/410 -- the citation no longer resolves
+BLOCKED = "blocked"              # 401/403 -- refused; the page may be perfectly fine
+RATE_LIMITED = "rate_limited"    # 429 -- back off, conclude nothing
+SERVER_ERROR = "server_error"    # 5xx -- their fault, probably transient
+TIMEOUT = "timeout"
+TOO_LARGE = "too_large"          # read fine, refused deliberately at the cap
+UNREACHABLE = "unreachable"      # DNS, connection, and anything unrecognised
+
+
+def classify_failure(exc: BaseException) -> str:
+    """What kind of failure this was, in one word the index can store.
+
+    Only 404 and 410 may become GONE. Anything unrecognised falls to UNREACHABLE
+    instead, because guessing "gone" from an error we do not understand would
+    manufacture link rot -- inventing the exact finding this tool exists to
+    report truthfully.
+    """
+    if isinstance(exc, TooLarge):
+        return TOO_LARGE
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        if code in (404, 410):
+            return GONE
+        if code in (401, 403):
+            return BLOCKED
+        if code == 429:
+            return RATE_LIMITED
+        if 500 <= code < 600:
+            return SERVER_ERROR
+        return UNREACHABLE
+    if isinstance(exc, httpx.TimeoutException):
+        return TIMEOUT
+    return UNREACHABLE
+
+
 @dataclass
 class SnapshotResult:
     examined: int = 0
@@ -75,6 +118,7 @@ class SnapshotResult:
     unreachable: int = 0
     too_large: int = 0
     stamp_refused: int = 0
+    by_outcome: dict[str, int] = field(default_factory=dict)
     # Split by outcome, per the lesson prune paid for.
     hashed_urls: list[str] = field(default_factory=list)
     unreachable_urls: list[str] = field(default_factory=list)
@@ -100,6 +144,7 @@ def snapshot(
     clock: Callable[[], str],
     dry_run: bool = False,
     limit: int | None = None,
+    include_failed: bool = False,
     sleep_s: float = 0.0,
     sleeper: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
@@ -120,7 +165,9 @@ def snapshot(
     """
     result = SnapshotResult()
     last_request: dict[str, float] = {}
-    for row in rows_needing_hash(db_path, limit=limit):
+    for row in rows_needing_hash(
+        db_path, limit=limit, include_failed=include_failed
+    ):
         url = row["url_canonical"]
         result.examined += 1
         if dry_run:
@@ -144,16 +191,27 @@ def snapshot(
         try:
             digest = hasher(url)
             read_at = clock()
-        except TooLarge:
-            logger.info("%s is larger than the hash cap; not recording a hash", url)
-            result.too_large += 1
-            result.too_large_urls.append(url)
-            continue
         except Exception as e:  # a dead link is the common case, not a fault
-            logger.info("could not read %s: %s", url, e)
-            result.unreachable += 1
-            result.unreachable_urls.append(url)
+            outcome = classify_failure(e)
+            result.by_outcome[outcome] = result.by_outcome.get(outcome, 0) + 1
+            if outcome == TOO_LARGE:
+                logger.info(
+                    "%s is larger than the hash cap; not recording a hash", url
+                )
+                result.too_large += 1
+                result.too_large_urls.append(url)
+            else:
+                logger.info("could not read %s (%s): %s", url, outcome, e)
+                result.unreachable += 1
+                result.unreachable_urls.append(url)
+            # The ATTEMPT is stamped even though the read is not. `hashed_at`
+            # stays empty because nothing was read; `last_attempt_at` records
+            # that we tried, which is what stops the next pass repeating it.
+            set_fetch_outcome(db_path, url, outcome=outcome, at=clock())
             continue
+
+        result.by_outcome[OK] = result.by_outcome.get(OK, 0) + 1
+        set_fetch_outcome(db_path, url, outcome=OK, at=read_at)
 
         # The index is written only after the item is stamped. Reversed, a
         # refused stamp would leave the index claiming a hash that appears
@@ -220,6 +278,13 @@ def format_snapshot_report(result: SnapshotResult, *, dry_run: bool) -> list[str
     lines.append(f"unreachable   : {result.unreachable}")
     lines.append(f"too large     : {result.too_large}")
     lines.append(f"stamp refused : {result.stamp_refused}")
+    # "unreachable: 1285" hides that most of it was a closed door rather than a
+    # dead citation. The split is the whole point of recording an outcome.
+    failures = {k: v for k, v in result.by_outcome.items() if k != OK}
+    if failures:
+        lines.append("why they could not be read:")
+        for outcome, n in sorted(failures.items(), key=lambda kv: -kv[1]):
+            lines.append(f"  {outcome:<14}: {n}")
     return lines
 
 

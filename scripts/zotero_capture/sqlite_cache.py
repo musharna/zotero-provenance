@@ -84,6 +84,13 @@ MIGRATIONS = (
     # you can defend and one you can only hope about.
     "ALTER TABLE url_index ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE url_index ADD COLUMN hashed_at TEXT NOT NULL DEFAULT ''",
+    # WHY a page could not be read, and when we last tried. Absence of a hash
+    # used to mean both "never attempted" and "attempted and failed", so every
+    # pass re-fetched the same dead rows forever and `--limit` never got past
+    # them. It also threw away the distinction that matters most: a 404 is a
+    # finding about the source, a 403 is a fact about us.
+    "ALTER TABLE url_index ADD COLUMN last_outcome TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE url_index ADD COLUMN last_attempt_at TEXT NOT NULL DEFAULT ''",
 )
 
 # The alphabet the Zotero API accepts for an object key: base32 without the
@@ -111,26 +118,59 @@ class URLCacheRow(TypedDict):
     claimed_at: str
 
 
+# Which index files this PROCESS has already brought up to date. Per process,
+# not per connection: the schema cannot go stale underneath a running tool, and
+# a hook that opens the index a dozen times pays for it once.
+_SCHEMA_READY: set[str] = set()
+
+
+def _apply_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript(SCHEMA)
+    for statement in MIGRATIONS:
+        try:
+            conn.execute(statement)
+        except sqlite3.OperationalError as e:
+            # Already applied. Anything else is a real problem and re-raises.
+            if "duplicate column name" not in str(e):
+                raise
+
+
 def _connect(db_path: Path) -> sqlite3.Connection:
+    """Open the index, guaranteeing it matches the schema THIS code expects.
+
+    The schema used to be brought current only by whoever remembered to call
+    `init_db`, and 2 of the 8 maintenance CLIs did. So a column added FOR a
+    maintenance tool was missing in exactly that tool: `snapshot_pages` died on
+    the live index with `no such column: last_outcome`, and would have died the
+    same way on `content_hash` since the release that added it. No test could
+    see it, because every fixture calls `init_db` first.
+
+    Writing that call into the other six scripts would be one rule kept in eight
+    places, and the ninth tool would omit it. Ensuring it HERE removes the step
+    that can be skipped: there is no way to open this index and see a stale one.
+    """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path, isolation_level=None)
     conn.row_factory = sqlite3.Row
     # Multiple Claude sessions capture concurrently into one index; wait on the
     # write lock instead of raising "database is locked" immediately.
     conn.execute("PRAGMA busy_timeout = 5000")
+    key = str(db_path)
+    if key not in _SCHEMA_READY:
+        _apply_schema(conn)
+        _SCHEMA_READY.add(key)
     return conn
 
 
 def init_db(db_path: Path) -> None:
+    """Create the index and apply every migration. Idempotent.
+
+    Kept as the explicit, named way to do this even though `_connect` now
+    guarantees it: callers that say what they mean are worth more than the one
+    redundant pass they cost.
+    """
     with closing(_connect(db_path)) as conn:
-        conn.executescript(SCHEMA)
-        for statement in MIGRATIONS:
-            try:
-                conn.execute(statement)
-            except sqlite3.OperationalError as e:
-                # Already applied. Anything else is a real problem and re-raises.
-                if "duplicate column name" not in str(e):
-                    raise
+        _apply_schema(conn)
 
 
 IDENTITY_FIELDS = ("api_origin", "library_type", "library_id", "collection_key")
@@ -559,17 +599,56 @@ def set_content_hash(
     return cursor.rowcount == 1
 
 
-def rows_needing_hash(db_path: Path, *, limit: int | None = None) -> list[dict]:
+def set_fetch_outcome(
+    db_path: Path, url_canonical: str, *, outcome: str, at: str
+) -> bool:
+    """Record WHY the last read of this page ended as it did. True if it existed.
+
+    Separate from `hashed_at`, which stays empty unless a hash was actually
+    stored: a read time is evidence the page WAS read, while an attempt time is
+    evidence only that we tried. Conflating them is what made a blocked page and
+    a dead page indistinguishable.
+    """
+    with closing(_connect(db_path)) as conn:
+        cursor = conn.execute(
+            "UPDATE url_index SET last_outcome = ?, last_attempt_at = ?"
+            " WHERE url_canonical = ?",
+            (outcome, at, url_canonical),
+        )
+    return cursor.rowcount == 1
+
+
+def row_for_url(db_path: Path, url_canonical: str) -> dict | None:
+    with closing(_connect(db_path)) as conn:
+        row = conn.execute(
+            "SELECT * FROM url_index WHERE url_canonical = ?", (url_canonical,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def rows_needing_hash(
+    db_path: Path, *, limit: int | None = None, include_failed: bool = False
+) -> list[dict]:
     """Completed rows that have never been hashed, oldest sighting first.
 
     An in-flight row (`zotero_key = ''`) is excluded: it has no item to write the
     hash onto, and the capture that owns it may still be mid-POST.
+
+    A row whose last attempt FAILED is excluded too, unless `include_failed`.
+    Without that, absence of a hash means both "never tried" and "tried and
+    failed", so a corpus with 1,285 unreadable rows re-fetches every one of them
+    on every pass and `--limit N` never advances past the first N dead links.
+
+    `ok` is deliberately not a failure: a fetch that succeeded but whose Zotero
+    stamp was refused has no hash yet and SHOULD be retried.
     """
     sql = (
         "SELECT url_canonical, zotero_key, first_seen FROM url_index"
         " WHERE content_hash = '' AND zotero_key != ''"
-        " ORDER BY first_seen, url_canonical"
     )
+    if not include_failed:
+        sql += " AND last_outcome IN ('', 'ok')"
+    sql += " ORDER BY first_seen, url_canonical"
     if limit is not None:
         sql += f" LIMIT {int(limit)}"
     with closing(_connect(db_path)) as conn:
