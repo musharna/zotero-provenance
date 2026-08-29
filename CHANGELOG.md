@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.35.0 — 2026-08-29
+
+`--sleep` said "be polite" and did nothing at all.
+
+- **The flag was parsed and never passed.** `snapshot_pages.py` declared
+  `--sleep ... help="seconds between pages (be polite)"`, and `snapshot()` had no
+  parameter to receive it. Both call sites omitted it. Every page of the first
+  1,355-row pass went out back to back at full speed, and the next 3,521 were
+  about to do the same.
+
+  Its two siblings honour theirs end to end (`prune.py`, `backfill.py`). This is
+  the same family as the `-> None` that returned `False` and the `now: str` that
+  carried a batch constant: a declared contract with nothing behind it. The
+  tell is that the defect is invisible from either end alone — the CLI looks
+  complete, and `snapshot()` looks complete.
+
+- **Swept the whole class rather than the one instance.** An AST pass over every
+  `add_argument` in `scripts/` against every attribute read in the same file:
+  35 flags across 10 scripts, exactly one dead. Measured, so the count is a
+  finding rather than an assumption — the fifth miscount on this codebase's
+  surfaces came from doing the opposite.
+
+- **The delay belongs PER HOST, not per run.** `rows_needing_hash` orders by
+  `first_seen`, and a session reading one site captures its pages within minutes,
+  so same-host rows arrive in contiguous bursts. A per-run delay is the wrong
+  shape twice over: it waits between two unrelated hosts, where waiting buys
+  nothing, and inside a burst it is the only thing standing between this tool and
+  hammering one small site. The remaining corpus spans 963 hosts — the head is
+  GitHub, doi.org and arXiv, but the tail includes small wikis with 25 rows each.
+
+- **The interval runs between request STARTS, and a failed fetch counts.** Time
+  the host already spent serving us counts toward the wait, so a slow fetch is
+  not paid for twice. A dead link and an oversized page are stamped like any
+  other request: on an old corpus a long run of failures is the likeliest way to
+  end up sprinting through one site, and `TooLarge` is raised only after the body
+  has been pulled, making it the most expensive request the host serves.
+
+- Default is 2.0s per host, off (`0.0`) in the library function so `verify` and
+  existing callers are unchanged.
+
+- **Verified against the real CLI, with a control.** Five live rows containing one
+  same-host pair: 49s at `--sleep 45`, 2s at `--sleep 0`. Without the control the
+  49s proves nothing — slow fetches look identical. Both mutants were watched
+  failing first: per-run instead of per-host trips only
+  `test_different_hosts_are_not_made_to_wait_for_each_other`, which is precisely
+  why that test exists; stamping the host on success only trips both
+  failed-fetch tests.
+
+- Known and not fixed: an unreachable row is never recorded as attempted, so it
+  is re-fetched on every pass and, under `--limit`, permanently blocks the head
+  of the queue.
+
+
 ## 0.34.0 — 2026-08-27
 
 `hashed_at` recorded when the RUN started, not when the page was read.

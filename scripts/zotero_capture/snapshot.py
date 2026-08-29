@@ -25,8 +25,10 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Callable
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -98,6 +100,9 @@ def snapshot(
     clock: Callable[[], str],
     dry_run: bool = False,
     limit: int | None = None,
+    sleep_s: float = 0.0,
+    sleeper: Callable[[float], None] = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> SnapshotResult:
     """Hash every completed row that has never been hashed.
 
@@ -114,12 +119,28 @@ def snapshot(
     the page was read.
     """
     result = SnapshotResult()
+    last_request: dict[str, float] = {}
     for row in rows_needing_hash(db_path, limit=limit):
         url = row["url_canonical"]
         result.examined += 1
         if dry_run:
             result.would_hash += 1
             continue
+
+        if sleep_s:
+            host = urlsplit(url).netloc
+            previous = last_request.get(host)
+            if previous is not None:
+                remaining = sleep_s - (monotonic() - previous)
+                if remaining > 0:
+                    sleeper(remaining)
+            # Stamped before the fetch rather than after, so the interval runs
+            # between request STARTS and the time the host already spent
+            # serving us counts toward it. Stamped unconditionally for the same
+            # reason: a dead link and an oversized page are requests the host
+            # answered, and on an old corpus a long run of failures is the
+            # likeliest way to end up sprinting through one site.
+            last_request[host] = monotonic()
         try:
             digest = hasher(url)
             read_at = clock()
