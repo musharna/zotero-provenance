@@ -418,3 +418,193 @@ def test_a_page_that_could_not_be_read_consumes_no_timestamp(db: Path) -> None:
 
     assert result.unreachable == 1
     assert clock.reads == 0
+
+
+# --- politeness -------------------------------------------------------------
+#
+# `--sleep` existed on the runner, said "be polite", and was never passed to
+# `snapshot()`, which had no parameter to receive it. Every page of the first
+# 1,355-row pass therefore went out back to back at full speed.
+#
+# The delay belongs PER HOST, not per run. `rows_needing_hash` orders by
+# `first_seen`, and a session reading one site captures its pages within
+# minutes, so same-host rows arrive in contiguous bursts. A per-run delay is
+# the wrong shape twice over: it waits between two unrelated hosts, where
+# waiting buys nothing, and inside a burst it is the only thing standing
+# between this tool and hammering one small site.
+
+
+class _FakeClock:
+    """A monotonic source that moves only when something sleeps.
+
+    Nothing else advances it, so a test that expects spacing gets the strictest
+    reading available: any gap observed came from a deliberate wait, never from
+    incidental fetch latency.
+    """
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.slept: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.slept.append(seconds)
+        self.now += seconds
+
+
+def _rows(db: Path, urls: list[str]) -> None:
+    from datetime import date
+
+    for i, url in enumerate(urls):
+        insert_url(db, url, f"KEY{i}", date(2026, 5, 5))
+
+
+def test_pages_on_one_host_are_spaced_apart(db: Path) -> None:
+    """THE property. Three pages of one site must not go out back to back."""
+    clock = _FakeClock()
+    _rows(db, [f"https://fixturehost.org/{i}" for i in range(3)])
+
+    result = snapshot(
+        db,
+        zotero=_Stamper(),
+        hasher=lambda url: DIGEST,
+        clock=lambda: "NOW",
+        sleep_s=2.0,
+        sleeper=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+
+    assert result.hashed == 3
+    # The first page waits for nothing: there is no previous request to space
+    # it from, and delaying it would only make the run longer.
+    assert clock.slept == [2.0, 2.0]
+
+
+def test_different_hosts_are_not_made_to_wait_for_each_other(db: Path) -> None:
+    """Positive control on the test above, and the reason a per-run delay is
+    wrong. A fix that simply slept between every page would satisfy the spacing
+    assertion completely while tripling the length of a 3,500-page run for no
+    politeness gain whatsoever."""
+    clock = _FakeClock()
+    _rows(db, ["https://a.example.org/x", "https://b.example.org/x"])
+
+    result = snapshot(
+        db,
+        zotero=_Stamper(),
+        hasher=lambda url: DIGEST,
+        clock=lambda: "NOW",
+        sleep_s=2.0,
+        sleeper=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+
+    assert result.hashed == 2
+    assert clock.slept == []
+
+
+def test_a_failed_fetch_still_counts_as_having_touched_the_host(db: Path) -> None:
+    """A dead link is a request the host served all the same. Recording the
+    attempt only on success would let a run of failures — the common case on an
+    old corpus — sprint through one site at full speed."""
+    clock = _FakeClock()
+    _rows(db, ["https://fixturehost.org/dead", "https://fixturehost.org/live"])
+
+    def hasher(url: str) -> str:
+        if url.endswith("/dead"):
+            raise RuntimeError("dead link")
+        return DIGEST
+
+    result = snapshot(
+        db,
+        zotero=_Stamper(),
+        hasher=hasher,
+        clock=lambda: "NOW",
+        sleep_s=2.0,
+        sleeper=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+
+    assert (result.hashed, result.unreachable) == (1, 1)
+    assert clock.slept == [2.0]
+
+
+def test_an_oversized_page_also_counts_as_having_touched_the_host(db: Path) -> None:
+    """`TooLarge` is raised after the body has been pulled, so it is the most
+    expensive request the host serves, not a free one."""
+    clock = _FakeClock()
+    _rows(db, ["https://fixturehost.org/huge", "https://fixturehost.org/live"])
+
+    def hasher(url: str) -> str:
+        if url.endswith("/huge"):
+            raise TooLarge(url)
+        return DIGEST
+
+    result = snapshot(
+        db,
+        zotero=_Stamper(),
+        hasher=hasher,
+        clock=lambda: "NOW",
+        sleep_s=2.0,
+        sleeper=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+
+    assert (result.hashed, result.too_large) == (1, 1)
+    assert clock.slept == [2.0]
+
+
+def test_politeness_is_off_by_default(db: Path) -> None:
+    """The default has to stay 0: `verify` and every existing caller reach this
+    loop without asking for a delay."""
+    clock = _FakeClock()
+    _rows(db, [f"https://fixturehost.org/{i}" for i in range(3)])
+
+    snapshot(db, zotero=_Stamper(), hasher=lambda url: DIGEST, clock=lambda: "NOW",
+             sleeper=clock.sleep, monotonic=clock.monotonic)
+
+    assert clock.slept == []
+
+
+def test_a_dry_run_never_waits(db: Path) -> None:
+    """Nothing is fetched, so there is no host to be polite to."""
+    clock = _FakeClock()
+    _rows(db, [f"https://fixturehost.org/{i}" for i in range(3)])
+
+    result = snapshot(
+        db,
+        zotero=None,
+        hasher=lambda url: DIGEST,
+        clock=lambda: "NOW",
+        dry_run=True,
+        sleep_s=2.0,
+        sleeper=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+
+    assert result.would_hash == 3
+    assert clock.slept == []
+
+
+def test_only_the_remaining_wait_is_spent(db: Path) -> None:
+    """Time already spent fetching counts toward the interval. Sleeping the full
+    amount on top of a slow fetch would double the cost of the politest case."""
+    clock = _FakeClock()
+    _rows(db, ["https://fixturehost.org/a", "https://fixturehost.org/b"])
+
+    def slow_hasher(url: str) -> str:
+        clock.now += 1.5  # the fetch itself took a second and a half
+        return DIGEST
+
+    snapshot(
+        db,
+        zotero=_Stamper(),
+        hasher=slow_hasher,
+        clock=lambda: "NOW",
+        sleep_s=2.0,
+        sleeper=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+
+    assert clock.slept == [0.5]

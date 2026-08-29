@@ -40,6 +40,10 @@ from zotero_capture.title_fetcher import build_fetch_client  # noqa: E402
 
 FETCH_TIMEOUT_S = 15.0
 ZOTERO_TIMEOUT_S = 30.0
+# Per HOST, not per page. The corpus spans ~960 hosts, so a per-run delay would
+# wait between unrelated sites for nothing while still letting a burst of pages
+# from one small site go out back to back.
+DEFAULT_SLEEP_S = 2.0
 
 
 def main() -> int:
@@ -52,7 +56,10 @@ def main() -> int:
     )
     p.add_argument("--limit", type=int, default=None, help="only the first N rows")
     p.add_argument(
-        "--sleep", type=float, default=0.0, help="seconds between pages (be polite)"
+        "--sleep",
+        type=float,
+        default=DEFAULT_SLEEP_S,
+        help="minimum seconds between two requests to the SAME host (be polite)",
     )
     args = p.parse_args()
 
@@ -84,6 +91,7 @@ def main() -> int:
                     clock=clock,
                     dry_run=True,
                     limit=args.limit,
+                    sleep_s=args.sleep,
                 ),
                 dry_run=True,
             ):
@@ -92,7 +100,12 @@ def main() -> int:
 
         with build_client(config, timeout=ZOTERO_TIMEOUT_S) as zotero:
             result = snapshot(
-                db_path, zotero=zotero, hasher=hasher, clock=clock, limit=args.limit
+                db_path,
+                zotero=zotero,
+                hasher=hasher,
+                clock=clock,
+                limit=args.limit,
+                sleep_s=args.sleep,
             )
 
     for line in format_snapshot_report(result, dry_run=False):
