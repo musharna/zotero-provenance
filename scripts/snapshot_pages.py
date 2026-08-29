@@ -56,6 +56,12 @@ def main() -> int:
     )
     p.add_argument("--limit", type=int, default=None, help="only the first N rows")
     p.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help="also re-attempt rows whose last read failed (blocked, timed out, "
+        "rate-limited); by default a recorded failure is left alone",
+    )
+    p.add_argument(
         "--sleep",
         type=float,
         default=DEFAULT_SLEEP_S,
@@ -91,6 +97,7 @@ def main() -> int:
                     clock=clock,
                     dry_run=True,
                     limit=args.limit,
+                    include_failed=args.retry_failed,
                     sleep_s=args.sleep,
                 ),
                 dry_run=True,
@@ -105,6 +112,7 @@ def main() -> int:
                 hasher=hasher,
                 clock=clock,
                 limit=args.limit,
+                include_failed=args.retry_failed,
                 sleep_s=args.sleep,
             )
 

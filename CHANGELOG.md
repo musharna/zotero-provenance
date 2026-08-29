@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.36.0 — 2026-08-29
+
+"unreachable" was one word covering two findings that mean opposite things.
+
+- **A 404 is a fact about the source; a 403 is a fact about us.** `snapshot`
+  recorded both as `unreachable`. One is the provenance finding this tool exists
+  to produce — the citation no longer resolves. The other says nothing about the
+  page at all: we were turned away at the door and it may be perfectly intact.
+  Collapsed together, the library asserts link rot that never happened.
+
+- **Measured on the live corpus before writing anything.** Of 1,285 rows the
+  full pass could not read, whole hosts had failed at exactly 100% —
+  academic.oup.com 87/87, pubmed 83/83, en.wikipedia.org 36/36,
+  sciencedirect 32/32, cell.com 17/17 — while arXiv hashed 195 of 232 and GitHub
+  420 of 663. Link rot does not cluster per-host at 100%. Probing returned 403
+  for every one of those hosts and genuine 404s for GitHub's failures.
+
+- `last_outcome` and `last_attempt_at` are now stored per row, and
+  `classify_failure` is the single definition of what a failure was:
+  `gone` (404/410), `blocked` (401/403), `rate_limited` (429), `server_error`
+  (5xx), `timeout`, `too_large`, `unreachable`. **Only 404 and 410 may become
+  `gone`** — anything unrecognised falls to `unreachable`, because guessing
+  "gone" from an error we do not understand would manufacture the exact finding
+  the tool exists to report truthfully.
+
+- **A failed attempt is now recorded as an attempt.** Absence of a hash used to
+  mean "never tried" and "tried and failed" indistinguishably, so every pass
+  re-fetched all 1,285 dead rows and `--limit N` never advanced past the first N.
+  Proven on the live index: two consecutive `--limit 5` runs examined the same
+  rows this morning; they now examine different ones. `--retry-failed` reaches
+  them again. `ok` is deliberately not a failure — a fetch that succeeded but
+  whose Zotero stamp was refused still has no hash and must be retried, which an
+  EXISTING test caught when a mutant excluded it.
+
+- `hashed_at` still stays empty on a failure. `test_a_page_that_could_not_be_read_
+  consumes_no_timestamp` asserted `clock.reads == 0`, a PROXY for that property
+  which stopped being true once an attempt was legitimately timestamped. It is
+  replaced by the property itself — `hashed_at == ''` and `content_hash == ''` —
+  which is stronger: a stored read-time now fails the test even if it came from a
+  value the loop never asked the clock for.
+
+### The schema could go stale under any tool that opened it
+
+Found by real execution, and unreachable by the suite. `snapshot_pages --limit 5`
+died on the live index with `no such column: last_outcome`.
+
+`init_db` is the only thing that applies MIGRATIONS, and **2 of the 8 maintenance
+CLIs called it**. So a column added FOR a maintenance tool was missing in exactly
+the tool that needed it — and the same crash was available on `content_hash`
+since the release that added it. Every test fixture calls `init_db` first, so no
+test could ever have seen this.
+
+Writing the call into the other six would be one rule kept in eight places, and
+the ninth tool would omit it; this codebase's three worst defects have all been a
+second copy of one rule going stale, against zero caused by a missing guard. So
+`_connect` now guarantees the schema, once per process: there is no longer a step
+that can be skipped.
+
+
 ## 0.35.0 — 2026-08-29
 
 `--sleep` said "be polite" and did nothing at all.
