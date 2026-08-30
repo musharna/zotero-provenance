@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from zotero_capture.cli import build_client  # noqa: E402
 from zotero_capture.config import ConfigError, load_config  # noqa: E402
 from zotero_capture.delta import emit_markdown, seen_dates  # noqa: E402
+from zotero_capture.logging_setup import configure_cli_logging  # noqa: E402
 
 
 def parse_window(s: str) -> int:
@@ -27,6 +28,7 @@ def parse_window(s: str) -> int:
 
 
 def main() -> int:
+    configure_cli_logging()
     p = argparse.ArgumentParser()
     p.add_argument("context_name", help="context label, e.g. 'general' or 'lit-review'")
     p.add_argument("--since", default="90d")

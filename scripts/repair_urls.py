@@ -28,6 +28,7 @@ from zotero_capture.sqlite_cache import (  # noqa: E402
     require_identity,
 )
 from zotero_capture.zotero_client import api_base  # noqa: E402
+from zotero_capture.logging_setup import configure_cli_logging  # noqa: E402
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -46,6 +47,7 @@ def _read_rows(db_path: Path) -> list[dict]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_cli_logging()
     p = argparse.ArgumentParser(prog="repair-urls")
     p.add_argument("--apply", action="store_true", help="carry out the plan")
     p.add_argument("--db-path", default=None)

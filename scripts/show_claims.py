@@ -32,9 +32,11 @@ from zotero_capture.claims import (  # noqa: E402
     search_claims,
 )
 from zotero_capture.config import load_config  # noqa: E402
+from zotero_capture.logging_setup import configure_cli_logging  # noqa: E402
 
 
 def main() -> int:
+    configure_cli_logging()
     p = argparse.ArgumentParser(prog="show-claims")
     p.add_argument("--url", default="", help="exact canonical URL to explain")
     p.add_argument("--search", default="", help="substring of a claim or URL")
