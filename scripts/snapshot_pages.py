@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -33,6 +34,7 @@ from zotero_capture.snapshot import (  # noqa: E402
     format_snapshot_report,
     format_verify_report,
     hash_page,
+    page_is_visible,
     snapshot,
     verify,
 )
@@ -69,6 +71,12 @@ def main() -> int:
         default=DEFAULT_SLEEP_S,
         help="minimum seconds between two requests to the SAME host (be polite)",
     )
+    p.add_argument(
+        "--only-outcome",
+        help="re-attempt only rows whose last read ended this way (e.g. 'gone'),"
+        " so a change to one classification can be re-run without disturbing"
+        " hosts that have nothing to do with it",
+    )
     args = p.parse_args()
 
     config = load_config()
@@ -80,8 +88,21 @@ def main() -> int:
 
     with build_fetch_client(timeout=FETCH_TIMEOUT_S) as http:
 
-        def hasher(url: str) -> str:
+        def hasher(url: str):
             return hash_page(url, client=http)
+
+        def visible(url: str) -> bool:
+            """Is this URL visible to an anonymous reader? Used only to decide
+            whether a 404 is evidence of absence -- see `absence_is_corroborated`.
+
+            Sleeps first: this is always a second request to the SAME host as the
+            one that just 404'd, so firing it immediately would break the spacing
+            the run promises. Any error other than a clean 404/410 answers False,
+            because the question is "did we SEE it", and a timeout did not.
+            """
+            if args.sleep:
+                time.sleep(args.sleep)
+            return page_is_visible(url, client=http)
 
         if args.verify:
             for line in format_verify_report(
@@ -100,6 +121,7 @@ def main() -> int:
                     dry_run=True,
                     limit=args.limit,
                     include_failed=args.retry_failed,
+                    only_outcome=args.only_outcome,
                     sleep_s=args.sleep,
                 ),
                 dry_run=True,
@@ -115,7 +137,9 @@ def main() -> int:
                 clock=clock,
                 limit=args.limit,
                 include_failed=args.retry_failed,
+                only_outcome=args.only_outcome,
                 sleep_s=args.sleep,
+                visible=visible,
             )
 
     for line in format_snapshot_report(result, dry_run=False):
