@@ -91,6 +91,20 @@ MIGRATIONS = (
     # finding about the source, a 403 is a fact about us.
     "ALTER TABLE url_index ADD COLUMN last_outcome TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE url_index ADD COLUMN last_attempt_at TEXT NOT NULL DEFAULT ''",
+    # WHICH URL produced that outcome. Not the same question as which one we
+    # asked for: 177 rows in the live index recorded `blocked` against doi.org,
+    # and doi.org had answered every one of them correctly with a 302. The 403
+    # came from academic.oup.com, one hop later, and its name appeared nowhere
+    # in the row -- so the index blamed a resolver for a refusal it did not make
+    # and hid the party that did.
+    #
+    # Empty means NEVER RECORDED, not "same as the requested URL". Those are
+    # different facts and the ~4,900 rows written before this column existed can
+    # only honestly claim the first. Reading '' as "no redirect happened" would
+    # make every legacy row assert something nobody ever checked, which is the
+    # same manufacturing-a-finding mistake as guessing `gone` from an
+    # unrecognised error.
+    "ALTER TABLE url_index ADD COLUMN final_url TEXT NOT NULL DEFAULT ''",
 )
 
 # The alphabet the Zotero API accepts for an object key: base32 without the
@@ -600,20 +614,28 @@ def set_content_hash(
 
 
 def set_fetch_outcome(
-    db_path: Path, url_canonical: str, *, outcome: str, at: str
+    db_path: Path, url_canonical: str, *, outcome: str, at: str, final_url: str
 ) -> bool:
-    """Record WHY the last read of this page ended as it did. True if it existed.
+    """Record WHY the last read of this page ended as it did, and WHERE.
 
     Separate from `hashed_at`, which stays empty unless a hash was actually
     stored: a read time is evidence the page WAS read, while an attempt time is
     evidence only that we tried. Conflating them is what made a blocked page and
     a dead page indistinguishable.
+
+    `final_url` is required rather than defaulted, and that is deliberate. Its
+    default would be '' -- the value meaning "we never found out" -- so a caller
+    that simply forgot it would write a confident "unknown" over a fact it was
+    holding at the time. This codebase has already shipped one parameter that
+    could be omitted and therefore was (`--sleep`, parsed for a whole release
+    and never passed), and the omission was invisible from either end. Making it
+    required moves that failure from runtime silence to an immediate TypeError.
     """
     with closing(_connect(db_path)) as conn:
         cursor = conn.execute(
-            "UPDATE url_index SET last_outcome = ?, last_attempt_at = ?"
-            " WHERE url_canonical = ?",
-            (outcome, at, url_canonical),
+            "UPDATE url_index SET last_outcome = ?, last_attempt_at = ?,"
+            " final_url = ? WHERE url_canonical = ?",
+            (outcome, at, final_url, url_canonical),
         )
     return cursor.rowcount == 1
 
