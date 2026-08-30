@@ -33,6 +33,7 @@ import pytest
 
 from zotero_capture.snapshot import (
     HASH_MAX_BYTES,
+    PageRead,
     TooLarge,
     hash_page,
     snapshot,
@@ -81,9 +82,24 @@ class _Stamper:
 # --- hashing ----------------------------------------------------------------
 
 
+
+def _reads(digest: str = None, *, final_url: str | None = None):
+    """A hasher stub returning what a real fetch returns: a digest AND an address.
+
+    `final_url` defaults to the URL that was asked for -- the no-redirect case --
+    so only the tests that are ABOUT redirects have to mention it.
+    """
+    def _hasher(url: str) -> PageRead:
+        return PageRead(
+            digest=DIGEST if digest is None else digest,
+            final_url=url if final_url is None else final_url,
+        )
+    return _hasher
+
+
 def test_the_hash_is_of_the_whole_body() -> None:
     with _client(BODY) as http:
-        assert hash_page(URL, client=http) == DIGEST
+        assert hash_page(URL, client=http).digest == DIGEST
 
 
 def test_a_document_over_the_cap_is_refused_rather_than_truncated() -> None:
@@ -99,7 +115,7 @@ def test_a_document_at_the_cap_is_still_hashed() -> None:
     blanket refusal to hash anything large."""
     body = b"x" * HASH_MAX_BYTES
     with _client(body) as http:
-        assert hash_page(URL, client=http) == hashlib.sha256(body).hexdigest()
+        assert hash_page(URL, client=http).digest == hashlib.sha256(body).hexdigest()
 
 
 def test_an_http_error_raises() -> None:
@@ -117,7 +133,7 @@ def test_a_hashed_row_is_recorded_and_stamped(db: Path) -> None:
     insert_url(db, URL, "KEY1", date(2026, 5, 5))
     zotero = _Stamper()
 
-    result = snapshot(db, zotero=zotero, hasher=lambda url: DIGEST, clock=lambda: "NOW")
+    result = snapshot(db, zotero=zotero, hasher=_reads(), clock=lambda: "NOW")
 
     assert result.hashed_urls == [URL]
     assert zotero.stamped == [("KEY1", DIGEST)]
@@ -134,7 +150,7 @@ def test_the_index_is_not_written_when_the_stamp_is_refused(db: Path) -> None:
     insert_url(db, URL, "KEY1", date(2026, 5, 5))
     zotero = _Stamper(accepts=False)
 
-    result = snapshot(db, zotero=zotero, hasher=lambda url: DIGEST, clock=lambda: "NOW")
+    result = snapshot(db, zotero=zotero, hasher=_reads(), clock=lambda: "NOW")
 
     assert result.stamp_refused_urls == [URL]
     assert rows_with_hash(db) == []
@@ -146,7 +162,7 @@ def test_an_unreachable_page_is_counted_not_hashed(db: Path) -> None:
 
     insert_url(db, URL, "KEY1", date(2026, 5, 5))
 
-    def boom(url: str) -> str:
+    def boom(url: str) -> PageRead:
         raise httpx.ConnectError("dead link")
 
     result = snapshot(db, zotero=_Stamper(), hasher=boom, clock=lambda: "NOW")
@@ -160,8 +176,8 @@ def test_a_too_large_page_records_no_hash(db: Path) -> None:
 
     insert_url(db, URL, "KEY1", date(2026, 5, 5))
 
-    def too_big(url: str) -> str:
-        raise TooLarge(url)
+    def too_big(url: str) -> PageRead:
+        raise TooLarge(url, final_url=url)
 
     result = snapshot(db, zotero=_Stamper(), hasher=too_big, clock=lambda: "NOW")
 
@@ -191,7 +207,7 @@ def test_a_dry_run_fetches_nothing(db: Path) -> None:
 
     insert_url(db, URL, "KEY1", date(2026, 5, 5))
 
-    def _unreachable(url: str) -> str:
+    def _unreachable(url: str) -> PageRead:
         raise AssertionError("a dry run must not fetch")
 
     result = snapshot(db, zotero=None, hasher=_unreachable, clock=lambda: "NOW", dry_run=True)
@@ -209,7 +225,7 @@ def test_a_changed_page_is_reported(db: Path) -> None:
     insert_url(db, URL, "KEY1", date(2026, 5, 5))
     set_content_hash(db, URL, content_hash=DIGEST, hashed_at="THEN")
 
-    result = verify(db, hasher=lambda url: "a-different-digest")
+    result = verify(db, hasher=_reads("a-different-digest"))
 
     assert result.changed_urls == [URL]
 
@@ -222,7 +238,7 @@ def test_an_unchanged_page_is_not_reported(db: Path) -> None:
     insert_url(db, URL, "KEY1", date(2026, 5, 5))
     set_content_hash(db, URL, content_hash=DIGEST, hashed_at="THEN")
 
-    result = verify(db, hasher=lambda url: DIGEST)
+    result = verify(db, hasher=_reads())
 
     assert result.changed_urls == [] and result.unchanged == 1
 
@@ -235,7 +251,7 @@ def test_verify_does_not_overwrite_the_stored_hash(db: Path) -> None:
     insert_url(db, URL, "KEY1", date(2026, 5, 5))
     set_content_hash(db, URL, content_hash=DIGEST, hashed_at="THEN")
 
-    verify(db, hasher=lambda url: "a-different-digest")
+    verify(db, hasher=_reads("a-different-digest"))
 
     assert rows_with_hash(db)[0]["content_hash"] == DIGEST
 
@@ -384,7 +400,7 @@ def test_each_page_is_stamped_when_it_was_read(db: Path) -> None:
     insert_url(db, "https://fixturehost.org/a", "KEY1", date(2026, 5, 5))
     insert_url(db, "https://fixturehost.org/b", "KEY2", date(2026, 5, 6))
 
-    result = snapshot(db, zotero=_Stamper(), hasher=lambda url: DIGEST, clock=_Ticking())
+    result = snapshot(db, zotero=_Stamper(), hasher=_reads(), clock=_Ticking())
 
     assert result.hashed == 2
     stamps = {r["hashed_at"] for r in rows_with_hash(db)}
@@ -398,7 +414,7 @@ def test_the_clock_is_read_once_per_page_not_once_per_run(db: Path) -> None:
         insert_url(db, f"https://fixturehost.org/{i}", key, date(2026, 5, 5))
     clock = _Ticking()
 
-    snapshot(db, zotero=_Stamper(), hasher=lambda url: DIGEST, clock=clock)
+    snapshot(db, zotero=_Stamper(), hasher=_reads(), clock=clock)
 
     assert clock.reads == 3
 
@@ -420,7 +436,7 @@ def test_a_page_that_could_not_be_read_spends_no_READ_timestamp(db: Path) -> Non
     insert_url(db, URL, "KEY1", date(2026, 5, 5))
     clock = _Ticking()
 
-    def boom(url: str) -> str:
+    def boom(url: str) -> PageRead:
         raise RuntimeError("dead link")
 
     result = snapshot(db, zotero=_Stamper(), hasher=boom, clock=clock)
@@ -484,7 +500,7 @@ def test_pages_on_one_host_are_spaced_apart(db: Path) -> None:
     result = snapshot(
         db,
         zotero=_Stamper(),
-        hasher=lambda url: DIGEST,
+        hasher=_reads(),
         clock=lambda: "NOW",
         sleep_s=2.0,
         sleeper=clock.sleep,
@@ -508,7 +524,7 @@ def test_different_hosts_are_not_made_to_wait_for_each_other(db: Path) -> None:
     result = snapshot(
         db,
         zotero=_Stamper(),
-        hasher=lambda url: DIGEST,
+        hasher=_reads(),
         clock=lambda: "NOW",
         sleep_s=2.0,
         sleeper=clock.sleep,
@@ -526,10 +542,10 @@ def test_a_failed_fetch_still_counts_as_having_touched_the_host(db: Path) -> Non
     clock = _FakeClock()
     _rows(db, ["https://fixturehost.org/dead", "https://fixturehost.org/live"])
 
-    def hasher(url: str) -> str:
+    def hasher(url: str) -> PageRead:
         if url.endswith("/dead"):
             raise RuntimeError("dead link")
-        return DIGEST
+        return PageRead(digest=DIGEST, final_url=url)
 
     result = snapshot(
         db,
@@ -551,10 +567,10 @@ def test_an_oversized_page_also_counts_as_having_touched_the_host(db: Path) -> N
     clock = _FakeClock()
     _rows(db, ["https://fixturehost.org/huge", "https://fixturehost.org/live"])
 
-    def hasher(url: str) -> str:
+    def hasher(url: str) -> PageRead:
         if url.endswith("/huge"):
-            raise TooLarge(url)
-        return DIGEST
+            raise TooLarge(url, final_url=url)
+        return PageRead(digest=DIGEST, final_url=url)
 
     result = snapshot(
         db,
@@ -576,7 +592,7 @@ def test_politeness_is_off_by_default(db: Path) -> None:
     clock = _FakeClock()
     _rows(db, [f"https://fixturehost.org/{i}" for i in range(3)])
 
-    snapshot(db, zotero=_Stamper(), hasher=lambda url: DIGEST, clock=lambda: "NOW",
+    snapshot(db, zotero=_Stamper(), hasher=_reads(), clock=lambda: "NOW",
              sleeper=clock.sleep, monotonic=clock.monotonic)
 
     assert clock.slept == []
@@ -590,7 +606,7 @@ def test_a_dry_run_never_waits(db: Path) -> None:
     result = snapshot(
         db,
         zotero=None,
-        hasher=lambda url: DIGEST,
+        hasher=_reads(),
         clock=lambda: "NOW",
         dry_run=True,
         sleep_s=2.0,
@@ -608,9 +624,9 @@ def test_only_the_remaining_wait_is_spent(db: Path) -> None:
     clock = _FakeClock()
     _rows(db, ["https://fixturehost.org/a", "https://fixturehost.org/b"])
 
-    def slow_hasher(url: str) -> str:
+    def slow_hasher(url: str) -> PageRead:
         clock.now += 1.5  # the fetch itself took a second and a half
-        return DIGEST
+        return PageRead(digest=DIGEST, final_url=url)
 
     snapshot(
         db,

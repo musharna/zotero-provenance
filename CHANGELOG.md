@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.38.0 — 2026-08-30
+
+An outcome named the URL we asked for, not the one that answered.
+
+- **177 rows recorded `blocked` against doi.org, and doi.org had done nothing
+  wrong.** Measured, not inferred: `https://doi.org/10.1093/bioinformatics/bty895`
+  answers `302` and redirects to `academic.oup.com`, which answers `403`. The
+  index stored the refusal against the resolver, whose name is the only one in
+  the row — so the library blamed a party that had behaved correctly every time
+  and never named the publishers actually refusing us. With `academic.oup.com`
+  also holding 87 rows in its own right, the real scale of a single refusing
+  host was split across two names and visible under neither.
+
+- **The cause was the fetch layer's contract, not the loop that used it.**
+  `hash_page` returned a bare digest, so the address of the page it had just
+  read was discarded at the return boundary and every caller downstream had no
+  choice but to assume the requested URL was the answering one. Fixing only the
+  failure branch — reading `exc.response.url` where the 403 arrives — would have
+  left the successful path still discarding it, and the next consumer would have
+  re-made the same assumption. `hash_page` now returns a `PageRead` carrying the
+  digest AND the URL that served it, and there is deliberately no way to get a
+  bare digest out of the module.
+
+- **`final_url` is a third state, not a second one.** Empty means *we never found
+  out*, NOT *there was no redirect*. The ~4,900 rows written before the column
+  existed never had their address checked and must not be made to claim they
+  did — the same reason an unrecognised fetch error is never allowed to become
+  `gone`.
+
+- **`set_fetch_outcome` takes `final_url` as a required argument.** Its natural
+  default would be `''`, the value meaning "unknown", so a caller that simply
+  forgot it would write a confident absence over a fact it was holding. This
+  codebase already shipped one parameter that could be omitted and therefore was
+  (`--sleep`, parsed for a release and never passed); requiring it turns that
+  failure from runtime silence into an immediate `TypeError`, which is how all
+  19 existing call sites announced themselves.
+
+- **The report attributes refusals to the host that answered.** A run now ends
+  with "who refused us", keyed after redirects. The same tally keyed by
+  requested host put doi.org on top with 177 and named no publisher at all.
+
+- **The tests drive real redirect chains through httpx.** A hand-built
+  `HTTPStatusError` would carry whatever URL the test put on it, proving only
+  that the assertion matches its own fixture; what is under test is whether
+  httpx's redirect handling and our reading of it agree. Each new test was run
+  against a mutated source and confirmed to fail for its stated reason — the
+  band-aid version (success path keeps the requested URL) is caught by exactly
+  one test, which is what makes "this is a mechanism removal" a measurement
+  rather than a claim.
+
 ## 0.37.0 — 2026-08-30
 
 The maintenance CLIs logged nothing, and their warnings did not look like warnings.

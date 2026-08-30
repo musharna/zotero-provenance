@@ -49,27 +49,89 @@ _USER_AGENT = "zotero-provenance"
 
 
 class TooLarge(Exception):
-    """The document exceeds the cap, so no honest whole-document hash exists."""
+    """The document exceeds the cap, so no honest whole-document hash exists.
+
+    Carries `final_url` because this is raised mid-stream, after the redirect
+    chain has already been resolved -- so it is one of the places that KNOWS
+    which host served the oversized document, and the only place that can say so.
+    """
+
+    def __init__(self, message: str, *, final_url: str) -> None:
+        super().__init__(message)
+        self.final_url = final_url
 
 
-def hash_page(url: str, *, client: httpx.Client) -> str:
-    """sha256 of the complete response body.
+@dataclass(frozen=True)
+class PageRead:
+    """What a fetch produced: the digest, AND the URL that actually answered.
+
+    These travel together because they are one fact. When `hash_page` returned a
+    bare digest, the address of the thing it had just read was discarded at this
+    boundary, and every caller downstream had no choice but to assume the URL it
+    requested was the URL that answered. It frequently is not: 177 rows in the
+    live index recorded `blocked` against doi.org, which had in fact answered
+    every one of them with a correct 302 -- the 403 came from the publisher it
+    redirected to, whose name the index never saw.
+
+    Returning a bare string again is the whole bug, so there is deliberately no
+    way to get one out of this module.
+    """
+
+    digest: str
+    final_url: str
+
+
+def responding_url(exc: BaseException, requested: str) -> str:
+    """Which URL produced this failure -- not necessarily the one we asked for.
+
+    Falls back to the requested URL only when the exception genuinely carries no
+    address, which is honest: a DNS failure that never reached a server has no
+    responding host, and claiming otherwise would invent one.
+
+    `request` and `response` are read through try/except rather than `getattr`
+    with a default, because on httpx they are PROPERTIES that raise RuntimeError
+    when unset -- and `getattr(exc, "request", None)` swallows only
+    AttributeError, so the RuntimeError would escape from inside the error
+    handler and turn a routine dead link into a crash.
+    """
+    final = getattr(exc, "final_url", "")
+    if final:
+        return str(final)
+    for attribute in ("response", "request"):
+        try:
+            carrier = getattr(exc, attribute)
+        except Exception:
+            continue
+        url = getattr(carrier, "url", None)
+        if url:
+            return str(url)
+    return requested
+
+
+def hash_page(url: str, *, client: httpx.Client) -> PageRead:
+    """sha256 of the complete response body, and the URL that served it.
 
     Streamed, so an enormous document is abandoned at the cap instead of being
     read into memory. The client is the SSRF-guarded one the title fetcher
     builds: this walks stored URLs unattended, which is exactly where a redirect
     into a private address would go unnoticed.
+
+    `resp.url` is read BEFORE `raise_for_status`, so the address is in hand on
+    every path out of here rather than only the successful one.
     """
     digest = hashlib.sha256()
     read = 0
     with client.stream("GET", url, headers={"User-Agent": _USER_AGENT}) as resp:
+        final_url = str(resp.url)
         resp.raise_for_status()
         for chunk in resp.iter_bytes():
             read += len(chunk)
             if read > HASH_MAX_BYTES:
-                raise TooLarge(f"{url} exceeds {HASH_MAX_BYTES} bytes")
+                raise TooLarge(
+                    f"{url} exceeds {HASH_MAX_BYTES} bytes", final_url=final_url
+                )
             digest.update(chunk)
-    return digest.hexdigest()
+    return PageRead(digest=digest.hexdigest(), final_url=final_url)
 
 
 # What the last read of a page ended as. Stored per row, because "could not
@@ -119,6 +181,11 @@ class SnapshotResult:
     too_large: int = 0
     stamp_refused: int = 0
     by_outcome: dict[str, int] = field(default_factory=dict)
+    # Which hosts actually refused us, keyed by the host that ANSWERED rather
+    # than the one the citation names. Counting by requested host reported
+    # "doi.org: 177" -- a resolver that had done its job correctly every time --
+    # and never named the publishers doing the refusing.
+    refused_by: dict[str, int] = field(default_factory=dict)
     # Split by outcome, per the lesson prune paid for.
     hashed_urls: list[str] = field(default_factory=list)
     unreachable_urls: list[str] = field(default_factory=list)
@@ -140,7 +207,7 @@ def snapshot(
     db_path,
     *,
     zotero,
-    hasher: Callable[[str], str],
+    hasher: Callable[[str], PageRead],
     clock: Callable[[], str],
     dry_run: bool = False,
     limit: int | None = None,
@@ -189,11 +256,18 @@ def snapshot(
             # likeliest way to end up sprinting through one site.
             last_request[host] = monotonic()
         try:
-            digest = hasher(url)
+            read = hasher(url)
             read_at = clock()
         except Exception as e:  # a dead link is the common case, not a fault
             outcome = classify_failure(e)
+            # WHERE the refusal came from. For a bare host this is the URL we
+            # asked for; through a resolver it is somebody else entirely, and
+            # that somebody is the finding.
+            answered_by = responding_url(e, url)
             result.by_outcome[outcome] = result.by_outcome.get(outcome, 0) + 1
+            host = urlsplit(answered_by).netloc
+            if host:
+                result.refused_by[host] = result.refused_by.get(host, 0) + 1
             if outcome == TOO_LARGE:
                 logger.info(
                     "%s is larger than the hash cap; not recording a hash", url
@@ -201,17 +275,34 @@ def snapshot(
                 result.too_large += 1
                 result.too_large_urls.append(url)
             else:
-                logger.info("could not read %s (%s): %s", url, outcome, e)
+                # The redirect is named only when there WAS one. Printing
+                # "(via itself)" on every ordinary dead link would bury the
+                # handful of lines where the distinction is the whole point.
+                if answered_by != url:
+                    logger.info(
+                        "could not read %s (%s): refused by %s: %s",
+                        url,
+                        outcome,
+                        answered_by,
+                        e,
+                    )
+                else:
+                    logger.info("could not read %s (%s): %s", url, outcome, e)
                 result.unreachable += 1
                 result.unreachable_urls.append(url)
             # The ATTEMPT is stamped even though the read is not. `hashed_at`
             # stays empty because nothing was read; `last_attempt_at` records
             # that we tried, which is what stops the next pass repeating it.
-            set_fetch_outcome(db_path, url, outcome=outcome, at=clock())
+            set_fetch_outcome(
+                db_path, url, outcome=outcome, at=clock(), final_url=answered_by
+            )
             continue
 
+        digest = read.digest
         result.by_outcome[OK] = result.by_outcome.get(OK, 0) + 1
-        set_fetch_outcome(db_path, url, outcome=OK, at=read_at)
+        set_fetch_outcome(
+            db_path, url, outcome=OK, at=read_at, final_url=read.final_url
+        )
 
         # The index is written only after the item is stamped. Reversed, a
         # refused stamp would leave the index claiming a hash that appears
@@ -230,7 +321,7 @@ def snapshot(
 def verify(
     db_path,
     *,
-    hasher: Callable[[str], str],
+    hasher: Callable[[str], PageRead],
     limit: int | None = None,
 ) -> VerifyResult:
     """Ask whether each hashed page still says what it said.
@@ -245,7 +336,7 @@ def verify(
         url = row["url_canonical"]
         result.examined += 1
         try:
-            digest = hasher(url)
+            digest = hasher(url).digest
         except Exception as e:
             logger.info("could not re-read %s: %s", url, e)
             result.unreachable += 1
@@ -285,6 +376,14 @@ def format_snapshot_report(result: SnapshotResult, *, dry_run: bool) -> list[str
         lines.append("why they could not be read:")
         for outcome, n in sorted(failures.items(), key=lambda kv: -kv[1]):
             lines.append(f"  {outcome:<14}: {n}")
+    # Attributed to the host that ANSWERED. The same tally keyed by the host the
+    # citation names put "doi.org" at the top with 177, which named a resolver
+    # that had answered correctly every time and named none of the publishers
+    # actually refusing us.
+    if result.refused_by:
+        lines.append("who refused us (the host that answered, after redirects):")
+        for host, n in sorted(result.refused_by.items(), key=lambda kv: (-kv[1], kv[0])):
+            lines.append(f"  {host:<32}: {n}")
     return lines
 
 
