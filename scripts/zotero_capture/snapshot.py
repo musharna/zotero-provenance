@@ -28,7 +28,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from typing import Callable
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -108,6 +108,26 @@ def responding_url(exc: BaseException, requested: str) -> str:
     return requested
 
 
+def page_is_visible(url: str, *, client: httpx.Client) -> bool:
+    """Can an anonymous reader see this URL at all? Not whether it hashes.
+
+    Lives beside `hash_page` and sends the SAME User-Agent deliberately. This
+    answer is only meaningful as a comparison against the fetch it corroborates,
+    and a host that varies its response by agent would make a probe under a
+    different name compare two things that were never alike. Keeping the header
+    a convention two call sites had to remember would be one rule kept in two
+    places, which is how the exclusion rules drifted apart.
+
+    Anything that is not a clean 404/410 counts as visible: the question is
+    whether we SAW it, and a timeout or a 403 did not tell us it was absent.
+    """
+    try:
+        response = client.get(url, headers={"User-Agent": _USER_AGENT})
+    except Exception:
+        return False
+    return response.status_code not in (404, 410)
+
+
 def hash_page(url: str, *, client: httpx.Client) -> PageRead:
     """sha256 of the complete response body, and the URL that served it.
 
@@ -144,6 +164,56 @@ SERVER_ERROR = "server_error"    # 5xx -- their fault, probably transient
 TIMEOUT = "timeout"
 TOO_LARGE = "too_large"          # read fine, refused deliberately at the cap
 UNREACHABLE = "unreachable"      # DNS, connection, and anything unrecognised
+# A 404 we are NOT entitled to read as absence. See `absence_is_corroborated`.
+NOT_VISIBLE = "not_visible"      # 404/410 whose whole container is also hidden
+
+
+def parent_url(url: str) -> str | None:
+    """The container one level up, or None at the root of a site.
+
+    Used to ask whether a 404 sits inside a subtree we cannot see at all.
+    """
+    parts = urlsplit(url)
+    path = parts.path.rstrip("/")
+    if "/" not in path.strip("/"):
+        # One segment or none: the parent is the site root, and a site root that
+        # answers is no evidence about a missing page beneath it -- github.com/
+        # is up for everybody.
+        return None
+    return urlunsplit((parts.scheme, parts.netloc, path.rsplit("/", 1)[0], "", ""))
+
+
+def absence_is_corroborated(url: str, *, visible: Callable[[str], bool]) -> bool:
+    """Whether a 404 here is evidence the page is GONE, or only that we cannot see it.
+
+    A status code is a fact about THIS REQUESTER's view, not about the resource.
+    We fetch with no credentials, so a 404 confounds "no longer there" with
+    "there, and not visible to you" -- and hosts deliberately answer the second
+    with the first. GitHub does exactly this for private repositories, so it does
+    not leak which ones exist; 219 rows in the live index recorded `gone` for the
+    owner's own private pull requests, every one of which returns 200 and a real
+    title to an authenticated request.
+
+    The discriminator is CONTAINMENT, and it needs no credentials and one extra
+    request. If the immediate parent is also invisible, the whole subtree is
+    hidden from us and absence cannot be claimed. If the parent answers and only
+    the leaf is missing, the leaf really is missing. Measured on both:
+
+        private repo   /musharna/orchid-sdxl/pull/3  404, parent /pull  404
+        public repo    /musharna/ghostcite/pull/99999 404, parent /pull 200
+
+    The IMMEDIATE parent, not the topmost reachable ancestor: in the private case
+    `/musharna` answers 200 (a user profile is public), so walking to the top
+    would have called it corroborated and re-made the same false claim.
+
+    A URL with no parent keeps `gone`. There is nothing left to ask, and refusing
+    to ever say `gone` for a site root would throw away the real finding to avoid
+    a rarer one.
+    """
+    parent = parent_url(url)
+    if parent is None:
+        return True
+    return visible(parent)
 
 
 def classify_failure(exc: BaseException) -> str:
@@ -221,9 +291,11 @@ def snapshot(
     dry_run: bool = False,
     limit: int | None = None,
     include_failed: bool = False,
+    only_outcome: str | None = None,
     sleep_s: float = 0.0,
     sleeper: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
+    visible: Callable[[str], bool] | None = None,
 ) -> SnapshotResult:
     """Hash every completed row that has never been hashed.
 
@@ -242,7 +314,8 @@ def snapshot(
     result = SnapshotResult()
     last_request: dict[str, float] = {}
     for row in rows_needing_hash(
-        db_path, limit=limit, include_failed=include_failed
+        db_path, limit=limit, include_failed=include_failed,
+        only_outcome=only_outcome,
     ):
         url = row["url_canonical"]
         result.examined += 1
@@ -273,6 +346,20 @@ def snapshot(
             # asked for; through a resolver it is somebody else entirely, and
             # that somebody is the finding.
             answered_by = responding_url(e, url)
+            # `gone` is the only outcome that makes a claim about the SOURCE
+            # rather than about our attempt, so it is the only one that has to be
+            # corroborated before it is written down. Without a prober the claim
+            # degrades to the weaker one that is always true -- absence is what
+            # we would be inventing, so the default must never assert it.
+            if outcome == GONE and not absence_is_corroborated(
+                answered_by,
+                # No prober means nothing can be SEEN, which is not the same as
+                # nothing to ask: a URL with no parent is decided without ever
+                # consulting this, and short-circuiting on `visible is None`
+                # downgraded those too.
+                visible=visible if visible is not None else (lambda _u: False),
+            ):
+                outcome = NOT_VISIBLE
             result.by_outcome[outcome] = result.by_outcome.get(outcome, 0) + 1
             host = urlsplit(answered_by).netloc
             if host:

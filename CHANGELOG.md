@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.39.0 — 2026-08-30
+
+A 404 to an anonymous request is not proof the page is gone.
+
+- **219 rows asserted that the owner's own private pull requests no longer
+  exist.** They exist. GitHub answers 404 rather than 403 for private
+  repositories, deliberately, so it does not leak which ones are there — and
+  `classify_failure` took the status at face value and wrote `gone`. Proven
+  three ways: unauthenticated 404; authenticated 200 with a real title and
+  `private: true`; and a genuinely public repo of the same owner returning 200
+  from the same host seconds apart, which rules out a blanket block. Since the
+  library syncs, that false claim is the version that propagates.
+
+- **The cause is that `gone` states a fact about the RESOURCE, derived from a
+  status code that is only a fact about THIS REQUESTER's view of it.** We fetch
+  with no credentials, so 404 confounds "no longer there" with "there, and not
+  visible to you". A host-specific exemption for github.com would have left
+  GitLab, Bitbucket, private wikis and every other 404-on-private host wrong.
+
+- **The discriminator is containment, and it needs no credentials.** If the
+  immediate parent is also invisible, the whole subtree is hidden and absence
+  cannot be claimed (`not_visible`). If the parent answers and only the leaf is
+  missing, the leaf really is missing (`gone`). Measured on both before it was
+  written: private `/owner/repo/pull/3` 404 with parent 404; public
+  `/owner/repo/pull/99999` 404 with parent 200. The IMMEDIATE parent, because
+  in the private case the grandparent — a user profile — answers 200, so walking
+  to the topmost reachable ancestor would have re-made the same false claim.
+
+- **Absence is never the default.** With no prober the outcome degrades to
+  `not_visible`, the weaker claim that is always true, because absence is the
+  thing we would be inventing. A URL with no parent keeps `gone`: there is
+  nothing left to ask, and refusing to say `gone` for a site root would throw
+  away the real finding to avoid a rarer one.
+
+- **`--only-outcome` re-runs a pass over just the rows a classification change
+  affects.** Correcting 306 misjudged rows would otherwise have meant re-fetching
+  all 1,400, asking academic.oup.com for 159 pages it had refused an hour
+  earlier purely as collateral. Politeness is a reason for a feature, not only a
+  delay.
+
+- **The `--sleep` defect recurred while writing this, and is now guarded.** The
+  new flag was threaded into the real `snapshot()` call and not the dry-run one,
+  so `--dry-run --only-outcome gone` silently reported the unattempted set
+  instead — 76 rows where 306 were meant. Both ends looked complete; only the gap
+  was wrong. An AST test now derives every `snapshot()` call site from the source
+  and asserts each passes the filter.
+
 ## 0.38.1 — 2026-08-30
 
 A 404 is not a refusal, and the new report said it was.

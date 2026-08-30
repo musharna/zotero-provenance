@@ -260,7 +260,10 @@ def test_a_dead_link_is_not_counted_as_a_refusal(db: Path) -> None:
 
     with _chain(status=404) as http:
         result = snapshot(
-            db, zotero=_Stamper(), hasher=_hasher(http), clock=lambda: "NOW"
+            db, zotero=_Stamper(), hasher=_hasher(http), clock=lambda: "NOW",
+            # Says out loud that this absence WAS corroborated. Without it the
+            # row is `not_visible`, which is correct and is a different test.
+            visible=lambda u: True,
         )
 
     assert result.gone_at == {"publisher.invalid": 1}

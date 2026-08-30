@@ -649,7 +649,11 @@ def row_for_url(db_path: Path, url_canonical: str) -> dict | None:
 
 
 def rows_needing_hash(
-    db_path: Path, *, limit: int | None = None, include_failed: bool = False
+    db_path: Path,
+    *,
+    limit: int | None = None,
+    include_failed: bool = False,
+    only_outcome: str | None = None,
 ) -> list[dict]:
     """Completed rows that have never been hashed, oldest sighting first.
 
@@ -663,18 +667,30 @@ def rows_needing_hash(
 
     `ok` is deliberately not a failure: a fetch that succeeded but whose Zotero
     stamp was refused has no hash yet and SHOULD be retried.
+
+    `only_outcome` narrows to rows whose last read ended a particular way, so a
+    change to how ONE outcome is decided can be re-run over just those rows.
+    Without it, correcting 306 misjudged rows meant re-fetching all 1,400 --
+    which would have asked academic.oup.com for 159 pages it had refused an hour
+    earlier, purely as collateral. Politeness is a reason for a feature, not only
+    a delay.
     """
     sql = (
         "SELECT url_canonical, zotero_key, first_seen FROM url_index"
         " WHERE content_hash = '' AND zotero_key != ''"
     )
-    if not include_failed:
+    params: list[str] = []
+    if only_outcome is not None:
+        # Parameterised, not interpolated: this reaches the CLI surface.
+        sql += " AND last_outcome = ?"
+        params.append(only_outcome)
+    elif not include_failed:
         sql += " AND last_outcome IN ('', 'ok')"
     sql += " ORDER BY first_seen, url_canonical"
     if limit is not None:
         sql += f" LIMIT {int(limit)}"
     with closing(_connect(db_path)) as conn:
-        return [dict(row) for row in conn.execute(sql)]
+        return [dict(row) for row in conn.execute(sql, params)]
 
 
 def rows_with_hash(db_path: Path, *, limit: int | None = None) -> list[dict]:
