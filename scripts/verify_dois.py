@@ -32,9 +32,11 @@ from zotero_capture.doi_gate import (  # noqa: E402
     format_gate_report,
     run_ghostcite,
 )
+from zotero_capture.logging_setup import configure_cli_logging  # noqa: E402
 
 
 def main() -> int:
+    configure_cli_logging()
     p = argparse.ArgumentParser(prog="verify-dois")
     p.add_argument("--dry-run", action="store_true", help="count, do not check")
     p.add_argument("--limit", type=int, default=None, help="only the first N DOIs")

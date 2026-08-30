@@ -21,6 +21,7 @@ import httpx  # noqa: E402
 from zotero_capture import USER_AGENT  # noqa: E402
 from zotero_capture.config import DEFAULT_SECRETS_FILE  # noqa: E402
 from zotero_capture.zotero_client import ZoteroClient  # noqa: E402
+from zotero_capture.logging_setup import configure_cli_logging  # noqa: E402
 
 API_BASE = os.environ.get("ZOTERO_API_BASE", "https://api.zotero.org").rstrip("/")
 DEFAULT_COLLECTION_NAME = "web-sources"
@@ -153,6 +154,7 @@ def choose_library(api_key: str, info: dict, requested: str | None) -> tuple[str
 
 
 def main() -> int:
+    configure_cli_logging()
     p = argparse.ArgumentParser(description="Set up zotero-provenance.")
     p.add_argument("--api-key", default=os.environ.get("ZOTERO_API_KEY"))
     p.add_argument("--library", default=None, help="library id to use, skipping the prompt")

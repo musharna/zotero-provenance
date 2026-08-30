@@ -31,6 +31,7 @@ from zotero_capture.config import _state_dir, load_config  # noqa: E402
 from zotero_capture.drain import drain, format_drain_report  # noqa: E402
 from zotero_capture.sqlite_cache import RetryEntry, retry_queue_depth  # noqa: E402
 from zotero_capture.title_fetcher import build_fetch_client, fetch_title  # noqa: E402
+from zotero_capture.logging_setup import configure_cli_logging  # noqa: E402
 
 # Unattended, like the other maintenance passes: give the slow identifier APIs
 # room to answer rather than failing them for the hook's interactive budget.
@@ -39,6 +40,7 @@ ZOTERO_TIMEOUT_S = 30.0
 
 
 def main() -> int:
+    configure_cli_logging()
     p = argparse.ArgumentParser(prog="drain-queue")
     p.add_argument(
         "--dry-run",

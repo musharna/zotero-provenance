@@ -37,6 +37,7 @@ from zotero_capture.snapshot import (  # noqa: E402
     verify,
 )
 from zotero_capture.title_fetcher import build_fetch_client  # noqa: E402
+from zotero_capture.logging_setup import configure_cli_logging  # noqa: E402
 
 FETCH_TIMEOUT_S = 15.0
 ZOTERO_TIMEOUT_S = 30.0
@@ -47,6 +48,7 @@ DEFAULT_SLEEP_S = 2.0
 
 
 def main() -> int:
+    configure_cli_logging()
     p = argparse.ArgumentParser(prog="snapshot-pages")
     p.add_argument("--dry-run", action="store_true", help="count, do not fetch")
     p.add_argument(

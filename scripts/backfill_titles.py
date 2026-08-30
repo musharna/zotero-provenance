@@ -35,6 +35,7 @@ from zotero_capture.title_fetcher import (  # noqa: E402
     build_fetch_client,
     fetch_title,
 )
+from zotero_capture.logging_setup import configure_cli_logging  # noqa: E402
 
 # The Stop hook's 1s budget exists to keep a turn snappy. This runs unattended,
 # so give slow identifier APIs room to answer instead of failing them for speed.
@@ -47,6 +48,7 @@ ZOTERO_TIMEOUT_S = 30.0
 
 
 def main() -> int:
+    configure_cli_logging()
     p = argparse.ArgumentParser(prog="backfill-titles")
     p.add_argument(
         "--dry-run",

@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.37.0 — 2026-08-30
+
+The maintenance CLIs logged nothing, and their warnings did not look like warnings.
+
+- **`snapshot_pages.py` ran for over an hour against the live index and printed
+  nothing at all.** Every `logger.info` in the package sat under a root logger
+  that no entry point had ever configured, so INFO fell below the default
+  WARNING threshold and was dropped. Measured on the live run rather than
+  inferred: 226 rows classified, 0 bytes of log. For the whole run, silence and
+  a hang were indistinguishable.
+
+- **WARNING and ERROR were worse than silent — they were unlabelled.** With no
+  handler anywhere, Python falls back to `logging.lastResort`, which writes the
+  bare message to stderr with no level, no timestamp and no logger name. In a
+  run log, `prune failed for <url>` sat among ordinary output with nothing
+  marking it as a failure.
+
+- **Fixed for all nine maintenance CLIs at once**, not in the one script that
+  exposed it. A rule kept in nine places is the rule the tenth tool omits, which
+  is how this codebase has lost a rule before. The new test *discovers* the
+  entry points rather than listing them, so a CLI added later that forgets to
+  configure logging fails the suite.
+
+- **Two paths deliberately keep the unconfigured behaviour, and the test asserts
+  that direction too.** The capture hook appends its stderr to `capture.log`, so
+  those bare lastResort lines are its human-readable diagnostic trail — the
+  textbook library fix, a `NullHandler` on the package, would have silently
+  deleted them. The SessionStart health check sends stderr to
+  `health-errors.log`, a file whose being empty is the signal. The guard asserts
+  both directions: the nine configure logging, the two do not.
+
+
 ## 0.36.0 — 2026-08-29
 
 "unreachable" was one word covering two findings that mean opposite things.
