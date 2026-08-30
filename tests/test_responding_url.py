@@ -23,6 +23,7 @@ import pytest
 
 from zotero_capture.snapshot import (
     BLOCKED,
+    GONE,
     HASH_MAX_BYTES,
     OK,
     TOO_LARGE,
@@ -233,6 +234,53 @@ def test_the_report_names_who_refused_us() -> None:
     assert "publisher.invalid" in report
 
 
+def test_a_refusal_and_a_dead_link_are_reported_separately() -> None:
+    """The first version of this report merged them and ranked github.com first
+    with 243 -- 241 of which were 404s github had served perfectly correctly.
+    Calling that "who refused us" collapses gone into blocked one level up from
+    the collapse this subsystem exists to have fixed."""
+    result = SnapshotResult(
+        examined=2,
+        by_outcome={BLOCKED: 1, GONE: 1},
+        refused_by={"publisher.invalid": 1},
+        gone_at={"code.invalid": 1},
+    )
+
+    report = "\n".join(format_snapshot_report(result, dry_run=False))
+    refused, dead = report.index("who refused us"), report.index("dead links")
+
+    # Each host under its own heading, not merely both present somewhere.
+    assert "publisher.invalid" in report[refused:dead]
+    assert "code.invalid" in report[dead:]
+    assert "code.invalid" not in report[refused:dead]
+
+
+def test_a_dead_link_is_not_counted_as_a_refusal(db: Path) -> None:
+    insert_url(db, RESOLVER, "KEY1", SEEN)
+
+    with _chain(status=404) as http:
+        result = snapshot(
+            db, zotero=_Stamper(), hasher=_hasher(http), clock=lambda: "NOW"
+        )
+
+    assert result.gone_at == {"publisher.invalid": 1}
+    assert result.refused_by == {}
+
+
+def test_a_refusal_is_not_counted_as_a_dead_link(db: Path) -> None:
+    """The other direction. One assertion alone is satisfied by a tally that is
+    simply always empty."""
+    insert_url(db, RESOLVER, "KEY1", SEEN)
+
+    with _chain(status=403) as http:
+        result = snapshot(
+            db, zotero=_Stamper(), hasher=_hasher(http), clock=lambda: "NOW"
+        )
+
+    assert result.refused_by == {"publisher.invalid": 1}
+    assert result.gone_at == {}
+
+
 def test_the_report_says_nothing_about_hosts_when_nothing_was_refused() -> None:
     """Positive control against a header that prints unconditionally: a clean
     run must not grow an empty "who refused us" section."""
@@ -243,9 +291,11 @@ def test_the_report_says_nothing_about_hosts_when_nothing_was_refused() -> None:
     assert "who refused us" not in report
 
 
-def test_a_too_large_page_is_attributed_to_its_host(db: Path) -> None:
-    """`too_large` is our decision, not the host's, but the tally still has to
-    name the host we spent the bandwidth on."""
+def test_an_oversized_page_is_charged_to_neither_host_tally(db: Path) -> None:
+    """`too_large` is OUR refusal, not the host's -- it served the document
+    fine and we declined to hash past the cap. Putting it under "who refused us"
+    would name a host for a decision we made. Its address is still recorded,
+    because that is a fact either way."""
     insert_url(db, RESOLVER, "KEY1", SEEN)
 
     with _chain(status=200, body=b"x" * (HASH_MAX_BYTES + 1)) as http:
@@ -253,6 +303,7 @@ def test_a_too_large_page_is_attributed_to_its_host(db: Path) -> None:
             db, zotero=_Stamper(), hasher=_hasher(http), clock=lambda: "NOW"
         )
 
-    assert result.refused_by == {"publisher.invalid": 1}
+    assert result.refused_by == {}
+    assert result.gone_at == {}
     assert row_for_url(db, RESOLVER)["last_outcome"] == TOO_LARGE
     assert row_for_url(db, RESOLVER)["final_url"] == PUBLISHER

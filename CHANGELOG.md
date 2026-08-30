@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.38.1 — 2026-08-30
+
+A 404 is not a refusal, and the new report said it was.
+
+- **The "who refused us" tally merged 403s with 404s, and the backfill exposed
+  it immediately.** Run over the live index, the list ranked `github.com` first
+  with 243 — of which **241 were `gone`**, dead links that github had served
+  perfectly correctly. Naming a host as having "refused us" for serving an
+  honest 404 collapses gone into blocked one level up from the collapse 0.36.0
+  exists to have fixed, and the two call for opposite remedies: ask for access,
+  versus repair or retire the citation. They are now two tallies.
+
+- **`too_large` is charged to neither.** That is US refusing — the host served
+  the document and we declined to hash past the cap. Listing it under a host's
+  name attributes our own decision to them. Its address is still recorded,
+  because where the bytes came from is a fact either way.
+
+- Both mutations are covered: merging `gone` back into the refusal tally fails
+  exactly `test_a_dead_link_is_not_counted_as_a_refusal`, and charging
+  `too_large` to a host fails exactly
+  `test_an_oversized_page_is_charged_to_neither_host_tally`. The separation is
+  asserted in both directions, because one assertion alone is satisfied by a
+  tally that is simply always empty.
+
 ## 0.38.0 — 2026-08-30
 
 An outcome named the URL we asked for, not the one that answered.

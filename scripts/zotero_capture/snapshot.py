@@ -181,11 +181,20 @@ class SnapshotResult:
     too_large: int = 0
     stamp_refused: int = 0
     by_outcome: dict[str, int] = field(default_factory=dict)
-    # Which hosts actually refused us, keyed by the host that ANSWERED rather
-    # than the one the citation names. Counting by requested host reported
-    # "doi.org: 177" -- a resolver that had done its job correctly every time --
-    # and never named the publishers doing the refusing.
-    refused_by: dict[str, int] = field(default_factory=dict)
+    # Keyed by the host that ANSWERED rather than the one the citation names.
+    # Counting by requested host reported "doi.org: 177" -- a resolver that had
+    # done its job correctly every time -- and never named the publishers doing
+    # the refusing.
+    #
+    # TWO tallies, because a closed door and an empty room are the distinction
+    # this whole subsystem exists to preserve, and the first version of this
+    # report threw it away again one level up: it put 403s and 404s in one list
+    # headed "who refused us", which ranked github.com first with 243 -- 241 of
+    # them dead links that github had served perfectly correctly. They also call
+    # for opposite actions (ask for access vs. repair or retire the citation).
+    # `too_large` appears in NEITHER: that is us refusing, not the host.
+    refused_by: dict[str, int] = field(default_factory=dict)   # 401/403, 429
+    gone_at: dict[str, int] = field(default_factory=dict)      # 404/410
     # Split by outcome, per the lesson prune paid for.
     hashed_urls: list[str] = field(default_factory=list)
     unreachable_urls: list[str] = field(default_factory=list)
@@ -267,7 +276,13 @@ def snapshot(
             result.by_outcome[outcome] = result.by_outcome.get(outcome, 0) + 1
             host = urlsplit(answered_by).netloc
             if host:
-                result.refused_by[host] = result.refused_by.get(host, 0) + 1
+                # A refusal is something the host DID; an absence is something
+                # about the citation. Same host, opposite findings, opposite
+                # remedies -- so they are never added to the same tally.
+                if outcome in (BLOCKED, RATE_LIMITED):
+                    result.refused_by[host] = result.refused_by.get(host, 0) + 1
+                elif outcome == GONE:
+                    result.gone_at[host] = result.gone_at.get(host, 0) + 1
             if outcome == TOO_LARGE:
                 logger.info(
                     "%s is larger than the hash cap; not recording a hash", url
@@ -380,9 +395,14 @@ def format_snapshot_report(result: SnapshotResult, *, dry_run: bool) -> list[str
     # citation names put "doi.org" at the top with 177, which named a resolver
     # that had answered correctly every time and named none of the publishers
     # actually refusing us.
-    if result.refused_by:
-        lines.append("who refused us (the host that answered, after redirects):")
-        for host, n in sorted(result.refused_by.items(), key=lambda kv: (-kv[1], kv[0])):
+    for title, tally in (
+        ("who refused us (401/403/429, after redirects)", result.refused_by),
+        ("where the dead links are (404/410, after redirects)", result.gone_at),
+    ):
+        if not tally:
+            continue
+        lines.append(f"{title}:")
+        for host, n in sorted(tally.items(), key=lambda kv: (-kv[1], kv[0])):
             lines.append(f"  {host:<32}: {n}")
     return lines
 
