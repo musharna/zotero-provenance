@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.40.0 — 2026-08-31
+
+Identity belongs to the client, not to whoever remembers to send it.
+
+- **53 rows recorded `blocked` against Wikimedia for a page it serves to
+  anyone who asks politely.** `snapshot.py` sent `User-Agent: zotero-provenance`
+  — no version, no contact URL — and Wikimedia's policy rejects that. Measured
+  live 2026-08-31, same address, seconds apart: the bare string gets **403**,
+  the project's shared string gets **200**. The library was asserting a refusal
+  that was our own doing and reading it back as a fact about the source.
+
+- **The cause is a fourth copy of the User-Agent, written six days after the
+  release that consolidated it.** `e619c31` (0.6.0, 2026-08-21) made the package
+  the single source and added `tests/test_version.py` to hold it there.
+  `snapshot.py` arrived on 2026-08-27 declaring its own
+  `_USER_AGENT = "zotero-provenance"`. Its own docstring warned that a header
+  two call sites must remember is "one rule kept in two places, which is how the
+  exclusion rules drifted apart" — and then kept it in two places.
+
+- **The guard could not have caught it, because it named its subjects.** One
+  test per module — `test_zotero_client_…`, `test_title_fetcher_…`,
+  `test_setup_script_…` — so the set it checked was the set of callers alive on
+  the day it was written. A hand-maintained list of call sites cannot fail on a
+  call site that is not on it. That is the same defect, expressed in a test,
+  that the test exists to prevent in the code. It is this project's **fourth**
+  stale-second-copy, against zero missing guards.
+
+- **The User-Agent is now a default on the client, set once in
+  `build_fetch_client`.** No call site passes the header, so no call site can
+  get it wrong; httpx merges it into every request. Both module-level
+  `_USER_AGENT` constants are deleted — there is no longer a value to drift.
+
+- **Four guards replace the one, and every one of them was seen to fail
+  first.** Against the pre-fix source all four go red, and the behavioural one
+  names both copies in its message: a literal-detector that also walks
+  *assignments* (the first version passed on the broken code, because the drift
+  hid one hop away behind a constant); an AST sweep asserting every `httpx.Client`
+  in the package sets a UA at construction; an assertion that the built client
+  carries the shared string; and a sentinel test that hands every fetch path a
+  client with a known identity and fails if any path overrides it.
+
+- **The UA test now drives `build_fetch_client` instead of its own
+  `httpx.Client`.** It hand-rolled a client production never builds, so when the
+  header moved it was the *test's* client that lost its identity. `transport=`
+  was added to the builder for this: a boundary test has to drive the thing that
+  ships, and it is still wrapped in `GuardedTransport`, so the address guard is
+  exercised rather than bypassed.
+
+- **`--only-host` narrows a re-run to one host and its subdomains**, so a fix
+  affecting one host family can be proved on it before a wide re-run. It matches
+  on a boundary, never a substring: `wikipedia.org` takes `en.wikipedia.org` and
+  refuses `notwikipedia.org`, `wikipedia.org.evil.test`, and the name inside a
+  path. LIKE metacharacters are escaped — an unescaped `%` would widen a scoped
+  re-run to the whole corpus while the report still called it scoped. Most of
+  its tests are about what must *not* match; this project has shipped a
+  substring where it meant a token three times.
+
+- **The call-site guard now derives its obligations from argparse.** Its first
+  version named `only_outcome` and would have passed unchanged the day
+  `--only-host` was threaded into one of the two `snapshot()` calls — the
+  `--sleep` defect for the third time. Every `--only-*` flag the parser defines
+  must now reach every call site, so adding a flag adds the obligation
+  automatically. Mutation-checked: removing `only_host` from one call site turns
+  it red.
+
 ## 0.39.0 — 2026-08-30
 
 A 404 to an anonymous request is not proof the page is gone.

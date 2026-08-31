@@ -654,6 +654,7 @@ def rows_needing_hash(
     limit: int | None = None,
     include_failed: bool = False,
     only_outcome: str | None = None,
+    only_host: str | None = None,
 ) -> list[dict]:
     """Completed rows that have never been hashed, oldest sighting first.
 
@@ -674,6 +675,14 @@ def rows_needing_hash(
     which would have asked academic.oup.com for 159 pages it had refused an hour
     earlier, purely as collateral. Politeness is a reason for a feature, not only
     a delay.
+
+    `only_host` narrows the same way on the other axis: to one host and its
+    subdomains. It matches on a BOUNDARY, never a substring -- "wikipedia.org"
+    takes en.wikipedia.org and wikipedia.org, and refuses notwikipedia.org and
+    wikipedia.org.evil.test. A substring test where a token was meant is a
+    mistake this project has now made three times (URL_RE as a character
+    blacklist, and an alert filter that read "OOM" out of Bloomberg), so the
+    boundary case is the one the tests are actually about.
     """
     sql = (
         "SELECT url_canonical, zotero_key, first_seen FROM url_index"
@@ -686,6 +695,31 @@ def rows_needing_hash(
         params.append(only_outcome)
     elif not include_failed:
         sql += " AND last_outcome IN ('', 'ok')"
+    if only_host is not None:
+        host = only_host.strip().lower().lstrip(".")
+        if not host:
+            raise ValueError("only_host must name a host")
+        # LIKE metacharacters in the host are escaped, not trusted. This reaches
+        # the CLI, and an unescaped "%" would silently widen the filter to every
+        # row -- a scoped re-run quietly becoming a full one is the worst way for
+        # this to fail, because the report would still say it did what was asked.
+        escaped = host.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        # Four patterns, anchored at BOTH ends. The scheme anchors the left; the
+        # trailing "/" anchors the right, so "wikipedia.org" cannot take
+        # "wikipedia.org.evil.test". The "%." arm is what admits subdomains, and
+        # its dot is what keeps "notwikipedia.org" out.
+        sql += (
+            " AND (url_canonical LIKE ? ESCAPE '\\'"
+            " OR url_canonical LIKE ? ESCAPE '\\'"
+            " OR url_canonical LIKE ? ESCAPE '\\'"
+            " OR url_canonical LIKE ? ESCAPE '\\')"
+        )
+        params += [
+            f"http://{escaped}/%",
+            f"https://{escaped}/%",
+            f"http://%.{escaped}/%",
+            f"https://%.{escaped}/%",
+        ]
     sql += " ORDER BY first_seen, url_canonical"
     if limit is not None:
         sql += f" LIMIT {int(limit)}"

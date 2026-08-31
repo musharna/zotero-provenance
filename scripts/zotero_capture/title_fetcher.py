@@ -116,10 +116,42 @@ class GuardedTransport(httpx.BaseTransport):
         self._inner.close()
 
 
-def build_fetch_client(*, timeout: float = DEFAULT_TIMEOUT_S) -> httpx.Client:
-    """The only client this module should make: redirects on, addresses guarded."""
+def build_fetch_client(
+    *,
+    timeout: float = DEFAULT_TIMEOUT_S,
+    transport: httpx.BaseTransport | None = None,
+) -> httpx.Client:
+    """The only outbound client this package makes: redirects on, addresses
+    guarded, and identified.
+
+    The User-Agent is set HERE, as a client default, rather than passed by each
+    call site. Wikimedia rejects a UA carrying no way to contact the operator
+    (verified 2026-08-21, and again 2026-08-31: "zotero-provenance" alone gets
+    403 from en.wikipedia.org while the shared string gets 200), so getting it
+    wrong is not cosmetic -- it is 53 rows in the live index recorded as
+    `blocked` when the page was served happily to anyone who asked politely.
+
+    Every call site used to pass the header itself, against a module-level
+    constant, and there were two such constants: this module derived its from
+    the package, and `snapshot.py` -- written six days after the consolidation
+    that was supposed to end exactly this -- declared its own bare
+    "zotero-provenance". A header every caller must remember is a rule kept in
+    N places, and this codebase has now had four of those drift apart. A client
+    default is kept in one place because httpx merges it into every request,
+    and a caller cannot forget what it never had to write.
+
+    `transport` exists so a test can exercise THIS builder against a mock rather
+    than hand-rolling its own `httpx.Client`. That is not a convenience: a test
+    that builds its own client is testing a client production never uses, and
+    would have gone on passing while the real one lost its identity. It is
+    wrapped in `GuardedTransport` like any other, so the address guard is
+    exercised too rather than bypassed.
+    """
     return httpx.Client(
-        timeout=timeout, follow_redirects=True, transport=GuardedTransport()
+        timeout=timeout,
+        follow_redirects=True,
+        transport=GuardedTransport(transport),
+        headers={"User-Agent": USER_AGENT},
     )
 
 
@@ -128,12 +160,6 @@ _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 # The same pattern over bytes, used as the streaming stop condition: it is the
 # test for "a whole title has arrived", not merely "some closing tag has".
 _TITLE_BYTES_RE = re.compile(rb"<title[^>]*>.*?</title>", re.IGNORECASE | re.DOTALL)
-
-# Wikimedia (and Crossref/NCBI as a courtesy) reject a User-Agent that carries no
-# way to contact the operator: verified 2026-08-21, both "zotero-provenance/0.1"
-# and a plain "Mozilla/5.0" get 403 from en.wikipedia.org while the shared string
-# gets 200. Defined once in the package so a release bump reaches every caller.
-_USER_AGENT = USER_AGENT
 
 # Some hosts serve identifiers, not web pages: a DOI, an arXiv id, a PMID, a repo
 # path. Each has an authoritative metadata API, and the HTML behind it is slower
@@ -166,7 +192,7 @@ def _doi_title(client: httpx.Client, url: str) -> str | None:
     try:
         resp = client.get(
             url,
-            headers={"User-Agent": _USER_AGENT, "Accept": _CSL_ACCEPT},
+            headers={"Accept": _CSL_ACCEPT},
             follow_redirects=True,
         )
         if resp.status_code >= 400:
@@ -191,7 +217,6 @@ def _arxiv_title(client: httpx.Client, url: str) -> str | None:
     resp = client.get(
         "http://export.arxiv.org/api/query",
         params={"id_list": m.group(1)},
-        headers={"User-Agent": _USER_AGENT},
         follow_redirects=True,
     )
     if resp.status_code >= 400:
@@ -211,7 +236,6 @@ def _pubmed_title(client: httpx.Client, url: str) -> str | None:
     resp = client.get(
         "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
         params={"db": "pubmed", "id": pmid, "retmode": "json"},
-        headers={"User-Agent": _USER_AGENT},
         follow_redirects=True,
     )
     if resp.status_code >= 400:
@@ -256,7 +280,7 @@ def _github_title(client: httpx.Client, url: str) -> str | None:
     m = re.match(r"^/([^/]+)/([^/]+)", urlsplit(url).path)
     if not m:
         return None
-    headers = {"User-Agent": _USER_AGENT, "Accept": "application/vnd.github+json"}
+    headers = {"Accept": "application/vnd.github+json"}
     token = os.environ.get("GITHUB_TOKEN")
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -332,7 +356,7 @@ def _fetch_title_raw(url: str, *, client: httpx.Client | None = None) -> str:
             return identifier_title
         # Identifier resolution is an optimisation, not a new point of failure:
         # fall through and scrape the page as before.
-        with client.stream("GET", url, headers={"User-Agent": _USER_AGENT}) as resp:
+        with client.stream("GET", url) as resp:
             if resp.status_code >= 400:
                 return url
             ctype = resp.headers.get("content-type", "")

@@ -231,25 +231,51 @@ def test_only_outcome_is_parameterised_not_interpolated(db: Path) -> None:
     assert rows_needing_hash(db, only_outcome="' OR 1=1 --") == []
 
 
-def test_every_snapshot_call_in_the_cli_passes_the_filter() -> None:
-    """The `--sleep` defect, reproduced while writing this feature: the flag was
-    threaded into the real call and not the dry-run one, so `--dry-run
-    --only-outcome gone` silently reported the unattempted set instead. Both ends
-    looked complete; only the gap was wrong. Derived from the source rather than
-    from the call sites I happened to remember."""
+def test_every_row_filter_reaches_every_snapshot_call() -> None:
+    """The `--sleep` defect, reproduced twice: a flag threaded into the real call
+    and not the dry-run one, so `--dry-run --only-outcome gone` silently reported
+    the unattempted set instead. Both ends looked complete; only the gap was wrong.
+
+    The first version of this test named `only_outcome` and nothing else, which
+    would have passed unchanged the day `--only-host` was added and threaded into
+    one call site. So the set of filters is now DERIVED from the parser: every
+    `--only-*` flag argparse defines must reach every snapshot() call. Adding a
+    flag adds an obligation automatically, which is the point -- a guard that has
+    to be remembered documents the last bug instead of preventing the next one.
+    """
     import ast
 
     source = Path("scripts/snapshot_pages.py").read_text()
+    tree = ast.parse(source)
+
+    flags = set()
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "add_argument"
+        ):
+            continue
+        for arg in node.args:
+            if isinstance(arg, ast.Constant) and str(arg.value).startswith("--only-"):
+                flags.add(str(arg.value)[2:].replace("-", "_"))
+
     calls = [
         node
-        for node in ast.walk(ast.parse(source))
+        for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
         and node.func.id == "snapshot"
     ]
 
+    # Two positive controls: a parser with no --only-* flags, or a module with no
+    # snapshot() calls, would each make the loop below vacuous and read as a pass.
+    assert flags, "positive control: no --only-* flags were discovered"
     assert len(calls) >= 2, "positive control: the discovery found the call sites"
+
     for call in calls:
-        assert "only_outcome" in {kw.arg for kw in call.keywords}, (
-            f"snapshot() call at line {call.lineno} does not pass only_outcome"
+        missing = flags - {kw.arg for kw in call.keywords}
+        assert not missing, (
+            f"snapshot() at line {call.lineno} does not pass {sorted(missing)};"
+            f" the CLI accepts it but this call site ignores it"
         )

@@ -5,7 +5,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from zotero_capture.title_fetcher import MAX_BYTES, fetch_title
+from zotero_capture.title_fetcher import MAX_BYTES, build_fetch_client, fetch_title
 
 
 def test_fetch_title_extracts_title_tag():
@@ -408,6 +408,15 @@ def test_fetch_title_sends_contactable_user_agent():
 
     Verified live 2026-08-21: 'zotero-provenance/0.1' and 'Mozilla/5.0' both got
     403 from en.wikipedia.org, while a string carrying the project URL got 200.
+    Re-verified 2026-08-31 against the bare 'zotero-provenance' that snapshot.py
+    was sending: 403 anonymous, 200 with the shared string, same address, seconds
+    apart.
+
+    Goes through `build_fetch_client`, deliberately. An earlier version of this
+    test hand-rolled its own `httpx.Client`, which made it a test of a client
+    production never builds: when the User-Agent moved onto the client, the real
+    one was correct and this one was not, and only the assertion below said so.
+    A boundary test has to drive the thing that actually ships.
     """
     seen: list[str] = []
 
@@ -419,8 +428,7 @@ def test_fetch_title_sends_contactable_user_agent():
             content=b"<html><head><title>Ok</title></head></html>",
         )
 
-    transport = httpx.MockTransport(record)
-    with httpx.Client(transport=transport) as client:
+    with build_fetch_client(transport=httpx.MockTransport(record)) as client:
         fetch_title("https://en.wikipedia.org/wiki/Thismia_americana", client=client)
 
     assert seen, "no request was made"
