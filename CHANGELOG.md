@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.41.0 — 2026-08-31
+
+A 404 to an address we mangled is a fact about our record, not about the source.
+
+- **34 rows in the live index hold a PREFIX of the address that was cited, and
+  `snapshot` was stamping them `gone`.** Until 2026-08-21 the tokenizer was a
+  character blacklist — `[^\s<>"\'`\)\]]+` — and `)` and `]` are legal URL
+  characters, so every cited address containing one was stored cut off at it.
+  Commit `1d46bd5` fixed the tokenizer; nothing repaired what it had already
+  written. Reproduced byte for byte against that commit's parent — the stored
+  rows come back character-identical:
+
+      cited  https://en.wikipedia.org/wiki/Aestivation_(botany)
+      stored https://en.wikipedia.org/wiki/Aestivation_(botany     ← the live row
+
+  Measured with a control: **0 of the 269 rows captured since the boundary work
+  are truncated; 33 of 33 captured before it are.**
+
+- **`unbalanced_brackets` now gates `gone`.** This is `absence_is_corroborated`
+  one step further back: that asks whether we may read a 404 as absence, this
+  asks whether we ever sent the address that was cited. A row whose brackets do
+  not balance is recorded `malformed` — a statement about our record — and no
+  request is spent probing its container. The suspicion is deliberately not
+  treated as proof: `(` is a legal sub-delimiter, so a real address can trip it.
+  That error costs one downgraded claim; the opposite prints link rot that never
+  happened.
+
+- **`repair` never invents the missing closer, and its docstring no longer
+  implies it looked.** It said "re-balance a paren" while the code only ever
+  removed an EXCESS closer — which is why the whole class survived every cleanup
+  pass, reporting nothing to recover. Measured: 0 of 34. Guessing is genuinely
+  wrong, not merely unproven — for `File:...Moneymaker_tomato_plant_(Solanum_lycopersicum`
+  the appended `)` **404s** while the address recovered from the transcript
+  returns **200**.
+
+- **The truncation merged distinct citations, not just shortened them.**
+  `S0092-8674(26)00697-5` and `S0092-8674(26)00174-1` are two different Cell
+  papers; both truncated to `.../S0092-8674(26`, which is the index primary key.
+  Two cited sources became one row and one Zotero item. No URL repair recovers
+  the second — it is flagged and left alone rather than guessed at.
+
+
 ## 0.40.0 — 2026-08-31
 
 Identity belongs to the client, not to whoever remembers to send it.
