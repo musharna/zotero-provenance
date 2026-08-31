@@ -72,6 +72,12 @@ def main() -> int:
         help="minimum seconds between two requests to the SAME host (be polite)",
     )
     p.add_argument(
+        "--only-host",
+        help="re-attempt only rows on this host and its subdomains (e.g."
+        " 'wikipedia.org' takes en.wikipedia.org but not notwikipedia.org), so a"
+        " fix that affects one host family can be proved on it before a wide re-run",
+    )
+    p.add_argument(
         "--only-outcome",
         help="re-attempt only rows whose last read ended this way (e.g. 'gone'),"
         " so a change to one classification can be re-run without disturbing"
@@ -122,6 +128,7 @@ def main() -> int:
                     limit=args.limit,
                     include_failed=args.retry_failed,
                     only_outcome=args.only_outcome,
+                    only_host=args.only_host,
                     sleep_s=args.sleep,
                 ),
                 dry_run=True,
@@ -138,6 +145,7 @@ def main() -> int:
                 limit=args.limit,
                 include_failed=args.retry_failed,
                 only_outcome=args.only_outcome,
+                only_host=args.only_host,
                 sleep_s=args.sleep,
                 visible=visible,
             )

@@ -241,3 +241,110 @@ def test_the_result_breaks_failures_down(db: Path) -> None:
     assert result.by_outcome[GONE] == 1
     assert result.by_outcome[TIMEOUT] == 1
     assert result.unreachable == 3, "the existing total must not change meaning"
+
+
+# --- narrowing a re-run to one host -----------------------------------------
+#
+# A fix that changes how ONE host answers should be provable on that host before
+# it is let loose on 800 rows. `only_outcome` narrows on the classification;
+# `only_host` narrows on the address. What makes it worth testing is the
+# BOUNDARY: this project has shipped a substring test where a token was meant
+# three times now (URL_RE as a character blacklist; an alert filter that read
+# "OOM" out of "Bloomberg"), so most of the cases below are about what must NOT
+# match rather than what must.
+
+
+def _host_corpus(db: Path) -> None:
+    for i, url in enumerate(
+        (
+            "https://wikipedia.org/wiki/A",
+            "https://en.wikipedia.org/wiki/B",
+            "http://de.wikipedia.org/wiki/D",
+            "https://notwikipedia.org/wiki/E",
+            "https://wikipedia.org.evil.test/wiki/F",
+            "https://example.org/wikipedia.org/G",
+        )
+    ):
+        insert_url(db, url, f"KEY{i}", date(2026, 5, 5))
+
+
+def _urls(rows) -> set[str]:
+    return {r["url_canonical"] for r in rows}
+
+
+def test_only_host_takes_the_host_and_its_subdomains(db: Path) -> None:
+    """The positive control for every refusal below: a filter that matched
+    nothing would satisfy all of them and make the tool do no work at all."""
+    _host_corpus(db)
+    assert _urls(rows_needing_hash(db, only_host="wikipedia.org")) == {
+        "https://wikipedia.org/wiki/A",
+        "https://en.wikipedia.org/wiki/B",
+        "http://de.wikipedia.org/wiki/D",
+    }
+
+
+def test_only_host_refuses_a_host_that_merely_ends_the_same_way(db: Path) -> None:
+    """notwikipedia.org is a different site. A suffix test without the dot takes
+    it, and the run then reaches a host nobody authorised."""
+    _host_corpus(db)
+    assert "https://notwikipedia.org/wiki/E" not in _urls(
+        rows_needing_hash(db, only_host="wikipedia.org")
+    )
+
+
+def test_only_host_refuses_a_host_that_merely_starts_the_same_way(db: Path) -> None:
+    """The right-hand anchor. wikipedia.org.evil.test belongs to evil.test, and a
+    prefix match hands it every request the filter was meant to confine."""
+    _host_corpus(db)
+    assert "https://wikipedia.org.evil.test/wiki/F" not in _urls(
+        rows_needing_hash(db, only_host="wikipedia.org")
+    )
+
+
+def test_only_host_does_not_match_the_name_inside_a_path(db: Path) -> None:
+    _host_corpus(db)
+    assert "https://example.org/wikipedia.org/G" not in _urls(
+        rows_needing_hash(db, only_host="wikipedia.org")
+    )
+
+
+def test_only_host_treats_a_like_wildcard_as_a_literal(db: Path) -> None:
+    """'%' reaching LIKE unescaped would widen a scoped re-run to the whole
+    corpus while the report still called it scoped -- a failure invisible in its
+    own output, which is the kind this project keeps shipping."""
+    _host_corpus(db)
+    assert rows_needing_hash(db, only_host="%") == []
+    assert rows_needing_hash(db, only_host="wikipedi%.org") == []
+    assert rows_needing_hash(db, only_host="wikipedia_org") == []
+
+
+def test_only_host_tolerates_harmless_spellings(db: Path) -> None:
+    _host_corpus(db)
+    for spelling in ("WIKIPEDIA.ORG", ".wikipedia.org", "  wikipedia.org  "):
+        assert len(rows_needing_hash(db, only_host=spelling)) == 3, spelling
+
+
+def test_only_host_refuses_an_empty_name(db: Path) -> None:
+    """An empty filter that quietly meant "everything" is the widening bug in its
+    most direct form: the caller asked to narrow and got the opposite."""
+    _host_corpus(db)
+    with pytest.raises(ValueError):
+        rows_needing_hash(db, only_host="   ")
+
+
+def test_only_host_composes_with_only_outcome(db: Path) -> None:
+    """The two filters narrow on different axes and must intersect, not replace.
+    Written because `only_outcome` sits in an if/elif with `include_failed`, and
+    a third filter added into that chain would silently displace one of them."""
+    from zotero_capture.sqlite_cache import set_fetch_outcome
+
+    _host_corpus(db)
+    set_fetch_outcome(
+        db, "https://en.wikipedia.org/wiki/B", outcome=BLOCKED, at="T", final_url=""
+    )
+    set_fetch_outcome(
+        db, "https://notwikipedia.org/wiki/E", outcome=BLOCKED, at="T", final_url=""
+    )
+    assert _urls(
+        rows_needing_hash(db, only_host="wikipedia.org", only_outcome=BLOCKED)
+    ) == {"https://en.wikipedia.org/wiki/B"}

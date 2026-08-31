@@ -45,9 +45,6 @@ logger = logging.getLogger(__name__)
 # hash means "the whole document", and above it nothing is claimed at all.
 HASH_MAX_BYTES = 5 * 1024 * 1024
 
-_USER_AGENT = "zotero-provenance"
-
-
 class TooLarge(Exception):
     """The document exceeds the cap, so no honest whole-document hash exists.
 
@@ -111,18 +108,17 @@ def responding_url(exc: BaseException, requested: str) -> str:
 def page_is_visible(url: str, *, client: httpx.Client) -> bool:
     """Can an anonymous reader see this URL at all? Not whether it hashes.
 
-    Lives beside `hash_page` and sends the SAME User-Agent deliberately. This
-    answer is only meaningful as a comparison against the fetch it corroborates,
-    and a host that varies its response by agent would make a probe under a
-    different name compare two things that were never alike. Keeping the header
-    a convention two call sites had to remember would be one rule kept in two
-    places, which is how the exclusion rules drifted apart.
+    Sends the SAME User-Agent as `hash_page`, and now cannot do otherwise: the
+    header is a default on the client both are handed, not a convention each
+    remembers. This answer is only meaningful as a comparison against the fetch
+    it corroborates, and a host that varies its response by agent would make a
+    probe under a different name compare two things that were never alike.
 
     Anything that is not a clean 404/410 counts as visible: the question is
     whether we SAW it, and a timeout or a 403 did not tell us it was absent.
     """
     try:
-        response = client.get(url, headers={"User-Agent": _USER_AGENT})
+        response = client.get(url)
     except Exception:
         return False
     return response.status_code not in (404, 410)
@@ -141,7 +137,7 @@ def hash_page(url: str, *, client: httpx.Client) -> PageRead:
     """
     digest = hashlib.sha256()
     read = 0
-    with client.stream("GET", url, headers={"User-Agent": _USER_AGENT}) as resp:
+    with client.stream("GET", url) as resp:
         final_url = str(resp.url)
         resp.raise_for_status()
         for chunk in resp.iter_bytes():
@@ -292,6 +288,7 @@ def snapshot(
     limit: int | None = None,
     include_failed: bool = False,
     only_outcome: str | None = None,
+    only_host: str | None = None,
     sleep_s: float = 0.0,
     sleeper: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
@@ -315,7 +312,7 @@ def snapshot(
     last_request: dict[str, float] = {}
     for row in rows_needing_hash(
         db_path, limit=limit, include_failed=include_failed,
-        only_outcome=only_outcome,
+        only_outcome=only_outcome, only_host=only_host,
     ):
         url = row["url_canonical"]
         result.examined += 1
