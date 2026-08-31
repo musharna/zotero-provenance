@@ -78,7 +78,15 @@ class RepairStep:
 
 
 def correct_url(url: str) -> str:
-    """Strip trailing bold emphasis, re-balance a paren, then re-canonicalize.
+    """Strip trailing bold emphasis, drop an EXCESS closing paren, re-canonicalize.
+
+    One direction only, and the asymmetry is the point. This works from the
+    stored string, and a string does not carry what was cut off it: appending
+    ")" to ".../S0092-8674(16" yields a different address that was never cited,
+    and for ".../Moneymaker_tomato_plant_(Solanum_lycopersicum" that guess 404s
+    live while the real address returns 200. Restoring a MISSING closer is not a
+    string operation and is not attempted here -- `unbalanced_brackets` marks
+    those rows instead, so they stop being reported as dead links.
 
     Order matters, and getting it wrong is what caused the damage: the old code
     trimmed punctuation first, so a URL ending "…)**" still ended in "*" when the

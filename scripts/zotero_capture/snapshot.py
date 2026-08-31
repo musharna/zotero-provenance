@@ -32,6 +32,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
+from .url_processing import unbalanced_brackets
 from .sqlite_cache import (
     rows_needing_hash,
     rows_with_hash,
@@ -162,6 +163,9 @@ TOO_LARGE = "too_large"          # read fine, refused deliberately at the cap
 UNREACHABLE = "unreachable"      # DNS, connection, and anything unrecognised
 # A 404 we are NOT entitled to read as absence. See `absence_is_corroborated`.
 NOT_VISIBLE = "not_visible"      # 404/410 whose whole container is also hidden
+# A failure on an address we ourselves damaged. The 404 is a fact about the
+# string we stored, not about the source -- see tests/test_truncated_urls.py.
+MALFORMED = "malformed"          # our record is a prefix of the cited address
 
 
 def parent_url(url: str) -> str | None:
@@ -348,7 +352,14 @@ def snapshot(
             # corroborated before it is written down. Without a prober the claim
             # degrades to the weaker one that is always true -- absence is what
             # we would be inventing, so the default must never assert it.
-            if outcome == GONE and not absence_is_corroborated(
+            # Before asking whether a 404 means absence, ask whether we even
+            # sent the address that was cited. A row whose brackets do not
+            # balance is probably a prefix of it, so nothing came back about the
+            # source at all -- and no request is spent probing its container,
+            # because that answer could not mean anything either.
+            if outcome == GONE and unbalanced_brackets(url):
+                outcome = MALFORMED
+            elif outcome == GONE and not absence_is_corroborated(
                 answered_by,
                 # No prober means nothing can be SEEN, which is not the same as
                 # nothing to ask: a URL with no parent is decided without ever

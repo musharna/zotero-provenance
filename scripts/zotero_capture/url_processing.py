@@ -425,6 +425,42 @@ def strip_illegal_tail(url: str) -> str:
     return url
 
 
+def unbalanced_brackets(url: str) -> bool:
+    """True when this address's parentheses or square brackets do not balance.
+
+    A stored URL that fails this is very likely a PREFIX of the one that was
+    cited, not the address itself. Until 2026-08-21 the tokenizer was a
+    character blacklist -- `[^\\s<>"\'`\\)\\]]+` -- so every cited URL holding a
+    legal `)` or `]` was written to the index cut off at it. 34 live rows are
+    still in that state, and `snapshot` was stamping them `gone`: an affirmative
+    claim that a source no longer exists, manufactured out of our own damage.
+
+    Depth is counted, not merely paired. A closer standing before its opener is
+    damage too, and a rule that only compared totals would call "…/a)b(c" clean.
+
+    Percent-encoded octets are not brackets, so `%28` is correctly ignored --
+    only literal characters are counted.
+
+    This is a SUSPICION and not a proof, deliberately. `(` is a legal
+    sub-delimiter, so "https://example.org/a(b" is a real address that this
+    calls suspect. That error costs one downgraded claim about one source. The
+    opposite error prints link rot that never happened, which is the exact
+    finding this tool exists to report truthfully.
+    """
+    for opener, closer in (("(", ")"), ("[", "]")):
+        depth = 0
+        for ch in url:
+            if ch == opener:
+                depth += 1
+            elif ch == closer:
+                depth -= 1
+                if depth < 0:
+                    return True
+        if depth != 0:
+            return True
+    return False
+
+
 def _strip_paired_closer(text: str, index: int, url: str) -> str:
     """Drop a closing quote whose OPENER sits immediately before the match.
 
