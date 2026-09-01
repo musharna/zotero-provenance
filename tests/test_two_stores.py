@@ -515,11 +515,11 @@ def test_a_pip_requirement_url_is_not_recorded_as_gone(db: Path) -> None:
         def record_content_hash(self, item_key, digest, *, expect_url=None):
             return True
 
-    def _404(u: str):
+    def _404(url: str, max_bytes: int = 0):
         raise httpx.HTTPStatusError(
             "404",
-            request=httpx.Request("GET", u),
-            response=httpx.Response(404, request=httpx.Request("GET", u)),
+            request=httpx.Request("GET", url),
+            response=httpx.Response(404, request=httpx.Request("GET", url)),
         )
 
     snapshot(db, zotero=_Stamp(), hasher=_404,

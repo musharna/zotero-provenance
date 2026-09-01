@@ -33,6 +33,7 @@ from zotero_capture.config import load_config  # noqa: E402
 from zotero_capture.snapshot import (  # noqa: E402
     format_snapshot_report,
     format_verify_report,
+    HASH_MAX_BYTES,
     hash_page,
     page_is_visible,
     snapshot,
@@ -83,6 +84,14 @@ def main() -> int:
         " so a change to one classification can be re-run without disturbing"
         " hosts that have nothing to do with it",
     )
+    p.add_argument(
+        "--max-bytes",
+        type=int,
+        default=HASH_MAX_BYTES,
+        help="how much of each document to hash (default %(default)s). A page"
+        " larger than this is hashed to exactly its first N bytes and recorded"
+        " as covering only that, never as a whole-document hash",
+    )
     args = p.parse_args()
 
     config = load_config()
@@ -94,8 +103,8 @@ def main() -> int:
 
     with build_fetch_client(timeout=FETCH_TIMEOUT_S) as http:
 
-        def hasher(url: str):
-            return hash_page(url, client=http)
+        def hasher(url: str, max_bytes: int):
+            return hash_page(url, client=http, max_bytes=max_bytes)
 
         def visible(url: str) -> bool:
             """Is this URL visible to an anonymous reader? Used only to decide
@@ -112,7 +121,13 @@ def main() -> int:
 
         if args.verify:
             for line in format_verify_report(
-                verify(db_path, hasher=hasher, limit=args.limit, sleep_s=args.sleep)
+                verify(
+                    db_path,
+                    hasher=hasher,
+                    limit=args.limit,
+                    sleep_s=args.sleep,
+                    max_bytes=args.max_bytes,
+                )
             ):
                 print(line)
             return 0
@@ -130,6 +145,7 @@ def main() -> int:
                     only_outcome=args.only_outcome,
                     only_host=args.only_host,
                     sleep_s=args.sleep,
+                    max_bytes=args.max_bytes,
                 ),
                 dry_run=True,
             ):
@@ -147,6 +163,7 @@ def main() -> int:
                 only_outcome=args.only_outcome,
                 only_host=args.only_host,
                 sleep_s=args.sleep,
+                max_bytes=args.max_bytes,
                 visible=visible,
             )
 

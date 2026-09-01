@@ -67,7 +67,7 @@ def db(tmp_db: Path) -> Path:
     return tmp_db
 
 
-def _four_oh_four(url: str):
+def _four_oh_four(url: str, max_bytes: int = 0):
     raise httpx.HTTPStatusError(
         "404",
         request=httpx.Request("GET", url),

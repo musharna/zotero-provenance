@@ -137,7 +137,10 @@ def _seed(db, rows):
     init_db(db)
     for i, url in enumerate(rows):
         insert_url(db, url, f"K{i}", datetime.date(2026, 5, 5))
-        set_content_hash(db, url, content_hash="OLD", hashed_at="THEN")
+        set_content_hash(
+            db, url, content_hash="OLD", hashed_at="THEN",
+            covers_bytes=64, complete=True,
+        )
     return db
 
 
@@ -157,7 +160,8 @@ def test_verify_spaces_requests_to_the_same_host(tmp_db) -> None:
         slept.append(s)
         clock[0] += s
 
-    verify(db, hasher=lambda u: PageRead(digest="OLD", final_url=u),
+    verify(db, hasher=lambda u, n: PageRead(
+               digest="OLD", final_url=u, covers_bytes=64, complete=True),
            sleep_s=2.0, sleeper=sleeper, monotonic=monotonic)
 
     assert slept == [2.0, 2.0], "same-host requests were not spaced"
@@ -175,7 +179,8 @@ def test_verify_does_not_space_requests_to_DIFFERENT_hosts(tmp_db) -> None:
     ])
     slept: list[float] = []
 
-    verify(db, hasher=lambda u: PageRead(digest="OLD", final_url=u),
+    verify(db, hasher=lambda u, n: PageRead(
+               digest="OLD", final_url=u, covers_bytes=64, complete=True),
            sleep_s=2.0, sleeper=lambda s: slept.append(s), monotonic=lambda: 0.0)
 
     assert slept == [], "delayed between different hosts for no reason"
@@ -190,7 +195,7 @@ def test_verify_reports_WHY_a_page_could_not_be_re_read(tmp_db) -> None:
 
     db = _seed(tmp_db, ["https://a.test/1"])
 
-    def refuse(url: str):
+    def refuse(url: str, max_bytes: int = 0):
         raise httpx.HTTPStatusError(
             "403",
             request=httpx.Request("GET", url),
@@ -210,7 +215,11 @@ def test_a_changed_page_keeps_its_original_hash(tmp_db) -> None:
     from zotero_capture.sqlite_cache import row_for_url
 
     db = _seed(tmp_db, ["https://a.test/1"])
-    result = verify(db, hasher=lambda u: PageRead(digest="NEW", final_url=u))
+    result = verify(
+        db,
+        hasher=lambda u, n: PageRead(
+            digest="NEW", final_url=u, covers_bytes=64, complete=True),
+    )
 
     assert result.changed == 1
     assert row_for_url(db, "https://a.test/1")["content_hash"] == "OLD"
@@ -234,7 +243,11 @@ def test_a_page_that_differs_from_ITSELF_is_not_reported_as_changed(tmp_db) -> N
     db = _seed(tmp_db, ["https://a.test/1"])
     reads = iter(["NEW1", "NEW2"])  # the page never reads the same way twice
 
-    result = verify(db, hasher=lambda u: PageRead(digest=next(reads), final_url=u))
+    result = verify(
+        db,
+        hasher=lambda u, n: PageRead(
+            digest=next(reads), final_url=u, covers_bytes=64, complete=True),
+    )
 
     assert result.changed == 0, "an unstable page was reported as changed"
     assert result.unstable == 1
@@ -247,7 +260,11 @@ def test_a_stable_page_that_really_moved_is_still_reported(tmp_db) -> None:
     from zotero_capture.snapshot import PageRead, verify
 
     db = _seed(tmp_db, ["https://a.test/1"])
-    result = verify(db, hasher=lambda u: PageRead(digest="NEW", final_url=u))
+    result = verify(
+        db,
+        hasher=lambda u, n: PageRead(
+            digest="NEW", final_url=u, covers_bytes=64, complete=True),
+    )
 
     assert result.changed == 1
     assert result.unstable == 0
@@ -262,9 +279,9 @@ def test_an_unchanged_page_is_not_re_read(tmp_db) -> None:
     db = _seed(tmp_db, ["https://a.test/1"])
     seen: list[str] = []
 
-    def hasher(u: str):
+    def hasher(u: str, max_bytes: int = 0):
         seen.append(u)
-        return PageRead(digest="OLD", final_url=u)
+        return PageRead(digest="OLD", final_url=u, covers_bytes=64, complete=True)
 
     verify(db, hasher=hasher)
     assert seen == ["https://a.test/1"], "spent a second fetch on an unchanged page"
@@ -279,7 +296,8 @@ def test_the_corroborating_read_is_paced_too(tmp_db) -> None:
     reads = iter(["NEW1", "NEW2"])
     slept: list[float] = []
 
-    verify(db, hasher=lambda u: PageRead(digest=next(reads), final_url=u),
+    verify(db, hasher=lambda u, n: PageRead(
+               digest=next(reads), final_url=u, covers_bytes=64, complete=True),
            sleep_s=2.0, sleeper=lambda s: slept.append(s), monotonic=lambda: 0.0)
 
     assert slept == [2.0], "the corroborating re-read skipped the host delay"

@@ -8,10 +8,10 @@ it said".
 
 Two properties carry the whole feature and each is pinned here:
 
-  * the hash covers the COMPLETE document or it is not recorded. Hashing a
-    prefix would compare equal for two documents differing after the cap —
-    a false negative in exactly the case the hash exists to catch, a long page
-    quietly edited near the end.
+  * the hash always states what it covers. A document within the cap is hashed
+    whole; one beyond it is hashed to a stated prefix and recorded as such. It
+    used to be recorded as nothing at all, which left the corpus's 71 largest
+    sources with no evidence whatever — see tests/test_hash_coverage.py.
   * a verify pass never rewrites a stored hash. The stored hash IS the evidence
     of what was consulted; replacing it with what the page says today would
     destroy the finding at the moment it was made.
@@ -32,9 +32,7 @@ import httpx
 import pytest
 
 from zotero_capture.snapshot import (
-    HASH_MAX_BYTES,
     PageRead,
-    TooLarge,
     hash_page,
     snapshot,
     verify,
@@ -48,6 +46,10 @@ from zotero_capture.sqlite_cache import (
     set_content_hash,
 )
 from zotero_capture.zotero_client import ZoteroClient
+
+# Boundary tests run at a small explicit cap: the property is where the cut
+# lands, not the shipped value, and 33 MiB bodies cost the suite minutes.
+SMALL_CAP = 8192
 
 URL = "https://fixturehost.org/a"
 BODY = b"<html><title>T</title>the body</html>"
@@ -89,10 +91,12 @@ def _reads(digest: str = None, *, final_url: str | None = None):
     `final_url` defaults to the URL that was asked for -- the no-redirect case --
     so only the tests that are ABOUT redirects have to mention it.
     """
-    def _hasher(url: str) -> PageRead:
+    def _hasher(url: str, max_bytes: int = 0) -> PageRead:
         return PageRead(
             digest=DIGEST if digest is None else digest,
             final_url=url if final_url is None else final_url,
+            covers_bytes=len(BODY),
+            complete=True,
         )
     return _hasher
 
@@ -102,20 +106,23 @@ def test_the_hash_is_of_the_whole_body() -> None:
         assert hash_page(URL, client=http).digest == DIGEST
 
 
-def test_a_document_over_the_cap_is_refused_rather_than_truncated() -> None:
-    """The property. A prefix hash would compare equal for two long documents
-    that differ only after the cap."""
-    with _client(b"x" * (HASH_MAX_BYTES + 1)) as http:
-        with pytest.raises(TooLarge):
-            hash_page(URL, client=http)
+def test_a_document_over_the_cap_is_hashed_to_a_stated_prefix() -> None:
+    """It used to raise and store nothing. A prefix hash IS unsafe in a field
+    that means "the whole document" -- so the field stopped meaning that."""
+    with _client(b"x" * (SMALL_CAP + 1)) as http:
+        read = hash_page(URL, client=http, max_bytes=SMALL_CAP)
+    assert read.complete is False
+    assert read.covers_bytes == SMALL_CAP
 
 
 def test_a_document_at_the_cap_is_still_hashed() -> None:
     """Positive control for the refusal above: the boundary is a cap, not a
     blanket refusal to hash anything large."""
-    body = b"x" * HASH_MAX_BYTES
+    body = b"x" * SMALL_CAP
     with _client(body) as http:
-        assert hash_page(URL, client=http).digest == hashlib.sha256(body).hexdigest()
+        read = hash_page(URL, client=http, max_bytes=SMALL_CAP)
+    assert read.digest == hashlib.sha256(body).hexdigest()
+    assert read.complete is True, "a document of exactly the cap read as truncated"
 
 
 def test_an_http_error_raises() -> None:
@@ -162,7 +169,7 @@ def test_an_unreachable_page_is_counted_not_hashed(db: Path) -> None:
 
     insert_url(db, URL, "KEY1", date(2026, 5, 5))
 
-    def boom(url: str) -> PageRead:
+    def boom(url: str, max_bytes: int = 0) -> PageRead:
         raise httpx.ConnectError("dead link")
 
     result = snapshot(db, zotero=_Stamper(), hasher=boom, clock=lambda: "NOW")
@@ -171,18 +178,23 @@ def test_an_unreachable_page_is_counted_not_hashed(db: Path) -> None:
     assert rows_with_hash(db) == []
 
 
-def test_a_too_large_page_records_no_hash(db: Path) -> None:
+def test_an_oversized_page_records_a_partial_hash(db: Path) -> None:
+    """The inversion this release is for. `rows_with_hash` used to come back
+    empty here, which is what "71 sources with no evidence" looked like from the
+    inside."""
     from datetime import date
 
     insert_url(db, URL, "KEY1", date(2026, 5, 5))
 
-    def too_big(url: str) -> PageRead:
-        raise TooLarge(url, final_url=url)
+    def too_big(url: str, max_bytes: int) -> PageRead:
+        return PageRead(
+            digest="prefix", final_url=url, covers_bytes=max_bytes, complete=False
+        )
 
     result = snapshot(db, zotero=_Stamper(), hasher=too_big, clock=lambda: "NOW")
 
-    assert result.too_large_urls == [URL]
-    assert rows_with_hash(db) == []
+    assert result.partial_urls == [URL]
+    assert [r["url_canonical"] for r in rows_with_hash(db)] == [URL]
 
 
 def test_an_in_flight_row_is_not_hashed(db: Path) -> None:
@@ -207,7 +219,7 @@ def test_a_dry_run_fetches_nothing(db: Path) -> None:
 
     insert_url(db, URL, "KEY1", date(2026, 5, 5))
 
-    def _unreachable(url: str) -> PageRead:
+    def _unreachable(url: str, max_bytes: int = 0) -> PageRead:
         raise AssertionError("a dry run must not fetch")
 
     result = snapshot(db, zotero=None, hasher=_unreachable, clock=lambda: "NOW", dry_run=True)
@@ -223,7 +235,10 @@ def test_a_changed_page_is_reported(db: Path) -> None:
     from datetime import date
 
     insert_url(db, URL, "KEY1", date(2026, 5, 5))
-    set_content_hash(db, URL, content_hash=DIGEST, hashed_at="THEN")
+    set_content_hash(
+        db, URL, content_hash=DIGEST, hashed_at="THEN",
+        covers_bytes=len(BODY), complete=True,
+    )
 
     result = verify(db, hasher=_reads("a-different-digest"))
 
@@ -236,7 +251,10 @@ def test_an_unchanged_page_is_not_reported(db: Path) -> None:
     from datetime import date
 
     insert_url(db, URL, "KEY1", date(2026, 5, 5))
-    set_content_hash(db, URL, content_hash=DIGEST, hashed_at="THEN")
+    set_content_hash(
+        db, URL, content_hash=DIGEST, hashed_at="THEN",
+        covers_bytes=len(BODY), complete=True,
+    )
 
     result = verify(db, hasher=_reads())
 
@@ -249,7 +267,10 @@ def test_verify_does_not_overwrite_the_stored_hash(db: Path) -> None:
     from datetime import date
 
     insert_url(db, URL, "KEY1", date(2026, 5, 5))
-    set_content_hash(db, URL, content_hash=DIGEST, hashed_at="THEN")
+    set_content_hash(
+        db, URL, content_hash=DIGEST, hashed_at="THEN",
+        covers_bytes=len(BODY), complete=True,
+    )
 
     verify(db, hasher=_reads("a-different-digest"))
 
@@ -436,8 +457,8 @@ def test_a_page_that_could_not_be_read_spends_no_READ_timestamp(db: Path) -> Non
     insert_url(db, URL, "KEY1", date(2026, 5, 5))
     clock = _Ticking()
 
-    def boom(url: str) -> PageRead:
-        raise RuntimeError("dead link")
+    def boom(url: str, max_bytes: int = 0) -> PageRead:
+        raise httpx.ConnectError("dead link")
 
     result = snapshot(db, zotero=_Stamper(), hasher=boom, clock=clock)
 
@@ -542,10 +563,10 @@ def test_a_failed_fetch_still_counts_as_having_touched_the_host(db: Path) -> Non
     clock = _FakeClock()
     _rows(db, ["https://fixturehost.org/dead", "https://fixturehost.org/live"])
 
-    def hasher(url: str) -> PageRead:
+    def hasher(url: str, max_bytes: int = 0) -> PageRead:
         if url.endswith("/dead"):
-            raise RuntimeError("dead link")
-        return PageRead(digest=DIGEST, final_url=url)
+            raise httpx.ConnectError("dead link")
+        return PageRead(digest=DIGEST, final_url=url, covers_bytes=64, complete=True)
 
     result = snapshot(
         db,
@@ -562,15 +583,19 @@ def test_a_failed_fetch_still_counts_as_having_touched_the_host(db: Path) -> Non
 
 
 def test_an_oversized_page_also_counts_as_having_touched_the_host(db: Path) -> None:
-    """`TooLarge` is raised after the body has been pulled, so it is the most
-    expensive request the host serves, not a free one."""
+    """It is the most expensive request the host serves, not a free one, so it
+    must still cost the politeness delay."""
     clock = _FakeClock()
     _rows(db, ["https://fixturehost.org/huge", "https://fixturehost.org/live"])
 
-    def hasher(url: str) -> PageRead:
+    def hasher(url: str, max_bytes: int) -> PageRead:
         if url.endswith("/huge"):
-            raise TooLarge(url, final_url=url)
-        return PageRead(digest=DIGEST, final_url=url)
+            return PageRead(
+                digest="prefix", final_url=url, covers_bytes=max_bytes, complete=False
+            )
+        return PageRead(
+            digest=DIGEST, final_url=url, covers_bytes=len(BODY), complete=True
+        )
 
     result = snapshot(
         db,
@@ -582,7 +607,7 @@ def test_an_oversized_page_also_counts_as_having_touched_the_host(db: Path) -> N
         monotonic=clock.monotonic,
     )
 
-    assert (result.hashed, result.too_large) == (1, 1)
+    assert (result.hashed, result.partial) == (2, 1)
     assert clock.slept == [2.0]
 
 
@@ -624,9 +649,9 @@ def test_only_the_remaining_wait_is_spent(db: Path) -> None:
     clock = _FakeClock()
     _rows(db, ["https://fixturehost.org/a", "https://fixturehost.org/b"])
 
-    def slow_hasher(url: str) -> PageRead:
+    def slow_hasher(url: str, max_bytes: int = 0) -> PageRead:
         clock.now += 1.5  # the fetch itself took a second and a half
-        return PageRead(digest=DIGEST, final_url=url)
+        return PageRead(digest=DIGEST, final_url=url, covers_bytes=64, complete=True)
 
     snapshot(
         db,

@@ -105,6 +105,21 @@ MIGRATIONS = (
     # same manufacturing-a-finding mistake as guessing `gone` from an
     # unrecognised error.
     "ALTER TABLE url_index ADD COLUMN final_url TEXT NOT NULL DEFAULT ''",
+    # WHAT the stored digest covers. Without these two columns `content_hash`
+    # could only ever mean "the whole document", so a page too big to read in
+    # full had to be recorded as nothing at all -- and the corpus's 71 largest
+    # sources, every one fetched successfully, held no evidence whatever.
+    #
+    # The DEFAULTS are the migration, and they are chosen to describe what
+    # actually happened rather than to be convenient. Every row hashed before
+    # this existed was hashed under the all-or-nothing rule, so it IS complete:
+    # `hash_truncated = 0` is a fact about those ~3,744 rows, not an assumption.
+    # Their LENGTH, though, was never recorded, and -1 says exactly that. A
+    # default of 0 would have claimed a zero-byte document and any other number
+    # would have invented one -- the same manufacturing-a-finding mistake as
+    # reading final_url '' as "no redirect happened".
+    "ALTER TABLE url_index ADD COLUMN hash_bytes INTEGER NOT NULL DEFAULT -1",
+    "ALTER TABLE url_index ADD COLUMN hash_truncated INTEGER NOT NULL DEFAULT 0",
 )
 
 # The alphabet the Zotero API accepts for an object key: base32 without the
@@ -601,14 +616,38 @@ def dequeue_retry(db_path: Path, url_canonical: str) -> bool:
 
 
 def set_content_hash(
-    db_path: Path, url_canonical: str, *, content_hash: str, hashed_at: str
+    db_path: Path,
+    url_canonical: str,
+    *,
+    content_hash: str,
+    hashed_at: str,
+    covers_bytes: int,
+    complete: bool,
 ) -> bool:
-    """Record what the page said, and when it was read. True if the row existed."""
+    """Record what the page said, when it was read, and HOW MUCH of it was read.
+
+    `covers_bytes` and `complete` are required rather than defaulted, for the
+    same reason `final_url` is. Their only sensible default would be "the whole
+    document", so a caller that simply forgot would silently promote a prefix
+    into a whole-document claim -- reintroducing the exact false negative that
+    the old refuse-to-record rule existed to prevent, but now invisibly, in a
+    stored row that reads as authoritative. This project has already shipped one
+    omittable parameter that was therefore omitted for a whole release.
+
+    True if the row existed.
+    """
     with closing(_connect(db_path)) as conn:
         cursor = conn.execute(
-            "UPDATE url_index SET content_hash = ?, hashed_at = ?"
+            "UPDATE url_index SET content_hash = ?, hashed_at = ?,"
+            " hash_bytes = ?, hash_truncated = ?"
             " WHERE url_canonical = ?",
-            (content_hash, hashed_at, url_canonical),
+            (
+                content_hash,
+                hashed_at,
+                int(covers_bytes),
+                0 if complete else 1,
+                url_canonical,
+            ),
         )
     return cursor.rowcount == 1
 
@@ -730,7 +769,8 @@ def rows_needing_hash(
 def rows_with_hash(db_path: Path, *, limit: int | None = None) -> list[dict]:
     """Rows that carry a hash, so a verify pass can ask whether it still holds."""
     sql = (
-        "SELECT url_canonical, zotero_key, content_hash, hashed_at FROM url_index"
+        "SELECT url_canonical, zotero_key, content_hash, hashed_at,"
+        " hash_bytes, hash_truncated FROM url_index"
         " WHERE content_hash != '' ORDER BY hashed_at, url_canonical"
     )
     if limit is not None:

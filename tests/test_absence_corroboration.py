@@ -135,7 +135,7 @@ def test_a_probe_that_cannot_connect_is_not_evidence_of_anything() -> None:
 # --- end to end --------------------------------------------------------------
 
 
-def _four_oh_four(url: str):
+def _four_oh_four(url: str, max_bytes: int = 0):
     raise httpx.HTTPStatusError(
         "404", request=httpx.Request("GET", url),
         response=httpx.Response(404, request=httpx.Request("GET", url)),

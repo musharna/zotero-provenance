@@ -30,10 +30,8 @@ from zotero_capture.snapshot import (
     RATE_LIMITED,
     SERVER_ERROR,
     TIMEOUT,
-    TOO_LARGE,
     UNREACHABLE,
     PageRead,
-    TooLarge,
     classify_failure,
     snapshot,
 )
@@ -92,10 +90,23 @@ def test_a_connection_failure_is_unreachable() -> None:
     assert classify_failure(httpx.ConnectError("no route")) == UNREACHABLE
 
 
-def test_an_oversized_page_keeps_its_own_outcome() -> None:
-    """It was read successfully and refused deliberately; that is not a failure
-    of the source."""
-    assert classify_failure(TooLarge("huge", final_url="")) == TOO_LARGE
+def test_size_is_no_longer_an_outcome_at_all() -> None:
+    """It never was a failure OF THE SOURCE -- the host served the document
+    perfectly -- and it is no longer a failure of ours either: an oversized read
+    now yields a digest over a stated prefix, so there is nothing left to
+    classify. The vocabulary is for things that stopped us, and size does not.
+
+    Asserted over the module rather than against a name, so deleting the outcome
+    and leaving a producer behind cannot pass."""
+    import zotero_capture.snapshot as snap
+
+    sized = [
+        n
+        for n in dir(snap)
+        if n.isupper() and isinstance(getattr(snap, n), str)
+        and getattr(snap, n) in ("too_large", "oversized")
+    ]
+    assert sized == [], f"a size outcome survived: {sized}"
 
 
 def test_an_unknown_error_does_not_become_a_finding() -> None:
@@ -117,7 +128,7 @@ def test_blocked_and_gone_are_not_the_same_record(db: Path) -> None:
     insert_url(db, "https://fixturehost.org/blocked", "KEY1", date(2026, 5, 5))
     insert_url(db, "https://fixturehost.org/gone", "KEY2", date(2026, 5, 6))
 
-    def hasher(url: str) -> PageRead:
+    def hasher(url: str, max_bytes: int = 0) -> PageRead:
         raise _status(403 if url.endswith("/blocked") else 404)
 
     _run(db, hasher)
@@ -131,7 +142,7 @@ def test_a_failed_fetch_is_recorded_as_attempted(db: Path) -> None:
     of a hash meant 'never tried' and 'tried and failed' indistinguishably."""
     insert_url(db, "https://fixturehost.org/a", "KEY1", date(2026, 5, 5))
 
-    _run(db, lambda url: (_ for _ in ()).throw(_status(403)))
+    _run(db, lambda url, max_bytes=0: (_ for _ in ()).throw(_status(403)))
 
     row = row_for_url(db, "https://fixturehost.org/a")
     assert row["last_attempt_at"] == "NOW"
@@ -143,7 +154,7 @@ def test_a_success_is_recorded_too(db: Path) -> None:
     empty last_outcome would be ambiguous between success and never-tried."""
     insert_url(db, "https://fixturehost.org/a", "KEY1", date(2026, 5, 5))
 
-    _run(db, lambda url: PageRead(digest=DIGEST, final_url=url))
+    _run(db, lambda url, max_bytes=0: PageRead(digest=DIGEST, final_url=url, covers_bytes=64, complete=True))
 
     row = row_for_url(db, "https://fixturehost.org/a")
     assert row["last_outcome"] == OK
@@ -156,7 +167,7 @@ def test_a_success_is_recorded_too(db: Path) -> None:
 
 def test_a_recorded_failure_is_not_retried_by_default(db: Path) -> None:
     insert_url(db, "https://fixturehost.org/dead", "KEY1", date(2026, 5, 5))
-    _run(db, lambda url: (_ for _ in ()).throw(_status(404)))
+    _run(db, lambda url, max_bytes=0: (_ for _ in ()).throw(_status(404)))
 
     assert [r["url_canonical"] for r in rows_needing_hash(db)] == []
 
@@ -167,7 +178,7 @@ def test_a_row_never_attempted_is_still_selected(db: Path) -> None:
     insert_url(db, "https://fixturehost.org/dead", "KEY1", date(2026, 5, 5))
     insert_url(db, "https://fixturehost.org/fresh", "KEY2", date(2026, 5, 6))
 
-    def hasher(url: str) -> PageRead:
+    def hasher(url: str, max_bytes: int = 0) -> PageRead:
         raise _status(404)
 
     snapshot(db, zotero=_Stamper(), hasher=hasher, clock=lambda: "NOW", limit=1)
@@ -179,7 +190,7 @@ def test_a_row_never_attempted_is_still_selected(db: Path) -> None:
 
 def test_retry_failed_reaches_them_again(db: Path) -> None:
     insert_url(db, "https://fixturehost.org/dead", "KEY1", date(2026, 5, 5))
-    _run(db, lambda url: (_ for _ in ()).throw(_status(403)))
+    _run(db, lambda url, max_bytes=0: (_ for _ in ()).throw(_status(403)))
 
     again = rows_needing_hash(db, include_failed=True)
     assert [r["url_canonical"] for r in again] == ["https://fixturehost.org/dead"]
@@ -188,7 +199,7 @@ def test_retry_failed_reaches_them_again(db: Path) -> None:
 def test_a_hashed_row_is_never_selected_either_way(db: Path) -> None:
     """A retry pass must not re-read pages that already have their evidence."""
     insert_url(db, "https://fixturehost.org/a", "KEY1", date(2026, 5, 5))
-    _run(db, lambda url: PageRead(digest=DIGEST, final_url=url))
+    _run(db, lambda url, max_bytes=0: PageRead(digest=DIGEST, final_url=url, covers_bytes=64, complete=True))
 
     assert rows_needing_hash(db) == []
     assert rows_needing_hash(db, include_failed=True) == []
@@ -203,11 +214,11 @@ def test_the_limit_is_no_longer_blocked_by_dead_rows(db: Path) -> None:
 
     calls: list[str] = []
 
-    def hasher(url: str) -> PageRead:
+    def hasher(url: str, max_bytes: int = 0) -> PageRead:
         calls.append(url)
         if "dead" in url:
             raise _status(404)
-        return PageRead(digest=DIGEST, final_url=url)
+        return PageRead(digest=DIGEST, final_url=url, covers_bytes=64, complete=True)
 
     snapshot(db, zotero=_Stamper(), hasher=hasher, clock=lambda: "NOW", limit=3)
     first = list(calls)
@@ -227,7 +238,7 @@ def test_the_result_breaks_failures_down(db: Path) -> None:
     insert_url(db, "https://fixturehost.org/gone", "K2", date(2026, 5, 2))
     insert_url(db, "https://fixturehost.org/slow", "K3", date(2026, 5, 3))
 
-    def hasher(url: str) -> PageRead:
+    def hasher(url: str, max_bytes: int = 0) -> PageRead:
         if url.endswith("/blocked"):
             raise _status(403)
         if url.endswith("/gone"):

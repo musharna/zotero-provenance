@@ -26,9 +26,7 @@ from zotero_capture.snapshot import (
     GONE,
     HASH_MAX_BYTES,
     OK,
-    TOO_LARGE,
     SnapshotResult,
-    TooLarge,
     format_snapshot_report,
     hash_page,
     responding_url,
@@ -39,6 +37,9 @@ from zotero_capture.sqlite_cache import (
     insert_url,
     row_for_url,
 )
+
+# Boundary tests run at a small explicit cap; see tests/test_hash_coverage.py.
+SMALL_CAP = 8192
 
 RESOLVER = "https://resolver.invalid/10.1093/some/doi"
 PUBLISHER = "https://publisher.invalid/article/12345"
@@ -81,7 +82,9 @@ def _chain(*, status: int, body: bytes = BODY) -> httpx.Client:
 
 
 def _hasher(http: httpx.Client):
-    return lambda url: hash_page(url, client=http)
+    return lambda url, max_bytes=HASH_MAX_BYTES: hash_page(
+        url, client=http, max_bytes=max_bytes
+    )
 
 
 # --- reading the address off a failure ---------------------------------------
@@ -132,13 +135,15 @@ def test_a_request_property_that_raises_does_not_escape() -> None:
 
 
 def test_an_oversized_page_still_reports_where_it_came_from() -> None:
-    """TooLarge is raised mid-stream, after the redirect resolved, so it is one
-    of the few places that KNOWS the answering host."""
-    with _chain(status=200, body=b"x" * (HASH_MAX_BYTES + 1)) as http:
-        with pytest.raises(TooLarge) as caught:
-            hash_page(RESOLVER, client=http)
+    """The address survives the cap. It used to travel out on the exception;
+    now it travels on the PageRead, which is the same fact by a shorter route --
+    and one that cannot be dropped, because the caller has to hold the read to
+    get the digest at all."""
+    with _chain(status=200, body=b"x" * (SMALL_CAP + 1)) as http:
+        read = hash_page(RESOLVER, client=http, max_bytes=SMALL_CAP)
 
-    assert responding_url(caught.value, RESOLVER) == PUBLISHER
+    assert read.complete is False
+    assert read.final_url == PUBLISHER
 
 
 # --- what gets stored --------------------------------------------------------
@@ -294,18 +299,21 @@ def test_the_report_says_nothing_about_hosts_when_nothing_was_refused() -> None:
 
 
 def test_an_oversized_page_is_charged_to_neither_host_tally(db: Path) -> None:
-    """`too_large` is OUR refusal, not the host's -- it served the document
-    fine and we declined to hash past the cap. Putting it under "who refused us"
-    would name a host for a decision we made. Its address is still recorded,
-    because that is a fact either way."""
+    """The host served the document correctly, so naming it under "who refused
+    us" would blame it for a limit of ours. It is not a refusal at all any more
+    -- the outcome is `ok` and the partialness lives in the coverage columns --
+    but the tallies must stay empty either way, and the answering address is
+    still recorded because that is a fact regardless."""
     insert_url(db, RESOLVER, "KEY1", SEEN)
 
-    with _chain(status=200, body=b"x" * (HASH_MAX_BYTES + 1)) as http:
+    with _chain(status=200, body=b"x" * (SMALL_CAP + 1)) as http:
         result = snapshot(
-            db, zotero=_Stamper(), hasher=_hasher(http), clock=lambda: "NOW"
+            db, zotero=_Stamper(), hasher=_hasher(http), clock=lambda: "NOW",
+            max_bytes=SMALL_CAP,
         )
 
     assert result.refused_by == {}
     assert result.gone_at == {}
-    assert row_for_url(db, RESOLVER)["last_outcome"] == TOO_LARGE
+    assert result.partial == 1
+    assert row_for_url(db, RESOLVER)["last_outcome"] == "ok"
     assert row_for_url(db, RESOLVER)["final_url"] == PUBLISHER
