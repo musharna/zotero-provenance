@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.42.0 — 2026-09-01
+
+- **A URL move now writes both stores, or neither.** A captured URL is held
+  twice: `item.url` in the library and `url_canonical` in the index, where it is
+  the PRIMARY KEY. They are one identity with two copies. On 2026-08-22 a one-off
+  script in a scratch directory corrected 24 truncated URLs with
+  `z.update_url(key, new)` and never wrote the index; nine days later `snapshot`
+  fetched the stale index strings, got 404s, and recorded `gone` — a repair
+  manufactured the link rot 0.41.0 was then built to undo. `repair.py` had always
+  done both writes, but that was a CONVENTION in one function's body, and a
+  convention cannot bind a script written at 2am against the client directly. The
+  pairing is now `url_move.move_url`, whose signature cannot be satisfied without
+  a db_path, and the client's one-store URL write is private. The fix is the
+  absence of a public one-store verb, not the underscore.
+- **The trashed-item rule is defined once instead of in one writer of four.**
+  `_try_add_tags` refused a trashed item and said why — "tagging a trashed item
+  would quietly resurrect provenance onto something the user removed" — while
+  `record_content_hash` and the URL write never checked, so `snapshot` would
+  stamp provenance onto an item the user had thrown away (reachable: 7 live index
+  rows pointed at trashed items). Zotero's trash is a FLAG: a trashed item reads
+  **200 OK with `deleted: 1`**, not 404, which is exactly why a status-code check
+  could not see it. Every writer now goes through one `_open_for_write` gate that
+  makes all three checks — exists, not trashed, still the item selected — and the
+  guard DERIVES the set of writers from the source rather than naming them.
+- **`scripts/verify_index.py` compares the two stores in BOTH directions.** Every
+  other maintenance tool starts from `SELECT ... FROM url_index`, so none of them
+  can see an item the index does not name. Paging the collection the other way
+  found 49 stranded items — **30 of which had already caused a duplicate**, since
+  an item nothing indexes is invisible to `lookup_url` and the next citation of
+  that URL creates a second one. Read-only, and it separates a real fault from
+  the recoverable-claim protocol working as designed.
+
 ## 0.41.0 — 2026-08-31
 
 A 404 to an address we mangled is a fact about our record, not about the source.

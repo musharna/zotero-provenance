@@ -44,7 +44,7 @@ class _Zotero:
         self.tagged: list[tuple[str, list[str]]] = []
         self.trashed: list[str] = []
 
-    def update_url(self, key, url, *, expect_url=None):
+    def _patch_item_url(self, key, url, *, expect_url=None):
         return True
 
     def item_exists(self, key):

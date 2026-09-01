@@ -179,7 +179,7 @@ def test_repair_journals_the_url_it_is_about_to_overwrite(tmp_path: Path) -> Non
             conn.commit()
 
     class _Repairer:
-        def update_url(self, key, corrected, *, expect_url=None):
+        def _patch_item_url(self, key, corrected, *, expect_url=None):
             return True
 
     steps = [

@@ -79,7 +79,7 @@ def test_update_url_refuses_an_item_that_moved_under_it() -> None:
     seen: list[str] = []
     client = _client(_serving(LEGITIMATE, seen))
 
-    moved = client.update_url("ITEM1234", "https://example.org/fixed",
+    moved = client._patch_item_url("ITEM1234", "https://example.org/fixed",
                               expect_url=EXCLUDED)
 
     assert moved is False
@@ -91,7 +91,7 @@ def test_update_url_still_rewrites_the_item_it_selected() -> None:
     seen: list[str] = []
     client = _client(_serving(EXCLUDED, seen))
 
-    assert client.update_url("ITEM1234", "https://example.org/fixed",
+    assert client._patch_item_url("ITEM1234", "https://example.org/fixed",
                              expect_url=EXCLUDED) is True
     assert any(s.startswith("PATCH") for s in seen), seen
 

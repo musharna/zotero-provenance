@@ -138,7 +138,7 @@ def test_update_url_reports_whether_it_actually_updated():
     corrected URL backed by nothing.
     """
     gone = _client(lambda req: httpx.Response(404, json={}))
-    assert gone.update_url("GONE1234", "https://example.org/fixed") is False
+    assert gone._patch_item_url("GONE1234", "https://example.org/fixed") is False
 
     def ok(req: httpx.Request) -> httpx.Response:
         if req.method == "GET":
@@ -149,7 +149,7 @@ def test_update_url_reports_whether_it_actually_updated():
             )
         return httpx.Response(204)
 
-    assert _client(ok).update_url("ITEM1234", "https://example.org/fixed") is True
+    assert _client(ok)._patch_item_url("ITEM1234", "https://example.org/fixed") is True
 
 
 def test_capture_drops_a_row_whose_item_a_person_deleted(tmp_path):

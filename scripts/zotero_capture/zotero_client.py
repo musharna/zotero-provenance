@@ -272,13 +272,45 @@ class ZoteroClient:
                 )
         raise AssertionError("unreachable")
 
-    def _try_add_tags(
+    def _open_for_write(
         self,
         item_key: str,
-        new_tags: list[str],
-        title_resolver: Callable[[str], str] | None,
-    ) -> bool | None:
-        """One read-modify-write. None means "version moved, try again"."""
+        *,
+        expect_url: str | None = None,
+        allow_trashed: bool = False,
+    ) -> tuple[dict[str, Any], str] | None:
+        """Fetch the item a write was selected on, and say whether it may proceed.
+
+        Every writer here needs the same three things before it may touch an
+        item: that the item still exists, that it is not in the trash, and that
+        it is still the item the caller CHOSE. Each writer used to do its own
+        GET and make its own subset of those checks, and the subsets differed:
+        the trash rule was implemented in exactly one of four copies. So
+        `record_content_hash` would happily stamp provenance onto an item the
+        user had thrown away, and the URL write would repair one.
+
+        That is this project's fifth stale-second-copy defect, so the rule is
+        stated once here and inherited rather than copied. Adding a fourth
+        writer now gets all three checks by construction; there is no list of
+        writers to remember to update, which is the failure mode a hand-
+        maintained guard cannot catch.
+
+        Two different refusals, because callers must tell them apart:
+
+          * `ItemGone` -- there is nothing to write to, ever. Zotero's trash is
+            a FLAG, not a deletion, so a trashed item reads **200 OK with
+            `deleted: 1`** and not 404. That is precisely why one writer caught
+            it and the others did not: a status-code check cannot see it.
+          * `None` -- the item exists but is no longer the one selected. The
+            decision was made on a snapshot and optimistic versioning does not
+            cover that gap; it stops a write racing the final GET, not an edit
+            that landed before it.
+
+        `allow_trashed` is for the removal operations. The rule is "do not write
+        provenance onto a removed item", not "never touch one" -- refusing to
+        trash something because it is already trashed would make `retire` report
+        a failure for work that is already done.
+        """
         resp = self._client.get(f"/items/{item_key}")
         if resp.status_code == 404:
             raise ItemGone(f"item {item_key} no longer exists")
@@ -286,14 +318,37 @@ class ZoteroClient:
             raise ZoteroError(
                 f"GET /items/{item_key} failed: {resp.status_code} {resp.text}"
             )
-        item = resp.json()
-        data = item.get("data", {})
-        if data.get("deleted"):
-            # Zotero's trash is a flag, not a deletion, so this reads 200 OK.
-            # Tagging a trashed item would quietly resurrect provenance onto
-            # something the user removed.
+        body = resp.json()
+        data = body.get("data", {})
+        if data.get("deleted") and not allow_trashed:
             raise ItemGone(f"item {item_key} is in the trash")
-        version = int(resp.headers.get("Last-Modified-Version", item.get("version", 0)))
+        version = resp.headers.get("Last-Modified-Version") or str(
+            body.get("version", 0)
+        )
+        if (
+            expect_url is not None
+            and (data.get("url") or "").strip() != expect_url.strip()
+        ):
+            logger.warning(
+                "refusing to write to %s: selected as %r but it is now %r",
+                item_key,
+                expect_url,
+                data.get("url"),
+            )
+            return None
+        return data, version
+
+    def _try_add_tags(
+        self,
+        item_key: str,
+        new_tags: list[str],
+        title_resolver: Callable[[str], str] | None,
+    ) -> bool | None:
+        """One read-modify-write. None means "version moved, try again"."""
+        opened = self._open_for_write(item_key)
+        if opened is None:  # unreachable: refusal needs an expect_url
+            return False
+        data, version = opened
         existing_tags = {t["tag"] for t in data.get("tags", [])}
         to_add = [t for t in new_tags if t not in existing_tags]
         merged = existing_tags | set(new_tags)
@@ -333,45 +388,41 @@ class ZoteroClient:
             )
         return True
 
-    def update_url(
+    def _patch_item_url(
         self, item_key: str, url: str, *, expect_url: str | None = None
     ) -> bool:
-        """Correct the stored URL of an item.
+        """Write an item's URL. PRIVATE -- callers want `url_move.move_url`.
 
         Needed because a URL truncated at capture time cannot be repaired by any
         title pass: the repair path reads the item's own URL, so the URL has to
         be fixed first. Guarded by the item version so a concurrent edit is not
         silently overwritten.
+
+        This was public, called `update_url`, and that is how 24 index rows came
+        to disagree with the library. It was added with no caller anywhere in the
+        repo and first used 39 minutes later by a one-off script in a scratch
+        directory, which wrote the items and never the index. Nine days later
+        `snapshot` read the stale index strings, got 404s, and recorded `gone`:
+        a repair manufactured the link rot this tool exists to report truthfully.
+
+        A URL is ONE identity with a copy in each store. Moving it is one
+        operation, and `move_url` is that operation -- it cannot be called
+        without a db_path, so there is no longer a route that writes half. The
+        underscore is not the mechanism; the absence of a public one-store verb
+        is. A docstring warning would not have been read by the script that did
+        this.
         """
-        resp = self._client.get(f"/items/{item_key}")
-        if resp.status_code == 404:
+        try:
+            opened = self._open_for_write(item_key, expect_url=expect_url)
+        except ItemGone:
             # NOT success. Returning None here read as "done" to repair, which
             # then rewrote its SQLite row and counted a rewrite for an item that
             # does not exist — an index entry claiming a corrected URL with
             # nothing behind it.
             return False
-        if resp.status_code >= 400:
-            raise ZoteroError(
-                f"GET /items/{item_key} failed: {resp.status_code} {resp.text}"
-            )
-        body = resp.json()
-        version = resp.headers.get("Last-Modified-Version") or str(
-            body.get("version", 0)
-        )
-        data = body.get("data", {})
-        # See trash_item: the decision was made on a snapshot, and rewriting an
-        # item that has since become something else is not a repair.
-        if (
-            expect_url is not None
-            and (data.get("url") or "").strip() != expect_url.strip()
-        ):
-            logger.warning(
-                "refusing to rewrite %s: selected as %r but it is now %r",
-                item_key,
-                expect_url,
-                data.get("url"),
-            )
+        if opened is None:
             return False
+        data, version = opened
         payload: dict[str, Any] = {"url": url}
         # title_is_unresolved detects a failed fetch by title == url. Moving the
         # URL without the title breaks that equality, and the item silently stops
@@ -409,32 +460,17 @@ class ZoteroClient:
         replaced. `extra` is a field people put their own notes in, and a
         provenance tool that eats them is not one anybody keeps using.
         """
-        resp = self._client.get(f"/items/{item_key}")
-        if resp.status_code == 404:
+        # Refuses a trashed item, which reads 200 OK with `deleted: 1` and so
+        # was invisible to the status-code check this used to do for itself.
+        # Stamping provenance onto something the user removed is the same fault
+        # `_try_add_tags` had already named and guarded against.
+        try:
+            opened = self._open_for_write(item_key, expect_url=expect_url)
+        except ItemGone:
             return False
-        if resp.status_code >= 400:
-            raise ZoteroError(
-                f"GET /items/{item_key} failed: {resp.status_code} {resp.text}"
-            )
-        body = resp.json()
-        version = resp.headers.get("Last-Modified-Version") or str(
-            body.get("version", 0)
-        )
-        data = body.get("data", {})
-        # Same reasoning as trash_item and update_url: the row was selected on a
-        # snapshot, and an item that has since become something else is not the
-        # item whose content was hashed.
-        if (
-            expect_url is not None
-            and (data.get("url") or "").strip() != expect_url.strip()
-        ):
-            logger.warning(
-                "refusing to stamp %s: selected as %r but it is now %r",
-                item_key,
-                expect_url,
-                data.get("url"),
-            )
+        if opened is None:
             return False
+        data, version = opened
 
         kept = [
             line
@@ -474,30 +510,21 @@ class ZoteroClient:
         the check was invisible to anyone reading the signature -- and all three
         callers ignored the result.
         """
-        resp = self._client.get(f"/items/{item_key}")
-        if resp.status_code == 404:
+        # allow_trashed: this IS the removal. Refusing because the item is
+        # already in the trash would report a failure for work already done.
+        try:
+            opened = self._open_for_write(
+                item_key, expect_url=expect_url, allow_trashed=True
+            )
+        except ItemGone:
             # NOT success. Returning None here read as "done" to repair, which
             # then rewrote its SQLite row and counted a rewrite for an item that
             # does not exist — an index entry claiming a corrected URL with
             # nothing behind it.
             return False
-        if resp.status_code >= 400:
-            raise ZoteroError(
-                f"GET /items/{item_key} failed: {resp.status_code} {resp.text}"
-            )
-        body = resp.json()
-        current_url = (body.get("data", {}).get("url") or "").strip()
-        if expect_url is not None and current_url != expect_url.strip():
-            logger.warning(
-                "refusing to trash %s: selected as %r but it is now %r",
-                item_key,
-                expect_url,
-                current_url,
-            )
+        if opened is None:
             return False
-        version = resp.headers.get("Last-Modified-Version") or str(
-            body.get("version", 0)
-        )
+        _data, version = opened
         resp = self._client.patch(
             f"/items/{item_key}",
             json={"deleted": 1},
@@ -526,17 +553,15 @@ class ZoteroClient:
         counting a repair, which is `update_url`'s story; it had been copied
         wholesale into a method that deletes.
         """
-        resp = self._client.get(f"/items/{item_key}")
-        if resp.status_code == 404:
+        # allow_trashed for the same reason as trash_item: emptying the trash is
+        # the one operation for which "it is already trashed" is not a refusal.
+        try:
+            opened = self._open_for_write(item_key, allow_trashed=True)
+        except ItemGone:
             return False
-        if resp.status_code >= 400:
-            raise ZoteroError(
-                f"GET /items/{item_key} failed: {resp.status_code} {resp.text}"
-            )
-        item = resp.json()
-        version = resp.headers.get("Last-Modified-Version") or str(
-            item.get("version", 0)
-        )
+        if opened is None:  # unreachable: refusal needs an expect_url
+            return False
+        _data, version = opened
         resp = self._client.delete(
             f"/items/{item_key}",
             headers={"If-Unmodified-Since-Version": version},
