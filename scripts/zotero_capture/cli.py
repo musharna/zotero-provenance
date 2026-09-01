@@ -15,6 +15,7 @@ from datetime import date
 from pathlib import Path
 
 from .capture import CaptureResult, capture_message
+from .logging_setup import configure_hook_logging
 from .config import Config, ConfigError, _state_dir, load_config
 from .project_slug import derive_slug
 from .sqlite_cache import IndexIdentityMismatch, lookup_url, require_identity
@@ -388,6 +389,9 @@ def run_triage(
 def main(argv: list[str] | None = None) -> int:
     if os.environ.get("ZOTERO_CAPTURE_DISABLE") == "1":
         return 0
+    # Before anything can log. The hook redirects stderr into capture.log, and
+    # until now those lines arrived only via logging.lastResort.
+    configure_hook_logging()
     install_termination_handler()
     args = build_parser().parse_args(argv)
 

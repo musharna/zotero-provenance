@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.43.0 — 2026-09-01
+
+- **A GitHub 404 can now be settled with your own credentials, and only in one
+  direction.** GitHub 404s a private repository on purpose, so anonymously
+  "deleted" and "not yours to see" are identical. 0.39.0 discriminated the rows
+  whose immediate parent is also hidden, but a repo ROOT's parent is a public
+  profile page — leaving 15 rows asserting the owner's own private repositories
+  were dead links, `musharna/zotero-provenance` among them. New
+  `scripts/corroborate_github.py` asks `/repos/{owner}/{repo}` for EXISTENCE
+  ONLY: it never fetches, hashes or stores repository content, and the only
+  thing it changes is a label on a URL the library already holds. It can only
+  DOWNGRADE `gone` to `not_visible` — a 404 with a token still means *this
+  credential cannot see it either*, and promoting that to deletion would rebuild
+  the original defect with more confidence behind it. There is deliberately no
+  `GONE` in that module's vocabulary. Capture and snapshot stay credential-free;
+  a token is read at call time, never stored, and its absence changes nothing.
+- **An install specifier is not a dead link.** `https://github.com/o/r.git@<sha>`
+  is a `pip install git+...` line: it names a live repository at a real commit
+  and 404s because the PATH is not a page. Three rows reported link rot about
+  repositories that are fine. Such a row now records `malformed` — we never
+  asked a well-formed question. Deliberately NOT repaired into the repo root:
+  stripping `.git@<ref>` yields an address that resolves but was never cited,
+  and the commit pin is the point of a requirement line. Same error as appending
+  a closing paren, with a more convincing result.
+- **The hook's diagnostic trail is now a decision instead of a default.** 0.37.0
+  found that WARNING reached `capture.log` only through `logging.lastResort`, and
+  could not add the textbook `NullHandler` without silently deleting that trail.
+  `configure_hook_logging()` reproduces exactly the bare `%(message)s` shape
+  lastResort was already writing — so existing log lines do not change — and the
+  package now carries a NullHandler like any other library. The SessionStart
+  health check deliberately does not opt in: its stderr feeds a file whose being
+  empty is the signal.
+- Lint clean: nine unused imports removed, plus a duplicate dict key in
+  `test_health.py` (both values were `0`, so no expectation changes).
+
 ## 0.42.0 — 2026-09-01
 
 - **A URL move now writes both stores, or neither.** A captured URL is held

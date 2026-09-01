@@ -6,7 +6,7 @@ against it while it was still in flight.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date
 from pathlib import Path
 from unittest.mock import MagicMock
 

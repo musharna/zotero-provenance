@@ -496,3 +496,52 @@ def test_verify_sees_a_url_disagreement_in_either_direction() -> None:
     assert len(found["url_disagreement"]) == 1
     row, item = found["url_disagreement"][0]
     assert row["url_canonical"] == OLD and item["url"] == NEW
+
+
+# --- an install specifier is not a dead link ---------------------------------
+
+
+def test_a_pip_requirement_url_is_not_recorded_as_gone(db: Path) -> None:
+    """`https://github.com/o/r.git@<sha>` names a live repository at a commit.
+    It 404s because the PATH is not a page, not because anything is missing, and
+    three live rows reported link rot about repositories that are fine."""
+    from zotero_capture.snapshot import MALFORMED, snapshot
+    from zotero_capture.sqlite_cache import insert_url as _ins
+
+    url = "https://forge.invalid/JeffreyXiang/CuMesh.git@12289e1062f0"
+    _ins(db, url, "KEY9", SEEN)
+
+    class _Stamp:
+        def record_content_hash(self, item_key, digest, *, expect_url=None):
+            return True
+
+    def _404(u: str):
+        raise httpx.HTTPStatusError(
+            "404",
+            request=httpx.Request("GET", u),
+            response=httpx.Response(404, request=httpx.Request("GET", u)),
+        )
+
+    snapshot(db, zotero=_Stamp(), hasher=_404,
+             clock=lambda: "NOW", visible=lambda u: True)
+
+    assert row_for_url(db, url)["last_outcome"] == MALFORMED
+
+
+def test_repair_refuses_to_strip_the_commit_pin() -> None:
+    """Pinned so nobody "fixes" these into the repo root. Stripping `.git@<ref>`
+    yields an address that RESOLVES but was never cited -- the commit pin is the
+    point of a requirement line. Same error as appending a closing paren, with a
+    more convincing result."""
+    from zotero_capture.repair import repaired_url
+
+    assert repaired_url("https://github.com/JeffreyXiang/CuMesh.git@12289e1") == ""
+
+
+def test_a_dot_git_url_without_a_ref_is_still_an_ordinary_address() -> None:
+    """The negative control. `.../repo.git` is a clone URL that GitHub serves;
+    only the `@<ref>` makes it a requirement specifier, and a rule that caught
+    both would silence real findings."""
+    from zotero_capture.url_processing import is_vcs_requirement
+
+    assert is_vcs_requirement("https://github.com/musharna/dreamer-chassis.git") is False

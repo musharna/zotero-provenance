@@ -34,6 +34,47 @@ PACKAGE_LOGGER = "zotero_capture"
 _HANDLER_NAME = "zotero-provenance-cli"
 
 
+HOOK_HANDLER_NAME = "zotero-provenance-hook"
+
+
+def configure_hook_logging(level: int = logging.WARNING, stream=None) -> logging.Logger:
+    """Attach the hook's own stderr handler, replacing a reliance on lastResort.
+
+    The capture hooks run the CLI with `2>>capture.log`, so the package's
+    WARNING and ERROR lines have always ENDED UP in that log -- but only because
+    `logging.lastResort` prints unhandled records at WARNING to stderr. Nothing
+    asked for that. It is a default, and it is the reason a NullHandler could not
+    be added to the package: the textbook library fix would have silently deleted
+    the hook's entire diagnostic trail.
+
+    So the dependency is made explicit here rather than removed. The format is
+    bare `%(message)s` ON PURPOSE -- it reproduces exactly what lastResort was
+    already writing, so existing capture.log lines do not change shape and
+    anything parsing them keeps working. The level stays WARNING for the same
+    reason: routine INFO in a per-turn hook log is noise, and this project has
+    already shipped four releases walking back health-check chatter.
+
+    Deliberately NOT used by the SessionStart health check. That path sends
+    stderr to health-errors.log, a file whose being EMPTY is the signal that
+    nothing is wrong; it reports its own faults with an explicit `print(...,
+    file=sys.stderr)`, which is unaffected. The trade is stated rather than
+    hidden: an incidental package warning during the health check is now silent
+    instead of tripping that signal.
+    """
+    logger = logging.getLogger(PACKAGE_LOGGER)
+    for existing in logger.handlers:
+        if getattr(existing, "name", None) == HOOK_HANDLER_NAME:
+            return logger
+    handler = logging.StreamHandler(stream if stream is not None else sys.stderr)
+    handler.name = HOOK_HANDLER_NAME
+    handler.setLevel(level)
+    handler.setFormatter(logging.Formatter(fmt="%(message)s"))
+    logger.addHandler(handler)
+    if logger.level == logging.NOTSET or logger.level > level:
+        logger.setLevel(level)
+    return logger
+
+
 def configure_cli_logging(level: int = logging.INFO, stream=None) -> logging.Logger:
     """Attach one formatted stderr handler to the package logger.
 

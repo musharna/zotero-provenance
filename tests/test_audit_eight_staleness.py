@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from zotero_capture.staleness import CURRENT, MISMATCH, UNKNOWN, classify, stale_reason
 

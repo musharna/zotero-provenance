@@ -42,7 +42,6 @@ def _capture(
             # A record needs writer identity to be an acknowledgeable incident,
             # and evidence of a write to be an integrity incident at all.
             "incident_id": f"{ts}|{root}",
-            "urls_recurring": 0,
             **({"pinned_root": pinned} if pinned else {}),
             "project": "demo",
             "urls_seen": 1,
