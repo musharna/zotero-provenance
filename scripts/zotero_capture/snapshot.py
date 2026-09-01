@@ -32,7 +32,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
-from .url_processing import unbalanced_brackets
+from .url_processing import is_vcs_requirement, unbalanced_brackets
 from .sqlite_cache import (
     rows_needing_hash,
     rows_with_hash,
@@ -357,7 +357,7 @@ def snapshot(
             # balance is probably a prefix of it, so nothing came back about the
             # source at all -- and no request is spent probing its container,
             # because that answer could not mean anything either.
-            if outcome == GONE and unbalanced_brackets(url):
+            if outcome == GONE and (unbalanced_brackets(url) or is_vcs_requirement(url)):
                 outcome = MALFORMED
             elif outcome == GONE and not absence_is_corroborated(
                 answered_by,

@@ -35,7 +35,6 @@ from zotero_capture.snapshot import (
     PageRead,
     TooLarge,
     classify_failure,
-    responding_url,
     snapshot,
 )
 from zotero_capture.sqlite_cache import (

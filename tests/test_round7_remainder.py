@@ -12,7 +12,6 @@ import inspect
 from datetime import date
 from pathlib import Path
 
-import pytest
 
 import zotero_capture.capture as cap
 from zotero_capture.capture import capture_message
@@ -101,7 +100,6 @@ def test_the_ledger_uses_a_bounded_busy_timeout() -> None:
     kill leaves no record at all -- the ledger exists precisely so that a
     killed hook is still accounted for.
     """
-    import sqlite3
 
     from zotero_capture.health_ledger import BUSY_TIMEOUT_MS, _connect
 

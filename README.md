@@ -325,6 +325,36 @@ lookup and the connection — a rebinding attack — is not covered.
 - Title lookup has a one-second budget; on timeout the item is stored with the URL as its
   title rather than delaying your session.
 
+- **At least five citations from before 2026-08-21 were MERGED and cannot be recovered.**
+  Until `1d46bd5` the URL tokenizer was a character blacklist that stopped at `)`, so an
+  address containing one was stored truncated. On a keyed store truncation is not
+  shortening but DELETION: two different Cell papers, `S0092-8674(26)00697-5` and
+  `S0092-8674(26)00174-1`, both truncate to `.../S0092-8674(26`, which is the index
+  primary key. Two cited sources became one row and one library item.
+
+  No URL repair recovers the second, because it was never stored. The damaged rows have
+  since been repaired from the item of record where the library still held the full
+  address, but a *merge* leaves nothing to repair from. Treat pre-2026-08-21 provenance as
+  possibly under-counting distinct sources on hosts that put parentheses in their
+  identifiers — chiefly Cell Press and older DOIs.
+
+- **A GitHub 404 does not mean a repository is gone**, and the tool will not say it does.
+  GitHub 404s a private repository on purpose, so anonymously "deleted" and "not yours to
+  see" are the same response. Rows whose immediate parent is also hidden are recorded
+  `not_visible`; repo roots cannot be discriminated that way, because their parent is a
+  public profile page. To settle those, corroborate with your own credentials:
+
+  ```
+  python3 scripts/corroborate_github.py           # what it would change
+  python3 scripts/corroborate_github.py --apply
+  ```
+
+  It asks `/repos/{owner}/{repo}` for existence only — it never fetches, hashes, or stores
+  repository content, and the only thing it changes is an outcome label on a URL your
+  library already holds. It can only **downgrade** `gone` to `not_visible`: a 404 with a
+  token still means *this credential cannot see it either*, which proves nothing about the
+  resource. Capture and snapshot never use a credential.
+
 ## Development
 
 ```

@@ -425,6 +425,28 @@ def strip_illegal_tail(url: str) -> str:
     return url
 
 
+_VCS_REQUIREMENT_RE = re.compile(r"\.git@[^/]+$")
+
+
+def is_vcs_requirement(url: str) -> bool:
+    """True when this is an install specifier rather than a web address.
+
+    `https://github.com/owner/repo.git@<ref>` is what a person pastes from a
+    `pip install git+...` line. It names a real repository at a real commit, but
+    it is not a page: fetching it 404s because the PATH is wrong, not because
+    anything is missing. Stamping such a row `gone` reports link rot about a
+    repository that is very much alive.
+
+    Deliberately NOT repaired into the repo root. Stripping `.git@<ref>` would
+    produce an address that resolves, but it is not the one that was cited --
+    the commit pin is the whole point of a requirement line, and inventing a
+    different URL that happens to work is the same error as appending a closing
+    paren. `malformed` says the true thing: we never asked a well-formed
+    question, so we learned nothing about the source.
+    """
+    return bool(_VCS_REQUIREMENT_RE.search(url))
+
+
 def unbalanced_brackets(url: str) -> bool:
     """True when this address's parentheses or square brackets do not balance.
 

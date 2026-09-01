@@ -8,7 +8,6 @@ place where linkify is guessing.
 
 from __future__ import annotations
 
-import pytest
 
 from zotero_capture.url_processing import bare_urls, canonicalize, extract_urls, is_storable_url
 

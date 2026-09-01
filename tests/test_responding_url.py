@@ -27,7 +27,6 @@ from zotero_capture.snapshot import (
     HASH_MAX_BYTES,
     OK,
     TOO_LARGE,
-    PageRead,
     SnapshotResult,
     TooLarge,
     format_snapshot_report,
