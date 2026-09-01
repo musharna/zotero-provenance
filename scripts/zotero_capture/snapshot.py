@@ -251,6 +251,10 @@ class SnapshotResult:
     too_large: int = 0
     stamp_refused: int = 0
     by_outcome: dict[str, int] = field(default_factory=dict)
+    # A page that does not read the same way twice. Counting these as CHANGED
+    # was reporting our own measurement noise as provenance drift.
+    unstable: int = 0
+    unstable_urls: list[str] = field(default_factory=list)
     # Keyed by the host that ANSWERED rather than the one the citation names.
     # Counting by requested host reported "doi.org: 177" -- a resolver that had
     # done its job correctly every time -- and never named the publishers doing
@@ -280,6 +284,58 @@ class VerifyResult:
     unreachable: int = 0
     changed_urls: list[str] = field(default_factory=list)
     unreachable_urls: list[str] = field(default_factory=list)
+    # "unreachable" alone re-creates exactly the conflation 0.36.0 removed from
+    # snapshot: a 403 from a paywall and a 404 on a dead citation are not the
+    # same finding, and on this corpus most of a verify pass is the former.
+    by_outcome: dict[str, int] = field(default_factory=dict)
+    # A page that does not read the same way twice. Counting these as CHANGED
+    # was reporting our own measurement noise as provenance drift.
+    unstable: int = 0
+    unstable_urls: list[str] = field(default_factory=list)
+
+
+class _HostPacer:
+    """A minimum interval between two requests to the SAME host.
+
+    Extracted rather than copied. It lived inline in `snapshot`, which is why
+    `verify` -- the other pass that fetches pages -- simply had none: there was
+    nothing to reuse, so the politeness was a property of one loop instead of a
+    property of fetching. `--sleep` was accepted, documented as "be polite", and
+    delivered to exactly one of the two callers.
+
+    Spacing is per HOST, not per request: rows arrive ordered by first_seen, so
+    one site tends to appear as a contiguous burst while consecutive rows from
+    different hosts need no delay between them at all.
+    """
+
+    def __init__(
+        self,
+        sleep_s: float,
+        *,
+        sleeper: Callable[[float], None] = time.sleep,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._sleep_s = sleep_s
+        self._sleeper = sleeper
+        self._monotonic = monotonic
+        self._last: dict[str, float] = {}
+
+    def wait(self, url: str) -> None:
+        if not self._sleep_s:
+            return
+        host = urlsplit(url).netloc
+        previous = self._last.get(host)
+        if previous is not None:
+            remaining = self._sleep_s - (self._monotonic() - previous)
+            if remaining > 0:
+                self._sleeper(remaining)
+        # Stamped before the fetch rather than after, so the interval runs
+        # between request STARTS and the time the host already spent serving us
+        # counts toward it. Stamped unconditionally for the same reason: a dead
+        # link and an oversized page are requests the host answered, and on an
+        # old corpus a long run of failures is the likeliest way to end up
+        # sprinting through one site.
+        self._last[host] = self._monotonic()
 
 
 def snapshot(
@@ -313,7 +369,7 @@ def snapshot(
     the page was read.
     """
     result = SnapshotResult()
-    last_request: dict[str, float] = {}
+    pacer = _HostPacer(sleep_s, sleeper=sleeper, monotonic=monotonic)
     for row in rows_needing_hash(
         db_path, limit=limit, include_failed=include_failed,
         only_outcome=only_outcome, only_host=only_host,
@@ -324,20 +380,7 @@ def snapshot(
             result.would_hash += 1
             continue
 
-        if sleep_s:
-            host = urlsplit(url).netloc
-            previous = last_request.get(host)
-            if previous is not None:
-                remaining = sleep_s - (monotonic() - previous)
-                if remaining > 0:
-                    sleeper(remaining)
-            # Stamped before the fetch rather than after, so the interval runs
-            # between request STARTS and the time the host already spent
-            # serving us counts toward it. Stamped unconditionally for the same
-            # reason: a dead link and an oversized page are requests the host
-            # answered, and on an old corpus a long run of failures is the
-            # likeliest way to end up sprinting through one site.
-            last_request[host] = monotonic()
+        pacer.wait(url)
         try:
             read = hasher(url)
             read_at = clock()
@@ -433,6 +476,9 @@ def verify(
     *,
     hasher: Callable[[str], PageRead],
     limit: int | None = None,
+    sleep_s: float = 0.0,
+    sleeper: Callable[[float], None] = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> VerifyResult:
     """Ask whether each hashed page still says what it said.
 
@@ -440,23 +486,64 @@ def verify(
     NOT re-hashed here: the stored hash is the evidence of what was consulted,
     and quietly replacing it with what the page says today would destroy the
     finding at the moment it was made.
+
+    `sleep_s` is not optional politeness. This pass re-reads EVERY hashed page in
+    the corpus -- thousands of requests, many to hosts already rate-limiting us
+    -- and it had no pacing at all while the CLI advertised `--sleep`. It shares
+    `_HostPacer` with `snapshot` rather than keeping a second copy, because a
+    second copy is how the first one came to be missing here.
     """
     result = VerifyResult()
+    pacer = _HostPacer(sleep_s, sleeper=sleeper, monotonic=monotonic)
     for row in rows_with_hash(db_path, limit=limit):
         url = row["url_canonical"]
         result.examined += 1
+        pacer.wait(url)
         try:
             digest = hasher(url).digest
         except Exception as e:
-            logger.info("could not re-read %s: %s", url, e)
+            # Split, not collapsed. A paywall refusing us and a citation that
+            # died say different things, and reporting both as "unreachable"
+            # is the conflation 0.36.0 removed from the other fetching pass.
+            outcome = classify_failure(e)
+            result.by_outcome[outcome] = result.by_outcome.get(outcome, 0) + 1
+            logger.info("could not re-read %s (%s): %s", url, outcome, e)
             result.unreachable += 1
             result.unreachable_urls.append(url)
             continue
         if digest == row["content_hash"]:
             result.unchanged += 1
-        else:
-            result.changed += 1
-            result.changed_urls.append(url)
+            continue
+
+        # A difference is a CANDIDATE, not a finding. Measured on this corpus:
+        # 5 of 8 sampled pages produced a different digest when read twice three
+        # seconds apart, because a whole-document hash of live HTML also covers
+        # nonces, ad tokens, build ids and timestamps. Reporting the first
+        # mismatch as "changed" is an affirmative claim about the SOURCE drawn
+        # from one observation that cannot support it -- the same error as
+        # reading a 404 as absence, which `absence_is_corroborated` exists to
+        # prevent one layer along.
+        #
+        # So the claim is corroborated by reading again. Spent only on
+        # candidates: an unchanged page never costs a second request.
+        pacer.wait(url)
+        try:
+            second = hasher(url).digest
+        except Exception as e:
+            outcome = classify_failure(e)
+            result.by_outcome[outcome] = result.by_outcome.get(outcome, 0) + 1
+            logger.info("could not corroborate %s (%s): %s", url, outcome, e)
+            result.unreachable += 1
+            result.unreachable_urls.append(url)
+            continue
+        if second != digest:
+            # It does not agree with ITSELF, so it says nothing about whether
+            # the source moved. This is a fact about the page, not about us.
+            result.unstable += 1
+            result.unstable_urls.append(url)
+            continue
+        result.changed += 1
+        result.changed_urls.append(url)
     return result
 
 
@@ -504,11 +591,20 @@ def format_snapshot_report(result: SnapshotResult, *, dry_run: bool) -> list[str
 
 def format_verify_report(result: VerifyResult) -> list[str]:
     lines = [f"  CHANGED: {url}" for url in result.changed_urls]
+    lines += [
+        f"  unstable: {url}  (differs from itself; says nothing about drift)"
+        for url in result.unstable_urls
+    ]
     lines += [f"  unreachable: {url}" for url in result.unreachable_urls]
     lines.append(f"examined      : {result.examined}")
     lines.append(f"unchanged     : {result.unchanged}")
     lines.append(f"CHANGED       : {result.changed}")
     lines.append(f"unreachable   : {result.unreachable}")
+    lines.append(f"unstable      : {result.unstable}")
+    if result.by_outcome:
+        lines.append("why they could not be re-read:")
+        for outcome, n in sorted(result.by_outcome.items(), key=lambda kv: -kv[1]):
+            lines.append(f"  {outcome:<14}: {n}")
     if result.changed:
         lines.append("")
         lines.append(

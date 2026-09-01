@@ -112,7 +112,7 @@ def main() -> int:
 
         if args.verify:
             for line in format_verify_report(
-                verify(db_path, hasher=hasher, limit=args.limit)
+                verify(db_path, hasher=hasher, limit=args.limit, sleep_s=args.sleep)
             ):
                 print(line)
             return 0

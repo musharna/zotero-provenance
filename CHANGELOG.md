@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.44.0 — 2026-09-01
+
+- **A verify pass now corroborates a change before reporting one.** The first
+  real run of `--verify` called **29 of 60** pages CHANGED in five days. A
+  control — read the same page twice, three seconds apart — found **5 of 8
+  differ from themselves**, because a whole-document hash of live HTML also
+  covers nonces, ad tokens, build ids and timestamps. A single mismatch is a
+  CANDIDATE, not a finding: reporting it as drift is an affirmative claim about
+  the source drawn from one observation that cannot support it, the same error
+  as reading a 404 as absence. A candidate is now read again; only a page that
+  agrees with ITSELF and differs from the stored hash is CHANGED, and one that
+  does not is reported `unstable`. Re-run of the same 60 rows: **CHANGED 29 →
+  12, unstable 17, unchanged 30 either way.** The second read is spent only on
+  candidates, so an unchanged page still costs one request.
+- **`--sleep` reached `snapshot` and not `verify`.** The flag parsed, the help
+  text promised politeness, and the verify branch called `verify(db_path,
+  hasher=..., limit=...)` — which had no pacing parameter at all. A full pass is
+  3,744 pages, including hosts already rate-limiting us, fetched back to back.
+  This is the FOURTH appearance of this defect class here, and the existing guard
+  did not fire because it derived its flags by matching the literal prefix
+  `--only-` and its consumers by matching the literal name `snapshot`: two
+  hand-written lists wearing the costume of a derivation. The consumer set is now
+  derived from BEHAVIOUR — a function that calls `hasher(...)` makes outbound
+  requests, so it must accept pacing and every call site must pass it.
+- Per-host spacing is now `_HostPacer`, one definition shared by both fetching
+  passes. It lived inline in `snapshot`, which is exactly why `verify` had none:
+  there was nothing to reuse, so politeness was a property of one loop rather
+  than a property of fetching.
+- A verify failure now records WHY (`blocked`, `gone`, `timeout`...) instead of
+  collapsing everything into "unreachable" — the conflation 0.36.0 removed from
+  the other fetching pass, still present in this one.
+
 ## 0.43.0 — 2026-09-01
 
 - **A GitHub 404 can now be settled with your own credentials, and only in one
