@@ -42,6 +42,7 @@ from typing import Literal
 
 from .opjournal import OperationJournal
 from .sqlite_cache import lookup_url
+from .url_move import move_url
 from .url_processing import _TEMPLATE_RE
 from urllib.parse import urlsplit
 
@@ -240,52 +241,23 @@ def _apply_repair(
         )
         try:
             if step.action == "rewrite":
-                if not zotero.update_url(
-                    step.zotero_key, step.corrected, expect_url=step.url
-                ):
-                    journal.outcome(seq, "refused", "item no longer exists")
-                    # The item is gone. Rewriting the index row anyway would
-                    # leave it claiming a corrected URL with nothing behind it,
-                    # and the pass would report a repair that did not happen.
-                    logger.warning(
-                        "skipping rewrite of %s: item %s no longer exists",
-                        step.url,
-                        step.zotero_key,
-                    )
+                # Both stores or neither. This sequence used to live here, and
+                # living here is what let a one-off script do half of it: the
+                # pairing was a convention in one function's body rather than an
+                # operation anyone could reach for. It is now `move_url`, whose
+                # signature cannot be satisfied without a db_path.
+                reason = move_url(
+                    db_path,
+                    zotero,
+                    zotero_key=step.zotero_key,
+                    old=step.url,
+                    new=step.corrected,
+                    connect=connect,
+                )
+                if reason:
+                    journal.outcome(seq, "refused", reason)
                     counts["skip"] += 1
                     continue
-                # ...AND zotero_key: between the plan and here another
-                # session can have replaced this row, and rewriting by URL alone
-                # moved a row that belongs to a different item.
-                with connect(db_path) as conn:
-                    moved = conn.execute(
-                        "UPDATE url_index SET url_canonical = ?"
-                        " WHERE url_canonical = ? AND zotero_key = ?",
-                        (step.corrected, step.url, step.zotero_key),
-                    ).rowcount
-                if not moved:
-                    journal.outcome(seq, "refused", "index row was replaced")
-                    logger.warning(
-                        "rewrote item %s but its index row was replaced; "
-                        "leaving the new row alone",
-                        step.zotero_key,
-                    )
-                    counts["skip"] += 1
-                    continue
-                # The queue is keyed by URL and the row just moved out from
-                # under it. Left behind, those sightings sit under an address no
-                # index row will ever revisit: the recurring branch only runs
-                # for a URL that is in the index, and this one no longer is.
-                with connect(db_path) as conn:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO pending_tags (url_canonical, tag)"
-                        " SELECT ?, tag FROM pending_tags WHERE url_canonical = ?",
-                        (step.corrected, step.url),
-                    )
-                    conn.execute(
-                        "DELETE FROM pending_tags WHERE url_canonical = ?",
-                        (step.url,),
-                    )
                 journal.outcome(seq, "done")
                 counts["rewrite"] += 1
             else:

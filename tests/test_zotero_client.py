@@ -503,7 +503,7 @@ def test_update_url_patches_the_url_field_with_a_version_guard():
         web_sources_collection_key="COLL1",
         transport=httpx.MockTransport(handler),
     ) as client:
-        client.update_url("K1", "https://example.test/full(1)")
+        client._patch_item_url("K1", "https://example.test/full(1)")
 
     assert len(calls) == 1
     body, headers = calls[0]
@@ -522,7 +522,7 @@ def test_update_url_is_idempotent_when_the_item_is_gone():
         web_sources_collection_key="COLL1",
         transport=httpx.MockTransport(handler),
     ) as client:
-        client.update_url("GONE", "https://example.test/x")  # must not raise
+        client._patch_item_url("GONE", "https://example.test/x")  # must not raise
 
 
 def test_update_url_carries_a_url_shaped_title_along():
@@ -560,7 +560,7 @@ def test_update_url_carries_a_url_shaped_title_along():
         web_sources_collection_key="C",
         transport=httpx.MockTransport(handler),
     ) as client:
-        client.update_url("K", "https://a.test/x(1)")
+        client._patch_item_url("K", "https://a.test/x(1)")
 
     assert calls == [{"url": "https://a.test/x(1)", "title": "https://a.test/x(1)"}]
 
@@ -594,7 +594,7 @@ def test_update_url_leaves_a_real_title_alone():
         web_sources_collection_key="C",
         transport=httpx.MockTransport(handler),
     ) as client:
-        client.update_url("K", "https://a.test/x(1)")
+        client._patch_item_url("K", "https://a.test/x(1)")
 
     assert calls == [{"url": "https://a.test/x(1)"}]
 
