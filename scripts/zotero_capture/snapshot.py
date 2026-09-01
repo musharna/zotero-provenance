@@ -13,12 +13,26 @@ getting one means reading the whole document, and the hook's budget is the
 reason the title fetch has a one-second cap in the first place. Hashing belongs
 where the title backfill already lives.
 
-**The hash covers the COMPLETE document or it is not recorded.** A document
-larger than `HASH_MAX_BYTES` is skipped and reported, rather than hashed to its
-first few megabytes. A hash that silently means "a prefix of the page" would
-compare equal for two documents that differ after the cap, which is a false
-negative in exactly the case — a long page quietly edited near the end — that
-the hash is there to catch.
+**A hash always states what it covers.** A document that fits under `max_bytes`
+is hashed whole; one that does not is hashed to exactly its first `max_bytes`
+bytes and RECORDED AS SUCH. The scope travels with the digest, the way HTTP's
+own `Repr-Digest` travels with a `Content-Range`.
+
+It did not use to. `content_hash` was a single column with no room to say what
+it covered, so a prefix stored there would have been read as a whole-document
+claim — and would compare equal for two documents differing after the cap, a
+false negative in exactly the case the hash exists to catch. Given that column
+the all-or-nothing rule was forced rather than chosen, and the price was that
+the 71 largest sources in the corpus — 39 arXiv PDFs, a Nature paper, an SEC
+filing, several genome assemblies — were fetched successfully and held no
+evidence at all. Raising the cap could never have fixed that: the largest is a
+207 GiB archive, so there is no ceiling that reaches the tail.
+
+A prefix hash is ONE-DIRECTIONAL, and every consumer must treat it so. A
+difference inside the covered range proves the document changed; agreement
+proves nothing whatever about the bytes past the cap. `verify` therefore cannot
+report a truncated row as "unchanged" — the same discipline that stops a 404
+becoming "gone".
 """
 
 from __future__ import annotations
@@ -42,21 +56,18 @@ from .sqlite_cache import (
 
 logger = logging.getLogger(__name__)
 
-# Generous, because it is a ceiling on honesty rather than on speed: below it the
-# hash means "the whole document", and above it nothing is claimed at all.
-HASH_MAX_BYTES = 5 * 1024 * 1024
-
-class TooLarge(Exception):
-    """The document exceeds the cap, so no honest whole-document hash exists.
-
-    Carries `final_url` because this is raised mid-stream, after the redirect
-    chain has already been resolved -- so it is one of the places that KNOWS
-    which host served the oversized document, and the only place that can say so.
-    """
-
-    def __init__(self, message: str, *, final_url: str) -> None:
-        super().__init__(message)
-        self.final_url = final_url
+# How much of a document we are willing to pull, per page. This is now purely a
+# COST bound: below it the digest covers everything, above it the digest covers
+# a stated prefix, and either way something is recorded. While a partial read was
+# inexpressible this number decided whether evidence existed at all, and 5 MiB
+# left the corpus's 71 biggest sources with none -- the median of them is 11.8
+# MiB, so most are ordinary papers that simply did not fit.
+#
+# It buys completeness rather than honesty now, so it is set where completeness
+# actually lands: 32 MiB covers three quarters of the oversized rows outright.
+# It does NOT chase the tail, and nothing should -- the largest single citation
+# in the corpus is a 207 GiB archive.
+HASH_MAX_BYTES = 32 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -77,6 +88,14 @@ class PageRead:
 
     digest: str
     final_url: str
+    # How many bytes this digest covers, and whether that was all of them.
+    # Neither is defaulted, for the reason `final_url` is not: a parameter that
+    # CAN be omitted eventually is, invisibly from both ends -- this repository
+    # shipped `--sleep` parsed and dropped for an entire release. A digest whose
+    # scope defaulted to "complete" would lie by omission in the one direction
+    # that matters, turning a prefix into a whole-document claim.
+    covers_bytes: int
+    complete: bool
 
 
 def responding_url(exc: BaseException, requested: str) -> str:
@@ -125,30 +144,52 @@ def page_is_visible(url: str, *, client: httpx.Client) -> bool:
     return response.status_code not in (404, 410)
 
 
-def hash_page(url: str, *, client: httpx.Client) -> PageRead:
-    """sha256 of the complete response body, and the URL that served it.
+def hash_page(
+    url: str, *, client: httpx.Client, max_bytes: int = HASH_MAX_BYTES
+) -> PageRead:
+    """sha256 of the response body up to `max_bytes`, with the span it covers.
 
-    Streamed, so an enormous document is abandoned at the cap instead of being
-    read into memory. The client is the SSRF-guarded one the title fetcher
-    builds: this walks stored URLs unattended, which is exactly where a redirect
-    into a private address would go unnoticed.
+    Streamed, so an enormous document is stopped at the cap instead of being read
+    into memory. The client is the SSRF-guarded one the title fetcher builds:
+    this walks stored URLs unattended, which is exactly where a redirect into a
+    private address would go unnoticed.
+
+    The cut lands at `max_bytes` exactly, never at the end of whichever chunk
+    happened to cross it. Chunk sizes belong to the transport and vary between
+    runs, so a digest that depended on them would differ for a document that had
+    not -- reporting our own transport as provenance drift.
+
+    Reaching the cap is not an error and no longer raises. It is a successful
+    read of a stated prefix, and saying so is the whole point: the alternative,
+    for six releases, was that the biggest sources in the library had no record
+    at all.
 
     `resp.url` is read BEFORE `raise_for_status`, so the address is in hand on
     every path out of here rather than only the successful one.
     """
     digest = hashlib.sha256()
     read = 0
+    complete = True
     with client.stream("GET", url) as resp:
         final_url = str(resp.url)
         resp.raise_for_status()
         for chunk in resp.iter_bytes():
-            read += len(chunk)
-            if read > HASH_MAX_BYTES:
-                raise TooLarge(
-                    f"{url} exceeds {HASH_MAX_BYTES} bytes", final_url=final_url
-                )
+            if read + len(chunk) > max_bytes:
+                # A document of EXACTLY max_bytes never reaches here, so it is
+                # correctly complete: the boundary is a cap, not a refusal to
+                # hash anything large.
+                digest.update(chunk[: max_bytes - read])
+                read = max_bytes
+                complete = False
+                break
             digest.update(chunk)
-    return PageRead(digest=digest.hexdigest(), final_url=final_url)
+            read += len(chunk)
+    return PageRead(
+        digest=digest.hexdigest(),
+        final_url=final_url,
+        covers_bytes=read,
+        complete=complete,
+    )
 
 
 # What the last read of a page ended as. Stored per row, because "could not
@@ -159,7 +200,6 @@ BLOCKED = "blocked"              # 401/403 -- refused; the page may be perfectly
 RATE_LIMITED = "rate_limited"    # 429 -- back off, conclude nothing
 SERVER_ERROR = "server_error"    # 5xx -- their fault, probably transient
 TIMEOUT = "timeout"
-TOO_LARGE = "too_large"          # read fine, refused deliberately at the cap
 UNREACHABLE = "unreachable"      # DNS, connection, and anything unrecognised
 # A 404 we are NOT entitled to read as absence. See `absence_is_corroborated`.
 NOT_VISIBLE = "not_visible"      # 404/410 whose whole container is also hidden
@@ -224,8 +264,12 @@ def classify_failure(exc: BaseException) -> str:
     manufacture link rot -- inventing the exact finding this tool exists to
     report truthfully.
     """
-    if isinstance(exc, TooLarge):
-        return TOO_LARGE
+    if isinstance(exc, httpx.InvalidURL):
+        # Not a fact about the source and not a bug in the fetch: the string we
+        # STORED is not a usable address, which is exactly what MALFORMED means
+        # here. It reached this branch as UNREACHABLE before, blaming a host we
+        # never managed to ask.
+        return MALFORMED
     if isinstance(exc, httpx.HTTPStatusError):
         code = exc.response.status_code
         if code in (404, 410):
@@ -248,7 +292,15 @@ class SnapshotResult:
     hashed: int = 0
     would_hash: int = 0
     unreachable: int = 0
-    too_large: int = 0
+    # Rows whose digest covers a stated prefix rather than the whole document.
+    # Counted separately because it is a different STRENGTH of evidence, not a
+    # different kind: a partial row can prove a change and can never disprove one.
+    partial: int = 0
+    # Something that was not an HTTP failure at all. Kept apart from every other
+    # bucket because it is a fault of OURS, and the one thing that must never
+    # happen is our bug being written down as a finding about a citation.
+    internal_errors: int = 0
+    internal_error_urls: list[str] = field(default_factory=list)
     stamp_refused: int = 0
     by_outcome: dict[str, int] = field(default_factory=dict)
     # A page that does not read the same way twice. Counting these as CHANGED
@@ -266,13 +318,14 @@ class SnapshotResult:
     # headed "who refused us", which ranked github.com first with 243 -- 241 of
     # them dead links that github had served perfectly correctly. They also call
     # for opposite actions (ask for access vs. repair or retire the citation).
-    # `too_large` appears in NEITHER: that is us refusing, not the host.
+    # An oversized document appears in NEITHER, and no longer appears anywhere
+    # as a failure: the host served it correctly and we record what we read.
     refused_by: dict[str, int] = field(default_factory=dict)   # 401/403, 429
     gone_at: dict[str, int] = field(default_factory=dict)      # 404/410
     # Split by outcome, per the lesson prune paid for.
     hashed_urls: list[str] = field(default_factory=list)
     unreachable_urls: list[str] = field(default_factory=list)
-    too_large_urls: list[str] = field(default_factory=list)
+    partial_urls: list[str] = field(default_factory=list)
     stamp_refused_urls: list[str] = field(default_factory=list)
 
 
@@ -282,6 +335,15 @@ class VerifyResult:
     unchanged: int = 0
     changed: int = 0
     unreachable: int = 0
+    # The stored digest covers only a prefix, and that prefix still agrees. This
+    # is NOT `unchanged`: the bytes past the cap were never compared, and a long
+    # document edited near its end is precisely the case a hash exists to catch.
+    # Reporting it as unchanged would manufacture a reassurance -- strictly worse
+    # than the silence this release replaced, because nothing downstream could
+    # tell it was hollow.
+    partial_match: int = 0
+    partial_match_urls: list[str] = field(default_factory=list)
+    internal_errors: int = 0
     changed_urls: list[str] = field(default_factory=list)
     unreachable_urls: list[str] = field(default_factory=list)
     # "unreachable" alone re-creates exactly the conflation 0.36.0 removed from
@@ -342,9 +404,10 @@ def snapshot(
     db_path,
     *,
     zotero,
-    hasher: Callable[[str], PageRead],
+    hasher: Callable[[str, int], PageRead],
     clock: Callable[[], str],
     dry_run: bool = False,
+    max_bytes: int = HASH_MAX_BYTES,
     limit: int | None = None,
     include_failed: bool = False,
     only_outcome: str | None = None,
@@ -382,9 +445,25 @@ def snapshot(
 
         pacer.wait(url)
         try:
-            read = hasher(url)
+            read = hasher(url, max_bytes)
             read_at = clock()
         except Exception as e:  # a dead link is the common case, not a fault
+            if not isinstance(e, (httpx.HTTPError, httpx.InvalidURL)):
+                # Not a fact about the source, so nothing about the source may
+                # be written. Found by changing the hasher's signature: the old
+                # stubs raised TypeError, `except Exception` caught it, and 20
+                # rows were stamped `unreachable` -- a bug of ours recorded in
+                # the library as link rot, which is the precise harm this whole
+                # tool exists to prevent.
+                #
+                # Not re-raised, because a pass over this corpus runs for hours
+                # and one strange row must not discard the rest. Counted and
+                # logged with its traceback instead, and the row keeps whatever
+                # it honestly knew before.
+                logger.exception("bug while reading %s; recording nothing", url)
+                result.internal_errors += 1
+                result.internal_error_urls.append(url)
+                continue
             outcome = classify_failure(e)
             # WHERE the refusal came from. For a bare host this is the URL we
             # asked for; through a resolver it is somebody else entirely, and
@@ -421,28 +500,21 @@ def snapshot(
                     result.refused_by[host] = result.refused_by.get(host, 0) + 1
                 elif outcome == GONE:
                     result.gone_at[host] = result.gone_at.get(host, 0) + 1
-            if outcome == TOO_LARGE:
+            # The redirect is named only when there WAS one. Printing
+            # "(via itself)" on every ordinary dead link would bury the handful
+            # of lines where the distinction is the whole point.
+            if answered_by != url:
                 logger.info(
-                    "%s is larger than the hash cap; not recording a hash", url
+                    "could not read %s (%s): refused by %s: %s",
+                    url,
+                    outcome,
+                    answered_by,
+                    e,
                 )
-                result.too_large += 1
-                result.too_large_urls.append(url)
             else:
-                # The redirect is named only when there WAS one. Printing
-                # "(via itself)" on every ordinary dead link would bury the
-                # handful of lines where the distinction is the whole point.
-                if answered_by != url:
-                    logger.info(
-                        "could not read %s (%s): refused by %s: %s",
-                        url,
-                        outcome,
-                        answered_by,
-                        e,
-                    )
-                else:
-                    logger.info("could not read %s (%s): %s", url, outcome, e)
-                result.unreachable += 1
-                result.unreachable_urls.append(url)
+                logger.info("could not read %s (%s): %s", url, outcome, e)
+            result.unreachable += 1
+            result.unreachable_urls.append(url)
             # The ATTEMPT is stamped even though the read is not. `hashed_at`
             # stays empty because nothing was read; `last_attempt_at` records
             # that we tried, which is what stops the next pass repeating it.
@@ -465,20 +537,36 @@ def snapshot(
             result.stamp_refused += 1
             result.stamp_refused_urls.append(url)
             continue
-        set_content_hash(db_path, url, content_hash=digest, hashed_at=read_at)
+        set_content_hash(
+            db_path,
+            url,
+            content_hash=digest,
+            hashed_at=read_at,
+            covers_bytes=read.covers_bytes,
+            complete=read.complete,
+        )
         result.hashed += 1
         result.hashed_urls.append(url)
+        if not read.complete:
+            result.partial += 1
+            result.partial_urls.append(url)
+            logger.info(
+                "%s is larger than the cap; hashed its first %d bytes",
+                url,
+                read.covers_bytes,
+            )
     return result
 
 
 def verify(
     db_path,
     *,
-    hasher: Callable[[str], PageRead],
+    hasher: Callable[[str, int], PageRead],
     limit: int | None = None,
     sleep_s: float = 0.0,
     sleeper: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
+    max_bytes: int = HASH_MAX_BYTES,
 ) -> VerifyResult:
     """Ask whether each hashed page still says what it said.
 
@@ -492,6 +580,11 @@ def verify(
     -- and it had no pacing at all while the CLI advertised `--sleep`. It shares
     `_HostPacer` with `snapshot` rather than keeping a second copy, because a
     second copy is how the first one came to be missing here.
+
+    Each row is re-read over THE SAME SPAN its stored digest covers. Comparing a
+    5 MiB prefix against a 32 MiB one would report a change for every truncated
+    row the moment the cap moved -- a finding about our own configuration wearing
+    the costume of a finding about the source.
     """
     result = VerifyResult()
     pacer = _HostPacer(sleep_s, sleeper=sleeper, monotonic=monotonic)
@@ -499,9 +592,20 @@ def verify(
         url = row["url_canonical"]
         result.examined += 1
         pacer.wait(url)
+        # A truncated row is re-read over exactly the span it recorded. A row
+        # hashed whole is re-read under the current cap, and -1 means a legacy
+        # row whose length was never recorded -- known complete, unknown size.
+        stored_covers = row["hash_bytes"]
+        was_truncated = bool(row["hash_truncated"])
+        span = stored_covers if was_truncated and stored_covers >= 0 else max_bytes
         try:
-            digest = hasher(url).digest
+            read = hasher(url, span)
+            digest = read.digest
         except Exception as e:
+            if not isinstance(e, (httpx.HTTPError, httpx.InvalidURL)):
+                logger.exception("bug while re-reading %s; concluding nothing", url)
+                result.internal_errors += 1
+                continue
             # Split, not collapsed. A paywall refusing us and a citation that
             # died say different things, and reporting both as "unreachable"
             # is the conflation 0.36.0 removed from the other fetching pass.
@@ -512,6 +616,19 @@ def verify(
             result.unreachable_urls.append(url)
             continue
         if digest == row["content_hash"]:
+            if was_truncated or not read.complete:
+                # Agreement over a prefix. One-directional evidence: it could
+                # have proved a change and it did not, which is not the same as
+                # proving there was none.
+                #
+                # `not read.complete` catches the other direction too -- a row
+                # stored whole that no longer fits. That means the document grew
+                # OR our cap shrank, and for a legacy row (length -1) there is
+                # nothing on hand to tell which. Guessing "changed" would invent
+                # drift we never observed.
+                result.partial_match += 1
+                result.partial_match_urls.append(url)
+                continue
             result.unchanged += 1
             continue
 
@@ -528,8 +645,12 @@ def verify(
         # candidates: an unchanged page never costs a second request.
         pacer.wait(url)
         try:
-            second = hasher(url).digest
+            second = hasher(url, span).digest
         except Exception as e:
+            if not isinstance(e, (httpx.HTTPError, httpx.InvalidURL)):
+                logger.exception("bug while re-reading %s; concluding nothing", url)
+                result.internal_errors += 1
+                continue
             outcome = classify_failure(e)
             result.by_outcome[outcome] = result.by_outcome.get(outcome, 0) + 1
             logger.info("could not corroborate %s (%s): %s", url, outcome, e)
@@ -541,6 +662,13 @@ def verify(
             # the source moved. This is a fact about the page, not about us.
             result.unstable += 1
             result.unstable_urls.append(url)
+            continue
+        if not was_truncated and not read.complete:
+            # Stored whole, read short. The digests differ, but they cover
+            # different spans, so the difference is not evidence about the
+            # source -- see the note above.
+            result.partial_match += 1
+            result.partial_match_urls.append(url)
             continue
         result.changed += 1
         result.changed_urls.append(url)
@@ -556,7 +684,8 @@ def format_snapshot_report(result: SnapshotResult, *, dry_run: bool) -> list[str
     lines += [f"  hashed: {url}" for url in result.hashed_urls]
     lines += [f"  unreachable: {url}" for url in result.unreachable_urls]
     lines += [
-        f"  too large: {url}  (no whole-document hash)" for url in result.too_large_urls
+        f"  partial: {url}  (hashed to the cap; the tail is not covered)"
+        for url in result.partial_urls
     ]
     lines += [
         f"  stamp refused: {url}  (item moved)" for url in result.stamp_refused_urls
@@ -564,7 +693,9 @@ def format_snapshot_report(result: SnapshotResult, *, dry_run: bool) -> list[str
     lines.append(f"examined      : {result.examined}")
     lines.append(f"hashed        : {result.hashed}")
     lines.append(f"unreachable   : {result.unreachable}")
-    lines.append(f"too large     : {result.too_large}")
+    lines.append(f"  of those partial: {result.partial}")
+    if result.internal_errors:
+        lines.append(f"OUR BUGS      : {result.internal_errors}  (nothing recorded)")
     lines.append(f"stamp refused : {result.stamp_refused}")
     # "unreachable: 1285" hides that most of it was a closed door rather than a
     # dead citation. The split is the whole point of recording an outcome.
@@ -592,15 +723,23 @@ def format_snapshot_report(result: SnapshotResult, *, dry_run: bool) -> list[str
 def format_verify_report(result: VerifyResult) -> list[str]:
     lines = [f"  CHANGED: {url}" for url in result.changed_urls]
     lines += [
+        f"  prefix agreed: {url}  (only the first bytes are covered; "
+        f"this is not 'unchanged')"
+        for url in result.partial_match_urls
+    ]
+    lines += [
         f"  unstable: {url}  (differs from itself; says nothing about drift)"
         for url in result.unstable_urls
     ]
     lines += [f"  unreachable: {url}" for url in result.unreachable_urls]
     lines.append(f"examined      : {result.examined}")
     lines.append(f"unchanged     : {result.unchanged}")
+    lines.append(f"prefix agreed : {result.partial_match}  (tail never compared)")
     lines.append(f"CHANGED       : {result.changed}")
     lines.append(f"unreachable   : {result.unreachable}")
     lines.append(f"unstable      : {result.unstable}")
+    if result.internal_errors:
+        lines.append(f"OUR BUGS      : {result.internal_errors}  (nothing concluded)")
     if result.by_outcome:
         lines.append("why they could not be re-read:")
         for outcome, n in sorted(result.by_outcome.items(), key=lambda kv: -kv[1]):

@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.45.0 — 2026-09-01
+
+- **A hash now states what it covers, so the biggest sources stop being blank.**
+  71 rows were fetched SUCCESSFULLY and held no evidence at all — no hash, no
+  size, nothing any later pass could compare — and they are the corpus's largest
+  citations: 39 arXiv PDFs, a Nature paper, an SEC filing, several genome
+  assemblies. The cause was not memory (`hash_page` already streamed) and not the
+  cap. It was that `content_hash` was a single column with no room to state its
+  scope, so `''` meant BOTH "never read" and "read fine, refused to record" —
+  the same one-word-for-two-findings defect that `unreachable` (gone vs blocked)
+  and `gone` (absent vs not-visible) each cost a release. Given that column the
+  all-or-nothing rule was FORCED, not chosen: a prefix stored where a
+  whole-document hash is expected really would compare equal for two documents
+  differing after the cap.
+  Sizes were measured before anything was written, because the shape of the
+  number decides the fix: median **11.8 MiB**, largest **207 GiB**. So "raise the
+  cap" could never have been the answer — it moves the tripwire and leaves the
+  same silence for the datasets. HTTP (`Content-Range`, `Repr-Digest`), git blobs
+  and BitTorrent pieces all answer this identically: a digest is always scoped
+  and the scope travels WITH it. `PageRead` now carries `covers_bytes` and
+  `complete`, neither defaulted; `set_content_hash` requires both; `TooLarge`,
+  the `too_large` outcome and its branch are DELETED. A capped read is not an
+  exception, it is a read of a stated prefix.
+- **A prefix hash is one-directional, and `verify` is now unable to forget it.**
+  A difference inside the covered range proves the document changed; agreement
+  proves nothing whatever about the bytes past the cap. "The first 5 MiB of a
+  39 MiB PDF are unchanged" reported as "unchanged" would manufacture a
+  reassurance — strictly worse than the silence it replaced, because nothing
+  downstream could tell it was hollow. Those land in `prefix agreed`, never in
+  `unchanged`. Each row is also re-read over EXACTLY the span its stored digest
+  covers, or every truncated row would report a change the moment the cap moved:
+  a finding about our own configuration wearing the costume of a finding about
+  the source.
+- **The cap is now a cost bound, and is set where completeness actually lands.**
+  `HASH_MAX_BYTES` 5 MiB → **32 MiB**, which covers three quarters of the
+  oversized rows outright, plus a wired-and-guarded `--max-bytes`. It does not
+  chase the tail and nothing should.
+- **Our own bug was being written into the library as link rot.** Found by this
+  release rather than looked for: changing the hasher's signature made the old
+  stubs raise `TypeError`, `except Exception` caught it, and 20 rows were stamped
+  `unreachable`. `classify_failure` was right to send anything unrecognised to
+  UNREACHABLE rather than GONE — but that is a rule for unrecognised NETWORK
+  errors, and a `TypeError` is not a fact about somebody's citation at any
+  confidence. Both fetching passes now record nothing at all for a non-HTTP
+  error, count it, and log it with its traceback; the run continues, because a
+  pass over this corpus takes hours and one strange row must not discard the rest.
+- Migration defaults describe what actually happened rather than what is
+  convenient: every row hashed under the old rule IS complete, so
+  `hash_truncated = 0` is a fact about those ~3,744 rows — while their length was
+  never recorded, and `hash_bytes = -1` says exactly that. A default of 0 would
+  have claimed a zero-byte document and any other number would have invented one.
+
 ## 0.44.0 — 2026-09-01
 
 - **A verify pass now corroborates a change before reporting one.** The first
