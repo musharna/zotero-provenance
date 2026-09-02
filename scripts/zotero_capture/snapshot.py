@@ -200,6 +200,9 @@ OK = "ok"
 GONE = "gone"                    # 404/410 -- the citation no longer resolves
 BLOCKED = "blocked"              # 401/403 -- refused; the page may be perfectly fine
 RATE_LIMITED = "rate_limited"    # 429 -- back off, conclude nothing
+# Ceiling on a single host's self-imposed delay. Unbounded backoff over 818
+# rows from one host is indistinguishable from a hang.
+MAX_PENALTY_S = 120.0
 SERVER_ERROR = "server_error"    # 5xx -- their fault, probably transient
 TIMEOUT = "timeout"
 UNREACHABLE = "unreachable"      # DNS, connection, and anything unrecognised
@@ -397,14 +400,62 @@ class _HostPacer:
         self._sleeper = sleeper
         self._monotonic = monotonic
         self._last: dict[str, float] = {}
+        # Extra seconds this host has ASKED for, on top of the configured
+        # interval. The configured interval is our guess about what a host
+        # tolerates; a 429 is the host saying the guess is wrong, and it was
+        # the one input this class never took.
+        self._penalty: dict[str, float] = {}
+
+    def interval_for(self, url: str) -> float:
+        """The current interval for this host: the base plus anything it has
+        asked for. Exposed so a report can say why a run slowed down."""
+        return self._sleep_s + self._penalty.get(urlsplit(url).netloc, 0.0)
+
+    def penalise(self, url: str, retry_after: float | None = None) -> None:
+        """This host told us to slow down.
+
+        `Retry-After` wins when the host states one: guessing an exponential
+        when we have been given the number is worse than either. Otherwise the
+        penalty doubles, from a floor of the base interval, so a host that keeps
+        refusing keeps getting more room. Capped, because an unbounded penalty
+        on a corpus with 818 rows from one host is indistinguishable from a hang.
+        """
+        host = urlsplit(url).netloc
+        if not host:
+            return
+        if retry_after is not None:
+            self._penalty[host] = min(retry_after, MAX_PENALTY_S)
+            return
+        current = self._penalty.get(host, 0.0)
+        floor = self._sleep_s if self._sleep_s else 1.0
+        self._penalty[host] = min(max(current * 2.0, floor), MAX_PENALTY_S)
+
+    def relax(self, url: str) -> None:
+        """The host answered normally, so give some of the penalty back.
+
+        Without decay a single 429 taxes every remaining row on that host for
+        the rest of a multi-hour run. Halving rather than clearing keeps a
+        memory of the refusal, so a host that throttles intermittently does not
+        get sprinted at again the moment one request succeeds.
+        """
+        host = urlsplit(url).netloc
+        current = self._penalty.get(host)
+        if not current:
+            return
+        nxt = current / 2.0
+        if nxt < 0.5:
+            self._penalty.pop(host, None)
+        else:
+            self._penalty[host] = nxt
 
     def wait(self, url: str) -> None:
-        if not self._sleep_s:
-            return
         host = urlsplit(url).netloc
+        interval = self._sleep_s + self._penalty.get(host, 0.0)
+        if not interval:
+            return
         previous = self._last.get(host)
         if previous is not None:
-            remaining = self._sleep_s - (self._monotonic() - previous)
+            remaining = interval - (self._monotonic() - previous)
             if remaining > 0:
                 self._sleeper(remaining)
         # Stamped before the fetch rather than after, so the interval runs
@@ -414,6 +465,52 @@ class _HostPacer:
         # old corpus a long run of failures is the likeliest way to end up
         # sprinting through one site.
         self._last[host] = self._monotonic()
+
+
+def _retry_after(response: httpx.Response) -> float | None:
+    """`Retry-After` in seconds, or None when absent or unparseable.
+
+    Only the delta-seconds form is read. The HTTP-date form is legal and rare,
+    and misreading one would produce a wait of decades; returning None falls
+    back to the exponential, which is wrong in the safe direction.
+    """
+    raw = response.headers.get("Retry-After")
+    if raw is None:
+        return None
+    try:
+        seconds = float(raw.strip())
+    except ValueError:
+        return None
+    return seconds if seconds >= 0 else None
+
+
+def _paced_fetch(
+    pacer: _HostPacer,
+    hasher: Callable[[str, int], PageRead],
+    url: str,
+    max_bytes: int,
+) -> PageRead:
+    """The only place a page is fetched.
+
+    Waits for this host's interval, reads, and lets the host's answer change
+    that interval. One function on purpose: there were three `pacer.wait()` +
+    `hasher()` pairs across the two passes, and putting the backoff in each
+    failure arm would have made one rule into three copies -- the defect class
+    that has shipped five times in this repository. It also means a future
+    fetching pass cannot bypass the pacing the way `verify` originally did.
+
+    Only 429 and 503 slow us down. A 404 is an answer, not a complaint, and
+    this corpus holds 1,285 of them.
+    """
+    pacer.wait(url)
+    try:
+        read = hasher(url, max_bytes)
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code in (429, 503):
+            pacer.penalise(url, _retry_after(e.response))
+        raise
+    pacer.relax(url)
+    return read
 
 
 def snapshot(
@@ -459,9 +556,8 @@ def snapshot(
             result.would_hash += 1
             continue
 
-        pacer.wait(url)
         try:
-            read = hasher(url, max_bytes)
+            read = _paced_fetch(pacer, hasher, url, max_bytes)
             read_at = clock()
         except Exception as e:  # a dead link is the common case, not a fault
             if not isinstance(e, (httpx.HTTPError, httpx.InvalidURL)):
@@ -629,7 +725,6 @@ def verify(
     for row in rows_with_hash(db_path, limit=limit):
         url = row["url_canonical"]
         result.examined += 1
-        pacer.wait(url)
         # A truncated row is re-read over exactly the span it recorded. A row
         # hashed whole is re-read under the current cap, and -1 means a legacy
         # row whose length was never recorded -- known complete, unknown size.
@@ -637,7 +732,7 @@ def verify(
         was_truncated = bool(row["hash_truncated"])
         span = stored_covers if was_truncated and stored_covers >= 0 else max_bytes
         try:
-            read = hasher(url, span)
+            read = _paced_fetch(pacer, hasher, url, span)
             digest = read.digest
         except Exception as e:
             if not isinstance(e, (httpx.HTTPError, httpx.InvalidURL)):
@@ -687,9 +782,8 @@ def verify(
         #
         # So the claim is corroborated by reading again. Spent only on
         # candidates: an unchanged page never costs a second request.
-        pacer.wait(url)
         try:
-            second = hasher(url, span).digest
+            second = _paced_fetch(pacer, hasher, url, span).digest
         except Exception as e:
             if not isinstance(e, (httpx.HTTPError, httpx.InvalidURL)):
                 logger.exception("bug while re-reading %s; concluding nothing", url)

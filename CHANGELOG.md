@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.48.0 — 2026-09-02
+
+- **A 429 now widens that host's interval instead of being recorded and
+  ignored.** `RATE_LIMITED = "rate_limited"  # 429 -- back off, conclude
+  nothing` said it in the constant's own comment, and nothing backed off.
+  `_HostPacer` enforced a fixed per-host interval; a 429 was classified,
+  counted, and the next row of the SAME host went out at the same interval.
+  Found by running the sweep: a verify pass over the live corpus took 13
+  consecutive 429s from github.com in one burst, and resuming would have walked
+  straight back into it.
+
+  A fixed interval is our GUESS about what a host tolerates. A 429 is that host
+  saying the guess is wrong, and it was the one input the pacer never took —
+  the `--sleep` defect's sibling, where the CLI parses a flag and the pacer
+  honours it and neither end listens to the answer.
+
+- **Fetching is now one function, so the feedback loop cannot exist in one pass
+  and not the other.** There were three `pacer.wait()` + `hasher()` pairs across
+  `snapshot` and `verify`; putting backoff in each failure arm would have made
+  one rule into three copies, the defect class that has now shipped five times
+  here. `_paced_fetch()` waits, reads, and lets the answer change the interval,
+  and a guard derives that `hasher(...)` is called nowhere else — which also
+  makes it impossible for a future pass to skip pacing the way `verify` did.
+
+  `Retry-After` wins when the host states one; otherwise the penalty doubles
+  from a floor of the base interval, capped at 120s, and decays by half on each
+  normal answer so one 429 does not tax every remaining row for hours. Only 429
+  and 503 slow us: a 404 is an answer, not a complaint, and this corpus holds
+  1,285 of them.
+
+- **The guards assert both directions.** A throttled host must slow down AND an
+  unthrottled host must not — a "fix" that simply slowed everything would pass
+  the first assertion while turning a 2-hour sweep into a week. The penalty is
+  per-host, so github refusing us says nothing about arxiv.
+
+- **A derivation moved, and the positive control is what caught it.**
+  `_functions_that_fetch()` looked for `hasher(...)` calls; once fetching
+  collapsed into `_paced_fetch`, it returned the primitive and nothing else.
+  `test_the_derivation_finds_more_than_one_fetching_pass` failed loudly instead
+  of the guard silently narrowing to a set that still passed — the failure mode
+  that made the User-Agent guard vacuous for six days.
+
 ## 0.47.0 — 2026-09-01
 
 - **A refusal now records what CLASS it was, so the health line stops rendering
