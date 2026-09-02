@@ -160,7 +160,7 @@ def test_verify_spaces_requests_to_the_same_host(tmp_db) -> None:
         slept.append(s)
         clock[0] += s
 
-    verify(db, hasher=lambda u, n: PageRead(
+    verify(db, clock=lambda: "NOW", hasher=lambda u, n: PageRead(
                digest="OLD", final_url=u, covers_bytes=64, complete=True),
            sleep_s=2.0, sleeper=sleeper, monotonic=monotonic)
 
@@ -179,7 +179,7 @@ def test_verify_does_not_space_requests_to_DIFFERENT_hosts(tmp_db) -> None:
     ])
     slept: list[float] = []
 
-    verify(db, hasher=lambda u, n: PageRead(
+    verify(db, clock=lambda: "NOW", hasher=lambda u, n: PageRead(
                digest="OLD", final_url=u, covers_bytes=64, complete=True),
            sleep_s=2.0, sleeper=lambda s: slept.append(s), monotonic=lambda: 0.0)
 
@@ -202,7 +202,7 @@ def test_verify_reports_WHY_a_page_could_not_be_re_read(tmp_db) -> None:
             response=httpx.Response(403, request=httpx.Request("GET", url)),
         )
 
-    result = verify(db, hasher=refuse)
+    result = verify(db, clock=lambda: "NOW", hasher=refuse)
     assert result.unreachable == 1
     assert result.by_outcome == {"blocked": 1}, result.by_outcome
 
@@ -217,7 +217,7 @@ def test_a_changed_page_keeps_its_original_hash(tmp_db) -> None:
     db = _seed(tmp_db, ["https://a.test/1"])
     result = verify(
         db,
-        hasher=lambda u, n: PageRead(
+        clock=lambda: "NOW", hasher=lambda u, n: PageRead(
             digest="NEW", final_url=u, covers_bytes=64, complete=True),
     )
 
@@ -245,7 +245,7 @@ def test_a_page_that_differs_from_ITSELF_is_not_reported_as_changed(tmp_db) -> N
 
     result = verify(
         db,
-        hasher=lambda u, n: PageRead(
+        clock=lambda: "NOW", hasher=lambda u, n: PageRead(
             digest=next(reads), final_url=u, covers_bytes=64, complete=True),
     )
 
@@ -262,7 +262,7 @@ def test_a_stable_page_that_really_moved_is_still_reported(tmp_db) -> None:
     db = _seed(tmp_db, ["https://a.test/1"])
     result = verify(
         db,
-        hasher=lambda u, n: PageRead(
+        clock=lambda: "NOW", hasher=lambda u, n: PageRead(
             digest="NEW", final_url=u, covers_bytes=64, complete=True),
     )
 
@@ -283,7 +283,7 @@ def test_an_unchanged_page_is_not_re_read(tmp_db) -> None:
         seen.append(u)
         return PageRead(digest="OLD", final_url=u, covers_bytes=64, complete=True)
 
-    verify(db, hasher=hasher)
+    verify(db, clock=lambda: "NOW", hasher=hasher)
     assert seen == ["https://a.test/1"], "spent a second fetch on an unchanged page"
 
 
@@ -296,7 +296,7 @@ def test_the_corroborating_read_is_paced_too(tmp_db) -> None:
     reads = iter(["NEW1", "NEW2"])
     slept: list[float] = []
 
-    verify(db, hasher=lambda u, n: PageRead(
+    verify(db, clock=lambda: "NOW", hasher=lambda u, n: PageRead(
                digest=next(reads), final_url=u, covers_bytes=64, complete=True),
            sleep_s=2.0, sleeper=lambda s: slept.append(s), monotonic=lambda: 0.0)
 

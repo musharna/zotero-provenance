@@ -120,6 +120,26 @@ MIGRATIONS = (
     # reading final_url '' as "no redirect happened".
     "ALTER TABLE url_index ADD COLUMN hash_bytes INTEGER NOT NULL DEFAULT -1",
     "ALTER TABLE url_index ADD COLUMN hash_truncated INTEGER NOT NULL DEFAULT 0",
+    # WHEN this row was last verified, and how that ended. Same columns, same
+    # reason, same defect as `last_outcome`/`last_attempt_at` above -- which
+    # were added because absence of a hash meant both "never attempted" and
+    # "attempted and failed", so `--limit` never advanced past the first N dead
+    # rows. `rows_with_hash` had exactly that shape: it selected by POSITION
+    # with no memory, so `--verify --limit 500` returned the same 500 rows on
+    # every run and a chunked sweep was impossible.
+    #
+    # The fix is per-row state rather than an OFFSET, because an offset over
+    # `ORDER BY hashed_at` is positionally unsound here: ~1,353 live rows share
+    # one identical `hashed_at` (the 0.34.0 batch-constant bug) and a concurrent
+    # snapshot pass rewrites that column under the reader. Chunk N+1 would skip
+    # rows, and a sweep that skips rows reports a coverage number it did not
+    # earn. It also keeps the state ON the row: this project has shipped four
+    # stale-second-copy defects and zero missing guards, and a cursor table
+    # keyed by url would have been the fifth.
+    #
+    # '' means NEVER VERIFIED, which is true of all 5,028 existing rows.
+    "ALTER TABLE url_index ADD COLUMN verified_at TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE url_index ADD COLUMN verify_outcome TEXT NOT NULL DEFAULT ''",
 )
 
 # The alphabet the Zotero API accepts for an object key: base32 without the
@@ -766,12 +786,65 @@ def rows_needing_hash(
         return [dict(row) for row in conn.execute(sql, params)]
 
 
+def set_verify_outcome(
+    db_path: Path, url_canonical: str, *, outcome: str, at: str
+) -> bool:
+    """Record THAT this row was re-read, and how it ended.
+
+    Deliberately not a hash write. `verify` still never touches `content_hash`
+    or `hashed_at`: the stored digest is the evidence of what was consulted, and
+    replacing it with what the page says today destroys the finding at the
+    moment it is made. Recording that we LOOKED is a different fact from
+    recording what we FOUND, and only the first one belongs here.
+
+    This is also the cursor. Because the row remembers, `rows_with_hash` can
+    order by staleness instead of paginating by position, which is what makes a
+    chunked sweep -- and a later re-sweep -- possible without a flag.
+    """
+    with closing(_connect(db_path)) as conn:
+        cursor = conn.execute(
+            "UPDATE url_index SET verify_outcome = ?, verified_at = ?"
+            " WHERE url_canonical = ?",
+            (outcome, at, url_canonical),
+        )
+    return cursor.rowcount == 1
+
+
+def unverified_count(db_path: Path) -> int:
+    """How many hashed rows have never been verified.
+
+    A chunked sweep needs a way to know it is finished. Without this the report
+    can say what one chunk did and nothing about what remains, which is the
+    same unmeasurability that let `too_large` sit at 71 rows unnoticed.
+    """
+    with closing(_connect(db_path)) as conn:
+        return conn.execute(
+            "SELECT count(*) FROM url_index"
+            " WHERE content_hash != '' AND verified_at = ''"
+        ).fetchone()[0]
+
+
 def rows_with_hash(db_path: Path, *, limit: int | None = None) -> list[dict]:
-    """Rows that carry a hash, so a verify pass can ask whether it still holds."""
+    """Rows that carry a hash, so a verify pass can ask whether it still holds.
+
+    Ordered STALEST FIRST: never-verified rows ('' sorts before any timestamp)
+    ahead of rows verified longest ago. That single ordering does both jobs a
+    sweep needs. Within one sweep each chunk's rows sort to the back as they are
+    stamped, so `--limit N` run repeatedly advances on its own with no offset,
+    no cursor file and no new flag. Once the corpus is fully swept the same
+    query starts it again from the least-recently-verified row, which is what a
+    provenance check actually wants -- it is not a one-shot.
+
+    `url_canonical` breaks ties so a chunked run is deterministic and therefore
+    reproducible. It does mean rows arrive grouped by host (URLs sort by scheme
+    then host), which the per-host pacer pays for; interleaving hosts would be
+    faster and no less polite, but a non-obvious order is a bad trade for a
+    query whose whole job is to be resumable.
+    """
     sql = (
         "SELECT url_canonical, zotero_key, content_hash, hashed_at,"
-        " hash_bytes, hash_truncated FROM url_index"
-        " WHERE content_hash != '' ORDER BY hashed_at, url_canonical"
+        " hash_bytes, hash_truncated, verified_at FROM url_index"
+        " WHERE content_hash != '' ORDER BY verified_at, url_canonical"
     )
     if limit is not None:
         sql += f" LIMIT {int(limit)}"

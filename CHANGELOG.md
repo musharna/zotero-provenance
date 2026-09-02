@@ -1,5 +1,71 @@
 # Changelog
 
+## 0.46.0 — 2026-09-01
+
+- **A verify pass now remembers which rows it has read, so a sweep can be run in
+  pieces.** `rows_with_hash` took a `limit` and there is no OFFSET anywhere in
+  the codebase, and verify recorded nothing — so `--verify --limit 500` returned
+  THE SAME first 500 rows on every invocation. The only honest ways to run the
+  3,813-row pass were one all-or-nothing job (measured: ~5,760 fetches and ~2.7h
+  at `--sleep 2`, because a mismatch spends a second corroborating request) or a
+  permanently head-biased sample.
+
+  The fix is not an OFFSET. This exact defect was diagnosed and fixed in the
+  OTHER fetching pass, and the migration that fixed it says so in as many words:
+  *"Absence of a hash used to mean both 'never attempted' and 'attempted and
+  failed', so every pass re-fetched the same dead rows forever and `--limit`
+  never got past them."* `rows_needing_hash` therefore selects on recorded
+  per-row state and advances; `rows_with_hash` selected on position and could
+  not. Same shape as `_HostPacer`: a property of FETCHING that was built into
+  `snapshot` and had to be retrofitted to `verify`, because there was nothing
+  to inherit.
+
+  An OFFSET would also have been positionally unsound. The order was
+  `hashed_at, url_canonical`, ~1,353 live rows share one identical `hashed_at`
+  (the 0.34.0 batch-constant bug), and a concurrent snapshot pass rewrites that
+  column under the reader — so chunk N+1 would silently skip rows, and a sweep
+  that skips rows reports a coverage number it did not earn.
+
+- `verified_at` / `verify_outcome` on `url_index`. `''` means never verified,
+  which is true of all 5,028 existing rows. Kept ON the row rather than in a
+  cursor table: this project has shipped four stale-second-copy defects and zero
+  missing guards, and per-row state stored anywhere but the row would be the
+  fifth.
+
+- **Rows are read stalest-first**, which does both jobs with one ordering and no
+  new flag. Within a sweep each chunk's rows sort to the back as they are
+  stamped, so `--limit N` run repeatedly advances on its own; once the corpus is
+  swept the same query restarts it at the least-recently-verified row, because a
+  provenance check is not a one-shot.
+
+- **A page we could not re-read is still stamped.** A paywall answered us — that
+  is an observation, and leaving it unmarked is exactly what made 1,285
+  unreadable rows re-fetch on every pass before 0.36.0. Our OWN faults are still
+  stamped with nothing: an internal error advances no cursor and claims no
+  verdict, because a row skipped by our bug was never actually verified.
+
+- `verify` still never rewrites `content_hash` or `hashed_at`. Recording that we
+  LOOKED is not recording what we FOUND, and the docstring's "read-only against
+  the index" claim was corrected rather than left standing — an overclaiming
+  docstring is why nobody re-checked the repair tool for a whole release.
+
+- `clock` is required on `verify` and read once per ROW. A parameter that can be
+  omitted is the other defect this repo has shipped (`--sleep`, parsed for a
+  full release and passed to nothing); a clock read once per RUN is the one that
+  stamped 1,348 rows with their batch's start time.
+
+- The verify report ends with `never verified: N (rows remaining)`, so a chunked
+  sweep can tell whether it is finished.
+
+- 1,050 tests. New `tests/test_verify_cursor.py` reuses the existing
+  behaviour-derived list of fetching passes rather than writing a second copy of
+  it, and asserts every such pass advances under a limit — the same test passes
+  for `snapshot` and failed for `verify`, which is the control that makes the
+  result mean something. Verified by real execution against a copy of the live
+  5,028-row index: the migration applied, two chunks read six distinct URLs with
+  six distinct timestamps, and production was confirmed byte-identical
+  afterwards.
+
 ## 0.45.0 — 2026-09-01
 
 - **A hash now states what it covers, so the biggest sources stop being blank.**
