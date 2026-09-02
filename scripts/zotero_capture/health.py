@@ -51,6 +51,13 @@ REFUSAL_EVENTS = (
 
 MAX_KINDS_SHOWN = 3
 
+# What to call a refusal recorded before the writer labelled its class. Every
+# refusal already in capture.log is one of these. The label is unrecoverable
+# without parsing the prose, which is the thing being removed -- and dropping
+# the record instead would turn a noisy alert into a silent one, which is the
+# failure this module exists to prevent.
+UNLABELLED = "unlabelled"
+
 
 def _parse_ts(raw: Any) -> datetime | None:
     """Log timestamps are ISO-8601 with an offset, written -0400 or -04:00."""
@@ -280,7 +287,18 @@ def evaluate(
                 if refusal_newest is None or ts > refusal_newest:
                     refusal_newest = ts
                 if len(refusal_kinds) < MAX_DISTINCT_KINDS:
-                    refusal_kinds.add(str(record.get("event") or record.get("refused")))
+                    # The CLASS only. `refused` holds prose written for a
+                    # human, and a set named `kinds` that accepts a sentence
+                    # deduplicates on bytes the reader is never shown: three
+                    # distinct refusals were reported as three copies of one
+                    # fragment, because the differing bytes were past the cut.
+                    refusal_kinds.add(
+                        str(
+                            record.get("event")
+                            or record.get("refused_kind")
+                            or UNLABELLED
+                        )
+                    )
             continue
         if not _is_capture(record):
             continue
@@ -349,7 +367,7 @@ def evaluate(
         kinds = sorted(refusal_kinds)[:MAX_KINDS_SHOWN]
         warnings.append(
             f"{refusal_n} refusal(s) recorded in the last {_hours(window)} "
-            f"({', '.join(k[:60] for k in kinds)}; newest "
+            f"({', '.join(kinds)}; newest "
             f"{refusal_newest.isoformat()}) — capture declined to write rather "
             f"than writing"
         )

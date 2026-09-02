@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.47.0 — 2026-09-01
+
+- **A refusal now records what CLASS it was, so the health line stops rendering
+  three different incidents as three copies of one truncated sentence.** The
+  SessionStart check reported: `4 refusal(s) recorded in the last 24 hours
+  (refusing to capture: this session is running plugin version , refusing to
+  capture: this session is running plugin version , refusing to capture: this
+  session is running plugin version ; newest ...)` — three identical reasons,
+  each naming no version at all. The records were not identical. They were
+  0.42.0-vs-0.41.0, 0.44.0-vs-0.45.0 and 0.45.0-vs-0.46.0.
+
+  `refusal_kinds` is a set, so it deduplicated on the full 409-character message
+  and correctly kept three entries; the renderer then cut each at `k[:60]`, and
+  `"refusing to capture: this session is running plugin version "` is exactly 60
+  characters. The cut landed on the only bytes that differed. `stale_reason`
+  states in its own docstring why those bytes exist: *"'your plugin is stale' is
+  not actionable, while 'running 0.3.0, 0.11.7 is installed' says exactly what
+  happened and implies the fix."* The summary deleted precisely the property the
+  message was written to have.
+
+  The width was not the defect, so the fix does not widen it. A set named
+  `kinds` was being fed a REASON: a kind is a short closed label — the caps
+  `MAX_DISTINCT_KINDS = 16` and `MAX_KINDS_SHOWN = 3` only make sense for one,
+  and the hook writer already emits exactly that in `event`. The capture path
+  recorded unbounded prose and no label, so `record.get("event") or
+  record.get("refused")` fell through to the sentence. Two writers, one fact,
+  two shapes: the FIFTH appearance of that class in this repository, against
+  zero missing guards.
+
+  So `capture.py` gained `STALE_ROOT_REFUSED` / `INDEX_IDENTITY_MISMATCH` and a
+  single `_refuse()` that sets kind and reason together, the kind travels to the
+  log beside the prose, and the summary groups by kind. The truncation is
+  DELETED rather than tuned — a kind is short by construction, so there is
+  nothing left to cut, and prose can no longer reach a fixed-width slot. The
+  full reason still goes to `capture.log` complete, which is where a diagnosis
+  actually reads it.
+
+- **The guard derives its obligation from the assignment sites, not from a list
+  of them.** An AST pass finds every assignment to `result.refused` and requires
+  each to be inside `_refuse`, so a third refusal added later cannot ship
+  without a class. A guard naming `capture.py:257` and `capture.py:269` could
+  not fail on a site that does not exist yet — the same defect in a guard that
+  the guard exists to prevent in the code, which is how the User-Agent guard and
+  the `--sleep` call-site guard each missed their own subject.
+
+- **Why the suite did not catch it.** Every refusal fixture in `test_health.py`
+  builds `_event(ts, "stale-root-refused")` — the hook shape, which has a kind
+  and works. Not one test fed the shape the capture path actually writes. The
+  fixtures only ever produced the record that already passed, the same way the
+  frozen `now="NOW"` hid a batch timestamp and `init_db` in every fixture hid a
+  migration the live index had never had.
+
+- Refusals already in `capture.log` have no kind and now read `unlabelled`. The
+  label is unrecoverable without parsing the prose, which is the mechanism being
+  removed; dropping the records instead would turn a noisy alert into a silent
+  one. It self-heals inside the 24-hour window.
+
 ## 0.46.0 — 2026-09-01
 
 - **A verify pass now remembers which rows it has read, so a sweep can be run in

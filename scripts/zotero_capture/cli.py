@@ -266,6 +266,12 @@ def _emit_log(
         # Only present when the run refused; absent on ordinary captures so the
         # healthy line keeps its existing shape.
         **({"refused": result.refused} if result.refused else {}),
+        # The class, beside the prose. The prose is what a human reads here;
+        # the class is the only half a summary can group or count without
+        # truncating a sentence at a byte offset and hoping the informative
+        # part survived. It did not: 60 characters of the stale-root message
+        # is exactly the text preceding both version numbers.
+        **({"refused_kind": result.refused_kind} if result.refused_kind else {}),
         "latency_ms": latency_ms,
         "library": (identity or {}).get("library_id", ""),
         "collection": (identity or {}).get("collection_key", ""),
