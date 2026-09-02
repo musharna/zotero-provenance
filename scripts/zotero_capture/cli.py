@@ -170,13 +170,7 @@ def _observed_pinned_root() -> str | None:
     try:
         from .registry import resolve_pinned
 
-        root, _ = resolve_pinned(
-            own_root=Path(__file__).resolve().parent.parent.parent,
-            registry_path=Path.home()
-            / ".claude"
-            / "plugins"
-            / "installed_plugins.json",
-        )
+        root, _ = resolve_pinned(own_root=Path(__file__).resolve().parent.parent.parent)
         return str(root) if root else None
     except Exception:  # never let bookkeeping break a capture
         return None

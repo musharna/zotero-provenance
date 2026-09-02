@@ -35,6 +35,19 @@ delegates rather than declines, and nothing has to be deleted or restarted.
 
 This guard stays as defence in depth: it is what stops a write when forwarding
 cannot resolve a target at all.
+
+For that to be worth anything, the guard and the trampoline have to be answering
+the SAME question from the SAME place, and until 0.49.0 they were not. The
+trampoline asked the registry which root to run; this module asked the
+marketplace clone what version was installed. Two files, one fact — and on
+2026-09-01 they disagreed for the eleven hours between their mtimes, so four
+captures were refused by the root the registry had pinned. A guard that
+contradicts the mechanism it backs up is not defence in depth, it is a second
+opinion; both now read `installed_plugins.json` through `registry.resolve_pinned`.
+
+Worth stating because the comment that used to sit on the deleted constant got
+it backwards: being the source something was BUILT from does not make you the
+authority on what is DEPLOYED.
 """
 
 from __future__ import annotations
@@ -45,19 +58,14 @@ import os
 import re
 from pathlib import Path
 
+from .registry import resolve_pinned
+
 logger = logging.getLogger(__name__)
 
-# Where the plugin's installed copy lives. The cache entry the hook executes is
-# built from this clone, so it is the authority on "what version is installed".
-INSTALLED_MANIFEST = (
-    Path.home()
-    / ".claude"
-    / "plugins"
-    / "marketplaces"
-    / "zotero-provenance"
-    / ".claude-plugin"
-    / "plugin.json"
-)
+# Where this module's own root is, so the registry can be asked whether it is
+# the pinned one. Why the registry and not the marketplace clone is the module
+# docstring's business, above; repeating it here would be one more second copy.
+OWN_ROOT = Path(__file__).resolve().parent.parent.parent
 
 _VERSION_RE = re.compile(r"^\d+(?:\.\d+)*$")
 
@@ -142,17 +150,42 @@ def stale_reason(running: str, installed: str) -> str:
     )
 
 
-def installed_version(manifest: Path | None = None) -> str:
-    """The version of the installed clone, or "" if it cannot be read.
+def _pinned_manifest() -> Path | None:
+    """The manifest of the root the registry pins, or None to not guess.
 
-    ZOTERO_PROVENANCE_INSTALLED_MANIFEST overrides the location. Two callers
-    need that: an end-to-end test, which runs the hook in a subprocess and must
-    not be at the mercy of what this machine happens to have installed, and
-    anyone whose plugin lives somewhere other than the marketplace clone.
+    None is deliberately indistinguishable from "cannot read the registry":
+    `resolve_pinned` documents None as "do not guess", never "nothing is
+    installed", and the caller must carry that through as UNKNOWN.
     """
+    try:
+        root, _ = resolve_pinned(own_root=OWN_ROOT)
+    except Exception as e:  # bookkeeping must never break a capture
+        logger.debug("could not resolve the pinned root: %s", e)
+        return None
+    if root is None:
+        logger.debug("the registry pins no unambiguous root")
+        return None
+    return root / ".claude-plugin" / "plugin.json"
+
+
+def installed_version() -> str:
+    """The version of the root the plugin manager pins, or "" when unknown.
+
+    "" means UNKNOWN, never "nothing is installed" -- `classify` turns it into
+    UNKNOWN, which does not refuse. Making an unreadable registry a refusal
+    would switch capture off for anyone whose install layout this code cannot
+    parse: worse than the stale write it prevents, and invisible the same way.
+
+    ZOTERO_PROVENANCE_INSTALLED_MANIFEST still overrides the location, because
+    the end-to-end tests run the hook in a subprocess and must not be at the
+    mercy of what this machine happens to have installed. It is now the ONLY
+    override: the former `manifest` parameter was passed by nothing anywhere,
+    while its docstring claimed two callers needed it.
+    """
+    override = os.environ.get("ZOTERO_PROVENANCE_INSTALLED_MANIFEST")
+    manifest = Path(override) if override else _pinned_manifest()
     if manifest is None:
-        override = os.environ.get("ZOTERO_PROVENANCE_INSTALLED_MANIFEST")
-        manifest = Path(override) if override else INSTALLED_MANIFEST
+        return ""
     try:
         return str(json.loads(manifest.read_text(encoding="utf-8")).get("version", ""))
     except (OSError, ValueError) as e:
