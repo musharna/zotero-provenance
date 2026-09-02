@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.50.1 — 2026-09-02
+
+- **`--only-host` and `--only-outcome` were silently ignored on `--verify`.**
+  Both were parsed, documented, and passed to `snapshot(...)` only, so
+  `--verify --only-host github.com` accepted the filter, dropped it, and re-read
+  all 3,813 rows while the report called the run scoped. The `--sleep` defect
+  again: the CLI complete at one end, the engine complete at the other, and the
+  whole fault living in the gap between them where neither review nor a reader
+  of either file would see it.
+
+  Found while trying to prove 0.50.0 on the GitHub rows it was built for — which
+  is the only reason it was found at all. `verify` now takes both filters and
+  narrows on `verify_outcome`, so `--verify --only-outcome unstable` re-reads
+  exactly the rows a previous pass could not characterise.
+
+- **The guard that should have caught it could not, and its replacement was
+  vacuous until mutation testing said so.** The existing obligation derives from
+  argparse and asks whether each flag is read *anywhere* — and `args.only_host`
+  IS read, on the branch that did not run. "Used somewhere" is a weaker property
+  than "honoured on the path you selected", and only the second is what a user
+  means by a flag.
+
+  The replacement asserts the second. Its first version passed on the broken
+  code, because it counted every string constant as evidence a flag was handled
+  — including `add_argument("--only-host", ...)`, the flag's own declaration. A
+  flag existing is not evidence that anything honours it. Caught only by
+  reverting the fix and watching the guard stay green.
+
+- **Flags with no meaning for a re-read are refused, not ignored.**
+  `--verify --dry-run` and `--verify --retry-failed` now exit with an error
+  naming the flag. Accepting them would repeat the same silence in the other
+  direction, and loud absence over quiet corruption is the trade this plugin
+  makes everywhere else.
+
+- **The host-boundary filter is one function now, not two.** `rows_with_hash`
+  needed the same matcher `rows_needing_hash` had, and copying twenty lines of
+  LIKE construction would have been a second holder of one rule — the defect
+  this codebase has shipped six times against zero caused by a missing check.
+  `_host_boundary` is shared, still anchored at both ends, still escaping LIKE
+  metacharacters so a scoped re-run cannot silently widen into a full one.
+
 ## 0.50.0 — 2026-09-02
 
 - **A nonce no longer reads as provenance drift.** 1,807 of 3,813 verified rows

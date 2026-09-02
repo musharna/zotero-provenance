@@ -94,6 +94,20 @@ def main() -> int:
     )
     args = p.parse_args()
 
+    # Refuse loudly rather than ignore quietly. `--dry-run` and `--retry-failed`
+    # describe the snapshot pass and have no meaning for a re-read; accepting
+    # them here would repeat, in the other direction, the silence that let
+    # `--only-host` be dropped on this path for a whole release.
+    if args.verify:
+        unusable = [
+            flag
+            for flag, given in (("--dry-run", args.dry_run),
+                                ("--retry-failed", args.retry_failed))
+            if given
+        ]
+        if unusable:
+            p.error(f"{', '.join(unusable)} cannot be combined with --verify")
+
     config = load_config()
     db_path = config.db_path
     # Read per page inside the loop: `hashed_at` is when THAT page was read,
@@ -128,6 +142,8 @@ def main() -> int:
                     limit=args.limit,
                     sleep_s=args.sleep,
                     max_bytes=args.max_bytes,
+                    only_outcome=args.only_outcome,
+                    only_host=args.only_host,
                 )
             ):
                 print(line)

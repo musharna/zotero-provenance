@@ -721,6 +721,43 @@ def row_for_url(db_path: Path, url_canonical: str) -> dict | None:
     return dict(row) if row else None
 
 
+def _host_boundary(only_host: str) -> tuple[str, list[str]]:
+    """A SQL clause matching one host and its subdomains, and nothing adjacent.
+
+    Extracted so there is ONE of it. `rows_with_hash` needed the same filter and
+    copying twenty lines of LIKE construction across would have been a second
+    holder of one rule -- the defect this codebase has now shipped six times,
+    against zero caused by a missing check.
+
+    It matches on a BOUNDARY, never a substring: "wikipedia.org" takes
+    en.wikipedia.org and wikipedia.org, and refuses notwikipedia.org and
+    wikipedia.org.evil.test. A substring test where a token was meant is a
+    mistake made three times here (URL_RE as a character blacklist, an alert
+    filter reading "OOM" out of Bloomberg), so the boundary case is what the
+    tests are actually about.
+
+    LIKE metacharacters are escaped rather than trusted. This reaches the CLI,
+    and an unescaped "%" would silently widen a scoped re-run into a full one
+    while the report still called it scoped -- the worst way for it to fail.
+    """
+    host = only_host.strip().lower().lstrip(".")
+    if not host:
+        raise ValueError("only_host must name a host")
+    escaped = host.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    clause = (
+        " AND (url_canonical LIKE ? ESCAPE '\\'"
+        " OR url_canonical LIKE ? ESCAPE '\\'"
+        " OR url_canonical LIKE ? ESCAPE '\\'"
+        " OR url_canonical LIKE ? ESCAPE '\\')"
+    )
+    return clause, [
+        f"http://{escaped}/%",
+        f"https://{escaped}/%",
+        f"http://%.{escaped}/%",
+        f"https://%.{escaped}/%",
+    ]
+
+
 def rows_needing_hash(
     db_path: Path,
     *,
@@ -769,30 +806,9 @@ def rows_needing_hash(
     elif not include_failed:
         sql += " AND last_outcome IN ('', 'ok')"
     if only_host is not None:
-        host = only_host.strip().lower().lstrip(".")
-        if not host:
-            raise ValueError("only_host must name a host")
-        # LIKE metacharacters in the host are escaped, not trusted. This reaches
-        # the CLI, and an unescaped "%" would silently widen the filter to every
-        # row -- a scoped re-run quietly becoming a full one is the worst way for
-        # this to fail, because the report would still say it did what was asked.
-        escaped = host.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        # Four patterns, anchored at BOTH ends. The scheme anchors the left; the
-        # trailing "/" anchors the right, so "wikipedia.org" cannot take
-        # "wikipedia.org.evil.test". The "%." arm is what admits subdomains, and
-        # its dot is what keeps "notwikipedia.org" out.
-        sql += (
-            " AND (url_canonical LIKE ? ESCAPE '\\'"
-            " OR url_canonical LIKE ? ESCAPE '\\'"
-            " OR url_canonical LIKE ? ESCAPE '\\'"
-            " OR url_canonical LIKE ? ESCAPE '\\')"
-        )
-        params += [
-            f"http://{escaped}/%",
-            f"https://{escaped}/%",
-            f"http://%.{escaped}/%",
-            f"https://%.{escaped}/%",
-        ]
+        clause, host_params = _host_boundary(only_host)
+        sql += clause
+        params += host_params
     sql += " ORDER BY first_seen, url_canonical"
     if limit is not None:
         sql += f" LIMIT {int(limit)}"
@@ -860,7 +876,13 @@ def unverified_count(db_path: Path) -> int:
         ).fetchone()[0]
 
 
-def rows_with_hash(db_path: Path, *, limit: int | None = None) -> list[dict]:
+def rows_with_hash(
+    db_path: Path,
+    *,
+    limit: int | None = None,
+    only_outcome: str | None = None,
+    only_host: str | None = None,
+) -> list[dict]:
     """Rows that carry a hash, so a verify pass can ask whether it still holds.
 
     Ordered STALEST FIRST: never-verified rows ('' sorts before any timestamp)
@@ -880,9 +902,21 @@ def rows_with_hash(db_path: Path, *, limit: int | None = None) -> list[dict]:
     sql = (
         "SELECT url_canonical, zotero_key, content_hash, hashed_at,"
         " hash_bytes, hash_truncated, verified_at, stable_digest FROM url_index"
-        " WHERE content_hash != '' ORDER BY verified_at, url_canonical"
+        " WHERE content_hash != ''"
     )
+    params: list[str] = []
+    if only_outcome is not None:
+        # `verify_outcome`, not `last_outcome`: on this path the question is
+        # what the last LOOK concluded, so "--verify --only-outcome unstable"
+        # re-reads the rows a previous pass could not characterise.
+        sql += " AND verify_outcome = ?"
+        params.append(only_outcome)
+    if only_host is not None:
+        clause, host_params = _host_boundary(only_host)
+        sql += clause
+        params += host_params
+    sql += " ORDER BY verified_at, url_canonical"
     if limit is not None:
         sql += f" LIMIT {int(limit)}"
     with closing(_connect(db_path)) as conn:
-        return [dict(row) for row in conn.execute(sql)]
+        return [dict(row) for row in conn.execute(sql, params)]
