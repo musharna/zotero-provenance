@@ -833,6 +833,8 @@ def verify(
     sleeper: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
     max_bytes: int = HASH_MAX_BYTES,
+    only_outcome: str | None = None,
+    only_host: str | None = None,
 ) -> VerifyResult:
     """Ask whether each hashed page still says what it said.
 
@@ -863,6 +865,13 @@ def verify(
     `_HostPacer` with `snapshot` rather than keeping a second copy, because a
     second copy is how the first one came to be missing here.
 
+    `only_host` and `only_outcome` narrow which rows are read, exactly as they
+    do for `snapshot`. They existed on the CLI and reached only the other
+    engine, so `--verify --only-host github.com` parsed cleanly, ignored the
+    filter and swept all 3,813 rows -- the `--sleep` defect wearing a different
+    hat, and invisible to the guard that derives obligations from argparse
+    because `args.only_host` IS read, just on the path that does not run.
+
     Each row is re-read over THE SAME SPAN its stored digest covers. Comparing a
     5 MiB prefix against a 32 MiB one would report a change for every truncated
     row the moment the cap moved -- a finding about our own configuration wearing
@@ -875,7 +884,9 @@ def verify(
         """Stamp what this look concluded. Never called for one of OUR faults."""
         set_verify_outcome(db_path, url, outcome=outcome, at=clock())
 
-    for row in rows_with_hash(db_path, limit=limit):
+    for row in rows_with_hash(
+        db_path, limit=limit, only_outcome=only_outcome, only_host=only_host
+    ):
         url = row["url_canonical"]
         result.examined += 1
         # A truncated row is re-read over exactly the span it recorded. A row
