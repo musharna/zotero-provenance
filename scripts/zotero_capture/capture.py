@@ -74,6 +74,31 @@ class CaptureResult:
     # a healthy message that cited nothing, which is how the health check came
     # to count the plugin's most deliberate failures as successes.
     refused: str | None = None
+    # The CLASS of refusal, as a short closed label. `refused` is prose written
+    # for a human and is unbounded; a summary that groups or counts refusals
+    # needs something it can compare. Feeding it the prose instead is how the
+    # health line came to render three distinct incidents as three copies of
+    # one truncated fragment naming no version at all. Set only by `_refuse`.
+    refused_kind: str | None = None
+
+
+# Refusal classes. Short, closed, and comparable -- everything the prose is not.
+STALE_ROOT_REFUSED = "stale-root-refused"
+INDEX_IDENTITY_MISMATCH = "index-identity-mismatch"
+
+
+def _refuse(result: CaptureResult, kind: str, reason: str) -> CaptureResult:
+    """Record a deliberate refusal: what class it was, and why, together.
+
+    One place on purpose. Two fields that must agree cannot be assigned at two
+    sites without eventually drifting apart, and a refusal whose kind is missing
+    is not a smaller problem than one whose reason is missing -- it is the one
+    the summary cannot name. Four stale-second-copy defects have shipped in this
+    repository against zero missing guards, so the copy is what gets removed.
+    """
+    result.refused = reason
+    result.refused_kind = kind
+    return result
 
 
 def _domain(url: str) -> str:
@@ -254,8 +279,7 @@ def capture_message(
     reason = stale_reason(__version__, installed_version())
     if reason:
         logger.error("%s", reason)
-        result.refused = reason
-        return result
+        return _refuse(result, STALE_ROOT_REFUSED, reason)
     init_db(db_path)
     # Before any row is read or written: is this index an index of the library
     # we are about to write to? Keyed by URL alone, it cannot tell otherwise,
@@ -266,8 +290,7 @@ def capture_message(
             bind_identity(db_path, **identity)
         except IndexIdentityMismatch as e:
             logger.error("%s", e)
-            result.refused = str(e)
-            return result
+            return _refuse(result, INDEX_IDENTITY_MISMATCH, str(e))
     now = now or datetime.now(timezone.utc)
     if _is_generated_report(message, origin):
         return result
