@@ -52,6 +52,8 @@ from .sqlite_cache import (
     rows_with_hash,
     set_content_hash,
     set_fetch_outcome,
+    set_verify_outcome,
+    unverified_count,
 )
 
 logger = logging.getLogger(__name__)
@@ -207,6 +209,15 @@ NOT_VISIBLE = "not_visible"      # 404/410 whose whole container is also hidden
 # string we stored, not about the source -- see tests/test_truncated_urls.py.
 MALFORMED = "malformed"          # our record is a prefix of the cited address
 
+# What a RE-READ concluded, as opposed to how a fetch ended. Disjoint from the
+# outcomes above on purpose: both vocabularies land in `verify_outcome`, and a
+# row that says "blocked" and a row that says "changed" are answering the same
+# question -- what happened the last time we looked at this page.
+UNCHANGED = "unchanged"          # complete digest, identical
+PREFIX_AGREED = "prefix_agreed"  # agreed over a prefix; the tail was never compared
+CHANGED = "changed"              # differed, and said so twice
+UNSTABLE = "unstable"            # did not agree with ITSELF; says nothing about drift
+
 
 def parent_url(url: str) -> str | None:
     """The container one level up, or None at the root of a site.
@@ -354,6 +365,11 @@ class VerifyResult:
     # was reporting our own measurement noise as provenance drift.
     unstable: int = 0
     unstable_urls: list[str] = field(default_factory=list)
+    # How many hashed rows have still never been verified, counted AFTER this
+    # chunk. A chunked sweep otherwise cannot say whether it is finished: each
+    # run reports what it did and nothing about what remains, which is the same
+    # unmeasurability that let 71 blank rows sit unnoticed for six releases.
+    unverified_remaining: int = 0
 
 
 class _HostPacer:
@@ -562,6 +578,7 @@ def verify(
     db_path,
     *,
     hasher: Callable[[str, int], PageRead],
+    clock: Callable[[], str],
     limit: int | None = None,
     sleep_s: float = 0.0,
     sleeper: Callable[[float], None] = time.sleep,
@@ -570,10 +587,26 @@ def verify(
 ) -> VerifyResult:
     """Ask whether each hashed page still says what it said.
 
-    Read-only against both the library and the index. A page that has changed is
-    NOT re-hashed here: the stored hash is the evidence of what was consulted,
-    and quietly replacing it with what the page says today would destroy the
-    finding at the moment it was made.
+    Read-only against the LIBRARY, and against every column that holds evidence.
+    A page that has changed is NOT re-hashed: the stored hash is the evidence of
+    what was consulted, and quietly replacing it with what the page says today
+    would destroy the finding at the moment it was made.
+
+    It does now write two columns of its own, `verified_at` and
+    `verify_outcome`, and the distinction is the whole design. Recording that we
+    LOOKED is not recording what we FOUND. It is also the cursor: without it
+    `rows_with_hash` could only paginate by position, so `--limit N` returned
+    the same N rows on every run and a 3,813-row sweep was one all-or-nothing
+    2.7-hour job or a permanently head-biased sample. `last_outcome` fixed
+    exactly this defect in the other fetching pass; there was simply nothing
+    here to inherit it from -- the same way `_HostPacer` was missing.
+
+    `clock` is required and read once PER ROW, not per run, for the reason
+    `hashed_at` was wrong for 1,348 rows: a timestamp threaded through a loop
+    records the batch, not the event, and a chunked sweep makes that worse
+    because the batch is now arbitrary. A parameter that CAN be omitted is the
+    other failure this repo has shipped (`--sleep`, parsed for a whole release
+    and passed to nothing), so it cannot be.
 
     `sleep_s` is not optional politeness. This pass re-reads EVERY hashed page in
     the corpus -- thousands of requests, many to hosts already rate-limiting us
@@ -588,6 +621,11 @@ def verify(
     """
     result = VerifyResult()
     pacer = _HostPacer(sleep_s, sleeper=sleeper, monotonic=monotonic)
+
+    def conclude(url: str, outcome: str) -> None:
+        """Stamp what this look concluded. Never called for one of OUR faults."""
+        set_verify_outcome(db_path, url, outcome=outcome, at=clock())
+
     for row in rows_with_hash(db_path, limit=limit):
         url = row["url_canonical"]
         result.examined += 1
@@ -614,6 +652,10 @@ def verify(
             logger.info("could not re-read %s (%s): %s", url, outcome, e)
             result.unreachable += 1
             result.unreachable_urls.append(url)
+            # A closed door is a real observation, so it advances the cursor.
+            # Not marking it is precisely what made 1,285 unreadable rows
+            # re-fetch on every pass and block the head under `--limit`.
+            conclude(url, outcome)
             continue
         if digest == row["content_hash"]:
             if was_truncated or not read.complete:
@@ -628,8 +670,10 @@ def verify(
                 # drift we never observed.
                 result.partial_match += 1
                 result.partial_match_urls.append(url)
+                conclude(url, PREFIX_AGREED)
                 continue
             result.unchanged += 1
+            conclude(url, UNCHANGED)
             continue
 
         # A difference is a CANDIDATE, not a finding. Measured on this corpus:
@@ -656,12 +700,14 @@ def verify(
             logger.info("could not corroborate %s (%s): %s", url, outcome, e)
             result.unreachable += 1
             result.unreachable_urls.append(url)
+            conclude(url, outcome)
             continue
         if second != digest:
             # It does not agree with ITSELF, so it says nothing about whether
             # the source moved. This is a fact about the page, not about us.
             result.unstable += 1
             result.unstable_urls.append(url)
+            conclude(url, UNSTABLE)
             continue
         if not was_truncated and not read.complete:
             # Stored whole, read short. The digests differ, but they cover
@@ -669,9 +715,12 @@ def verify(
             # source -- see the note above.
             result.partial_match += 1
             result.partial_match_urls.append(url)
+            conclude(url, PREFIX_AGREED)
             continue
         result.changed += 1
         result.changed_urls.append(url)
+        conclude(url, CHANGED)
+    result.unverified_remaining = unverified_count(db_path)
     return result
 
 
@@ -738,6 +787,7 @@ def format_verify_report(result: VerifyResult) -> list[str]:
     lines.append(f"CHANGED       : {result.changed}")
     lines.append(f"unreachable   : {result.unreachable}")
     lines.append(f"unstable      : {result.unstable}")
+    lines.append(f"never verified: {result.unverified_remaining}  (rows remaining)")
     if result.internal_errors:
         lines.append(f"OUR BUGS      : {result.internal_errors}  (nothing concluded)")
     if result.by_outcome:

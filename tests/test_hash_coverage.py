@@ -248,7 +248,7 @@ def test_a_matching_PREFIX_is_not_reported_as_unchanged(db: Path) -> None:
     _seed(db, URL, digest="P", covers=1024, complete=False)
 
     result = verify(
-        db, hasher=lambda u, n: PageRead(
+        db, clock=lambda: "NOW", hasher=lambda u, n: PageRead(
             digest="P", final_url=u, covers_bytes=n, complete=False
         ),
     )
@@ -263,7 +263,7 @@ def test_a_matching_COMPLETE_hash_is_still_reported_unchanged(db: Path) -> None:
     _seed(db, URL, digest="C", covers=500, complete=True)
 
     result = verify(
-        db, hasher=lambda u, n: PageRead(
+        db, clock=lambda: "NOW", hasher=lambda u, n: PageRead(
             digest="C", final_url=u, covers_bytes=500, complete=True
         ),
     )
@@ -280,7 +280,7 @@ def test_a_DIFFERING_prefix_is_still_a_change(db: Path) -> None:
     reads = iter(["Q", "Q"])  # agrees with itself, so the change is corroborated
 
     result = verify(
-        db, hasher=lambda u, n: PageRead(
+        db, clock=lambda: "NOW", hasher=lambda u, n: PageRead(
             digest=next(reads), final_url=u, covers_bytes=n, complete=False
         ),
     )
@@ -300,7 +300,7 @@ def test_verify_re_reads_THE_SAME_number_of_bytes_it_stored(db: Path) -> None:
         asked.append(max_bytes)
         return PageRead(digest="P", final_url=url, covers_bytes=max_bytes, complete=False)
 
-    verify(db, hasher=hasher)
+    verify(db, clock=lambda: "NOW", hasher=hasher)
     assert asked == [777], f"re-read a different span than it stored: {asked}"
 
 
@@ -318,7 +318,7 @@ def test_a_complete_row_that_no_longer_fits_is_NOT_called_changed(db: Path) -> N
         )
 
     result = verify(
-        db, hasher=lambda u, n: PageRead(
+        db, clock=lambda: "NOW", hasher=lambda u, n: PageRead(
             digest="other", final_url=u, covers_bytes=n, complete=False
         ),
     )
@@ -422,7 +422,7 @@ def test_verify_concludes_nothing_from_a_bug_of_ours(db: Path) -> None:
     def broken(url: str, max_bytes: int) -> PageRead:
         raise AttributeError("no attribute 'digest'")
 
-    result = verify(db, hasher=broken)
+    result = verify(db, clock=lambda: "NOW", hasher=broken)
 
     assert result.internal_errors == 1
     assert (result.changed, result.unchanged, result.unreachable) == (0, 0, 0)

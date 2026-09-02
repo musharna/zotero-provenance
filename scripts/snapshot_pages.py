@@ -124,6 +124,7 @@ def main() -> int:
                 verify(
                     db_path,
                     hasher=hasher,
+                    clock=clock,
                     limit=args.limit,
                     sleep_s=args.sleep,
                     max_bytes=args.max_bytes,

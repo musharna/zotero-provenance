@@ -240,7 +240,7 @@ def test_a_changed_page_is_reported(db: Path) -> None:
         covers_bytes=len(BODY), complete=True,
     )
 
-    result = verify(db, hasher=_reads("a-different-digest"))
+    result = verify(db, clock=lambda: "NOW", hasher=_reads("a-different-digest"))
 
     assert result.changed_urls == [URL]
 
@@ -256,7 +256,7 @@ def test_an_unchanged_page_is_not_reported(db: Path) -> None:
         covers_bytes=len(BODY), complete=True,
     )
 
-    result = verify(db, hasher=_reads())
+    result = verify(db, clock=lambda: "NOW", hasher=_reads())
 
     assert result.changed_urls == [] and result.unchanged == 1
 
@@ -272,7 +272,7 @@ def test_verify_does_not_overwrite_the_stored_hash(db: Path) -> None:
         covers_bytes=len(BODY), complete=True,
     )
 
-    verify(db, hasher=_reads("a-different-digest"))
+    verify(db, clock=lambda: "NOW", hasher=_reads("a-different-digest"))
 
     assert rows_with_hash(db)[0]["content_hash"] == DIGEST
 
