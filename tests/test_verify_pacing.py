@@ -42,23 +42,36 @@ PACING_PARAM = "sleep_s"
 PACING_FLAG = "sleep"
 
 
+# The primitive that actually reads a page. It is not itself a "pass".
+FETCH_PRIMITIVE = "_paced_fetch"
+
+
 def _functions_that_fetch() -> list[str]:
-    """Every top-level function in snapshot.py that calls `hasher(...)`.
+    """Every top-level function in snapshot.py that reads a page.
 
     Derived from what the function DOES, not from what it is called. This is the
     part the previous guard got wrong: it matched the name `snapshot`, so a
     second fetching pass named anything else was invisible to it.
+
+    "Reads a page" moved once. Fetching used to be `hasher(...)` inline in each
+    pass; adding per-host backoff for 429s collapsed the three `pacer.wait()` +
+    `hasher()` pairs into one `_paced_fetch`, so a derivation that looked only
+    for `hasher` started returning the primitive and nothing else. The positive
+    control below is what caught that -- it is the assertion that fails loudly
+    when the definition drifts, rather than silently narrowing to a set that
+    still passes. Both names are accepted so a direct `hasher` call cannot hide
+    from this either; `test_backoff` separately forbids one.
     """
     tree = ast.parse(Path(snapshot_mod.__file__).read_text())
     out = []
     for fn in tree.body:
-        if not isinstance(fn, ast.FunctionDef):
+        if not isinstance(fn, ast.FunctionDef) or fn.name == FETCH_PRIMITIVE:
             continue
         for node in ast.walk(fn):
             if (
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Name)
-                and node.func.id == "hasher"
+                and node.func.id in ("hasher", FETCH_PRIMITIVE)
             ):
                 out.append(fn.name)
                 break
