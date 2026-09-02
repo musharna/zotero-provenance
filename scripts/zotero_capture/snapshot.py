@@ -37,11 +37,12 @@ becoming "gone".
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Callable, NamedTuple
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -52,6 +53,7 @@ from .sqlite_cache import (
     rows_with_hash,
     set_content_hash,
     set_fetch_outcome,
+    set_stable_digest,
     set_verify_outcome,
     unverified_count,
 )
@@ -70,6 +72,128 @@ logger = logging.getLogger(__name__)
 # It does NOT chase the tail, and nothing should -- the largest single citation
 # in the corpus is a 207 GiB archive.
 HASH_MAX_BYTES = 32 * 1024 * 1024
+
+
+class LineRead(NamedTuple):
+    """One line of a document, as a digest and a length.
+
+    The text is deliberately not kept. `hash_page` streams precisely so an
+    enormous document is never held in memory, and a stable digest that
+    required the body would have quietly undone that.
+    """
+
+    digest: str
+    nbytes: int
+
+
+class StableRead(NamedTuple):
+    """A digest over the lines two reads agreed on, and the bytes it covers.
+
+    The scope travels with the digest for the same reason `PageRead` carries
+    `covers_bytes`: a digest that cannot say what it covers can only be
+    all-or-nothing, and this one covers a subset by construction.
+    """
+
+    digest: str
+    covers_bytes: int
+
+
+# A document with more lines than this records none. Bounded because the point
+# of streaming is that page size cannot become memory, and a million-line
+# document would put it straight back.
+MAX_LINE_DIGESTS = 200_000
+
+# How much of the document the agreed lines must cover before the digest is
+# worth anything. Not a hedge: measured on 2026-09-02, a GitHub page differed
+# in ONE line of 1,365 and a pull request in 100 of 2,354, so real volatility
+# is a fraction of a percent to a few percent. A page where a tenth of the
+# bytes move is not a document with a token in it; it is a document we cannot
+# characterise, and saying so is the same refusal `prefix_agreed` makes.
+MIN_STABLE_COVERAGE = 0.90
+
+
+class _LineDigester:
+    """Per-line digests accumulated as the body streams past.
+
+    Chunk boundaries belong to the transport. `hash_page` already refuses to let
+    them influence the byte cap -- "a digest that depended on them would differ
+    for a document that had not" -- and the same trap sits one layer down here:
+    a chunk that ends mid-line must not become two lines.
+
+    Overflowing `max_lines` records NOTHING rather than a prefix. A partial list
+    aligned against a full one would report the whole tail as volatile, which is
+    a manufactured finding of exactly the kind a truncated hash produces.
+    """
+
+    def __init__(self, max_lines: int = MAX_LINE_DIGESTS) -> None:
+        self._lines: list[LineRead] = []
+        self._partial = bytearray()
+        self._max = max_lines
+        self._overflowed = False
+
+    def update(self, chunk: bytes) -> None:
+        if self._overflowed:
+            return
+        self._partial.extend(chunk)
+        while not self._overflowed:
+            cut = self._partial.find(b"\n")
+            if cut < 0:
+                return
+            line = bytes(self._partial[:cut])
+            del self._partial[: cut + 1]
+            self._add(line)
+
+    def _add(self, line: bytes) -> None:
+        if len(self._lines) >= self._max:
+            self._overflowed = True
+            self._lines = []
+            return
+        self._lines.append(LineRead(hashlib.sha256(line).hexdigest(), len(line)))
+
+    def finish(self) -> tuple[LineRead, ...] | None:
+        """The lines, or None for "not recorded" -- never an empty tuple for it.
+
+        A document really can have no lines. Returning `()` for both would put
+        two findings in one value, which is the defect that cost this project a
+        release each for `unreachable` and `gone`.
+        """
+        if self._partial and not self._overflowed:
+            self._add(bytes(self._partial))
+            self._partial.clear()
+        return None if self._overflowed else tuple(self._lines)
+
+
+def stable_digest(first: PageRead, second: PageRead) -> StableRead | None:
+    """A digest over what two reads of the same page agreed on, or None.
+
+    The volatile bytes are DERIVED, never named. Whatever two reads seconds
+    apart disagree on is per-request by definition -- a nonce, a CSRF field, a
+    per-render element id, an A/B bucket -- and listing those names instead
+    would be a guard that cannot fail on a token nobody has invented yet.
+
+    None means "no answer", and every caller must carry it as `unstable` rather
+    than as agreement. It happens when either read recorded no lines, and when
+    the agreed lines cover too little of the document to characterise it -- a
+    single-line minified page aligns to nothing, which is 1 of 6 pages sampled.
+    """
+    left, right = first.lines, second.lines
+    if left is None or right is None:
+        return None
+    matcher = difflib.SequenceMatcher(
+        None, [x.digest for x in left], [x.digest for x in right], autojunk=False
+    )
+    agreed: list[LineRead] = []
+    for tag, i1, i2, _j1, _j2 in matcher.get_opcodes():
+        if tag == "equal":
+            agreed.extend(left[i1:i2])
+    total = sum(x.nbytes for x in left)
+    kept = sum(x.nbytes for x in agreed)
+    if total <= 0 or kept / total < MIN_STABLE_COVERAGE:
+        return None
+    rolling = hashlib.sha256()
+    for line in agreed:
+        rolling.update(line.digest.encode())
+    return StableRead(digest=rolling.hexdigest(), covers_bytes=kept)
 
 
 @dataclass(frozen=True)
@@ -98,6 +222,13 @@ class PageRead:
     # that matters, turning a prefix into a whole-document claim.
     covers_bytes: int
     complete: bool
+    # Per-line digests, or None for "not recorded". This one DOES default,
+    # unlike `final_url` and `complete` above, and the difference is the
+    # direction the omission fails in: a missing `complete` would turn a prefix
+    # into a whole-document claim, while a missing `lines` can only ever
+    # withhold a conclusion and leave the row `unstable`. A default that can
+    # only be more cautious is safe; one that can be less is not.
+    lines: tuple[LineRead, ...] | None = None
 
 
 def responding_url(exc: BaseException, requested: str) -> str:
@@ -170,6 +301,7 @@ def hash_page(
     every path out of here rather than only the successful one.
     """
     digest = hashlib.sha256()
+    lines = _LineDigester()
     read = 0
     complete = True
     with client.stream("GET", url) as resp:
@@ -180,17 +312,23 @@ def hash_page(
                 # A document of EXACTLY max_bytes never reaches here, so it is
                 # correctly complete: the boundary is a cap, not a refusal to
                 # hash anything large.
-                digest.update(chunk[: max_bytes - read])
+                kept = chunk[: max_bytes - read]
+                digest.update(kept)
+                lines.update(kept)
                 read = max_bytes
                 complete = False
                 break
             digest.update(chunk)
+            lines.update(chunk)
             read += len(chunk)
     return PageRead(
         digest=digest.hexdigest(),
         final_url=final_url,
         covers_bytes=read,
         complete=complete,
+        # Fed the SAME bytes the digest was, cap included, so the two can never
+        # describe different spans of the document.
+        lines=lines.finish(),
     )
 
 
@@ -220,6 +358,13 @@ UNCHANGED = "unchanged"          # complete digest, identical
 PREFIX_AGREED = "prefix_agreed"  # agreed over a prefix; the tail was never compared
 CHANGED = "changed"              # differed, and said so twice
 UNSTABLE = "unstable"            # did not agree with ITSELF; says nothing about drift
+# A page whose per-request bytes move but whose document does not. Deliberately
+# NOT folded into the words above: "unchanged" is a claim about the whole
+# response and these are claims about the document inside it, and one word
+# covering both is how "unreachable" came to mean gone AND blocked.
+STABLE_BASELINE = "stable_baseline"    # first stable digest recorded; nothing compared
+STABLE_UNCHANGED = "stable_unchanged"  # volatile bytes moved, the document did not
+STABLE_CHANGED = "stable_changed"      # the document itself differs from the recorded one
 
 
 def parent_url(url: str) -> str | None:
@@ -368,6 +513,14 @@ class VerifyResult:
     # was reporting our own measurement noise as provenance drift.
     unstable: int = 0
     unstable_urls: list[str] = field(default_factory=list)
+    # Rows rescued from `unstable` by deriving the volatile lines from the two
+    # reads this pass already takes. Counted apart from `unchanged` because they
+    # answer a narrower question -- the document agreed, the response did not --
+    # and adding them together would overstate what was actually compared.
+    stable_baseline: int = 0
+    stable_unchanged: int = 0
+    stable_changed: int = 0
+    stable_changed_urls: list[str] = field(default_factory=list)
     # How many hashed rows have still never been verified, counted AFTER this
     # chunk. A chunked sweep otherwise cannot say whether it is finished: each
     # run reports what it did and nothing about what remains, which is the same
@@ -783,7 +936,8 @@ def verify(
         # So the claim is corroborated by reading again. Spent only on
         # candidates: an unchanged page never costs a second request.
         try:
-            second = _paced_fetch(pacer, hasher, url, span).digest
+            corroboration = _paced_fetch(pacer, hasher, url, span)
+            second = corroboration.digest
         except Exception as e:
             if not isinstance(e, (httpx.HTTPError, httpx.InvalidURL)):
                 logger.exception("bug while re-reading %s; concluding nothing", url)
@@ -797,11 +951,38 @@ def verify(
             conclude(url, outcome)
             continue
         if second != digest:
-            # It does not agree with ITSELF, so it says nothing about whether
-            # the source moved. This is a fact about the page, not about us.
-            result.unstable += 1
-            result.unstable_urls.append(url)
-            conclude(url, UNSTABLE)
+            # It does not agree with ITSELF, so the WHOLE-RESPONSE digest says
+            # nothing about whether the source moved.
+            #
+            # But the disagreement is itself evidence. Whatever two reads
+            # seconds apart differ on is per-request by construction, so the
+            # pair names the volatile bytes without anyone having to list them,
+            # and what is left is the document. Measured 2026-09-02: on every
+            # page sampled that residue was the entire page bar a nonce.
+            stable = stable_digest(read, corroboration)
+            if stable is None:
+                # No usable alignment -- a single-line minified document, or a
+                # page too much of which moves to characterise. Declining is
+                # the same refusal `prefix_agreed` makes: a digest over a
+                # fragment would be worse than the silence it replaced.
+                result.unstable += 1
+                result.unstable_urls.append(url)
+                conclude(url, UNSTABLE)
+                continue
+            if not row["stable_digest"]:
+                set_stable_digest(
+                    db_path, url,
+                    digest=stable.digest, covers_bytes=stable.covers_bytes,
+                )
+                result.stable_baseline += 1
+                conclude(url, STABLE_BASELINE)
+            elif row["stable_digest"] == stable.digest:
+                result.stable_unchanged += 1
+                conclude(url, STABLE_UNCHANGED)
+            else:
+                result.stable_changed += 1
+                result.stable_changed_urls.append(url)
+                conclude(url, STABLE_CHANGED)
             continue
         if not was_truncated and not read.complete:
             # Stored whole, read short. The digests differ, but they cover
@@ -871,6 +1052,10 @@ def format_verify_report(result: VerifyResult) -> list[str]:
         for url in result.partial_match_urls
     ]
     lines += [
+        f"  DOCUMENT CHANGED: {url}  (its per-request bytes aside)"
+        for url in result.stable_changed_urls
+    ]
+    lines += [
         f"  unstable: {url}  (differs from itself; says nothing about drift)"
         for url in result.unstable_urls
     ]
@@ -880,7 +1065,12 @@ def format_verify_report(result: VerifyResult) -> list[str]:
     lines.append(f"prefix agreed : {result.partial_match}  (tail never compared)")
     lines.append(f"CHANGED       : {result.changed}")
     lines.append(f"unreachable   : {result.unreachable}")
-    lines.append(f"unstable      : {result.unstable}")
+    lines.append(
+        f"unstable      : {result.unstable}  (no usable alignment; nothing concluded)"
+    )
+    lines.append(f"stable baseline  : {result.stable_baseline}  (first look; recorded)")
+    lines.append(f"stable unchanged : {result.stable_unchanged}  (document agreed)")
+    lines.append(f"DOCUMENT CHANGED : {result.stable_changed}")
     lines.append(f"never verified: {result.unverified_remaining}  (rows remaining)")
     if result.internal_errors:
         lines.append(f"OUR BUGS      : {result.internal_errors}  (nothing concluded)")

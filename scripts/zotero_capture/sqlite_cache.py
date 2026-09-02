@@ -140,6 +140,20 @@ MIGRATIONS = (
     # '' means NEVER VERIFIED, which is true of all 5,028 existing rows.
     "ALTER TABLE url_index ADD COLUMN verified_at TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE url_index ADD COLUMN verify_outcome TEXT NOT NULL DEFAULT ''",
+    # A digest over the lines two reads of the page agreed on, and how many
+    # bytes those lines covered.
+    #
+    # `content_hash` covers the whole HTTP response, which on a modern page also
+    # covers a request id, a CSRF field and a per-render element id. Measured
+    # 2026-09-02: 47% of the corpus could not read the same way twice, and on
+    # every page sampled the difference was entirely those bytes -- one line of
+    # 1,365 on a GitHub repository page. That is a fact about our method, so it
+    # gets its own column rather than being allowed to corrupt the old one.
+    #
+    # '' means no stable digest has been derived. -1 bytes means the same; both
+    # are the "never" value, never "zero bytes agreed".
+    "ALTER TABLE url_index ADD COLUMN stable_digest TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE url_index ADD COLUMN stable_bytes INTEGER NOT NULL DEFAULT -1",
 )
 
 # The alphabet the Zotero API accepts for an object key: base32 without the
@@ -810,6 +824,28 @@ def set_verify_outcome(
     return cursor.rowcount == 1
 
 
+def set_stable_digest(
+    db_path: Path, url_canonical: str, *, digest: str, covers_bytes: int
+) -> bool:
+    """Record the first stable digest for a row, and never overwrite it.
+
+    Same rule as `content_hash`, for the same reason: the stored digest is the
+    evidence of what was consulted. A pass that found the document had changed
+    and then wrote today's version over the baseline would erase the finding at
+    the instant it was made, and the next pass would report agreement.
+
+    The WHERE clause carries that, rather than a read-then-write in the caller:
+    two passes racing on one row would both see '' and the second would win.
+    """
+    with closing(_connect(db_path)) as conn:
+        cursor = conn.execute(
+            "UPDATE url_index SET stable_digest = ?, stable_bytes = ?"
+            " WHERE url_canonical = ? AND stable_digest = ''",
+            (digest, covers_bytes, url_canonical),
+        )
+    return cursor.rowcount == 1
+
+
 def unverified_count(db_path: Path) -> int:
     """How many hashed rows have never been verified.
 
@@ -843,7 +879,7 @@ def rows_with_hash(db_path: Path, *, limit: int | None = None) -> list[dict]:
     """
     sql = (
         "SELECT url_canonical, zotero_key, content_hash, hashed_at,"
-        " hash_bytes, hash_truncated, verified_at FROM url_index"
+        " hash_bytes, hash_truncated, verified_at, stable_digest FROM url_index"
         " WHERE content_hash != '' ORDER BY verified_at, url_canonical"
     )
     if limit is not None:

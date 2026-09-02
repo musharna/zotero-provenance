@@ -1,5 +1,72 @@
 # Changelog
 
+## 0.50.0 — 2026-09-02
+
+- **A nonce no longer reads as provenance drift.** 1,807 of 3,813 verified rows
+  — 47% of the corpus — ended as `unstable`, meaning the page did not read the
+  same way twice. Measured by fetching pages twice seconds apart and diffing
+  them, that verdict was almost never about the source:
+
+      github.com/snap-stanford/Biomni   identical byte length (399,114),
+                                        ONE differing line of 1,365:
+                                        <meta name="request-id">
+
+  A pull request differed in 100 lines of 2,354, and every one was classified
+  individually rather than assumed: 18 signed channel tokens, 14 CSRF fields, 8
+  nonces, 8 turbo tokens, 2 request-ids — and the 38 that keyword-matching
+  missed turned out to be an A/B bucket (`ui-target: full` vs `canary-1`) and
+  per-render UUIDs wiring each button to its tooltip. Zero content.
+
+  Nor is it a GitHub property: doi.org, nature.com, ncbi, huggingface and
+  springer all differ by under 1.5% of lines, all telemetry. The digest was
+  covering the transport envelope rather than the document, so `unstable` was a
+  finding about OUR METHOD reported as a finding about theirs.
+
+- **The volatile bytes are derived, never named.** A list of field names would
+  work on today's sample and rot in silence — it cannot fail on a token nobody
+  has invented yet, which is the same defect in a guard that the guard exists to
+  prevent in the code, and this repository has shipped it twice (`URL_RE`'s
+  character blacklist, and a User-Agent guard that named its call sites and so
+  could not see a fourth copy appear). Instead `verify` already reads every
+  candidate twice; whatever the pair disagrees on is per-request by
+  construction. `stable_digest` hashes the rest. A test holds the design: no
+  module may contain the string `csrf`, `request-id`, `nonce` or their kin.
+
+- **It declines rather than guessing.** `MIN_STABLE_COVERAGE = 0.90`, because a
+  single-line minified document aligns to nothing — 1 of 6 pages sampled, and
+  the row simply stays `unstable`. Live coverage on the pages that do align:
+  99.51%, 99.58%, 97.91%, 93.68%. The floor's asymmetry is the point: too high
+  only leaves rows where they already were, while too low would report a digest
+  over a fragment as document agreement — the false reassurance `prefix_agreed`
+  exists to refuse one layer along.
+
+- **Three new outcomes, not a widened old one.** `stable_baseline` (first look,
+  recorded, nothing compared), `stable_unchanged` (the per-request bytes moved,
+  the document did not) and `stable_changed` (the document itself differs).
+  Folding these into `unchanged` would put a claim about the whole response and
+  a claim about the document inside it under one word, which is how
+  `unreachable` came to mean gone AND blocked.
+
+- **The digest is written once and never rewritten**, the same rule
+  `content_hash` follows and for the same reason: a pass that found a change and
+  then saved today's version over the baseline would erase the finding at the
+  instant it made it. The rule lives in the UPDATE's WHERE clause rather than in
+  the caller, so two passes racing on one row cannot both see `''`.
+
+- **Two tests were blind and mutation testing caught them.** Removing the
+  write-once guard changed nothing any test could see, because `verify` reaches
+  it only on a first look — an unreachable guard, the class this project already
+  deleted two of in 0.22.0; it is now driven directly. And the chunk-boundary
+  test compared split-fed against whole-fed, which both drop an unterminated
+  final line and still agree — a proxy assertion where the property was
+  correctness. Five mutations are now detected where three were.
+
+- **Memory discipline held.** `hash_page` streams so that page size cannot
+  become memory, and a stable digest that needed the body would have quietly
+  undone it. Only per-line digests and lengths survive a chunk, bounded by
+  `MAX_LINE_DIGESTS`; overflowing records nothing rather than a prefix, because
+  a partial list aligned against a full one reports the whole tail as volatile.
+
 ## 0.49.0 — 2026-09-02
 
 - **"Installed" now means the root the plugin manager pins, not the marketplace
