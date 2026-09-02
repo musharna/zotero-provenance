@@ -46,10 +46,7 @@ def _installed() -> tuple[str | None, datetime | None]:
     version mismatch. Records that carry their own `pinned_root` no longer
     depend on this at all — they were already proof.
     """
-    registry = Path.home() / ".claude" / "plugins" / "installed_plugins.json"
-    root, when = resolve_pinned(
-        own_root=Path(__file__).resolve().parent.parent, registry_path=registry
-    )
+    root, when = resolve_pinned(own_root=Path(__file__).resolve().parent.parent)
     return (str(root) if root else None), when
 
 

@@ -1,5 +1,66 @@
 # Changelog
 
+## 0.49.0 — 2026-09-02
+
+- **"Installed" now means the root the plugin manager pins, not the marketplace
+  clone that root was built from.** The shell trampoline asked
+  `installed_plugins.json` which root to run; `staleness.installed_version()`
+  asked the marketplace clone's `plugin.json` what version was installed. Two
+  files holding one fact, written by different steps of an install and kept in
+  step by nothing — on 2026-09-01 their mtimes were eleven hours apart, and in
+  that window four captures were refused by the very root the registry had
+  pinned. A guard that contradicts the mechanism it exists to back up is not
+  defence in depth, it is a second opinion.
+
+  The deleted constant's own comment had the model backwards: *"the cache entry
+  the hook executes is built from this clone, so it is the authority on what
+  version is installed."* Being the source something was BUILT from does not
+  make you the authority on what is DEPLOYED. A clone ahead of the install is an
+  update nobody has applied yet, and refusing for it takes capture down for
+  every live session in exchange for nothing — the 29-hour outage of 2026-08-24
+  reached by a different road.
+
+- **Sixth appearance of this codebase's signature defect, against zero missing
+  guards.** Every one has been two holders of one fact rather than an absent
+  check: the exclusion rules, the User-Agent, the outcome host, and now the
+  installed version. The fix is always deletion, never a reconciler.
+
+- **The suite could not have caught it, and a fixture is why.**
+  `conftest._installed_version_matches` stubs `installed_version` out for
+  `capture` and `cli` so unit tests do not depend on whatever the developer
+  happens to have installed. That is correct, and it meant the COMPARISON was
+  covered from the first release while the RESOLUTION — which file is read —
+  had no test at all. The same shape as the frozen `now="NOW"` clock and the
+  `init_db` that every fixture called: the fixture that makes the suite runnable
+  is the thing that makes one bug invisible. `tests/test_installed_version_source.py`
+  addresses `staleness` directly, which the autouse fixture does not touch.
+
+- **The registry path was collapsed too, before it drifted.** `staleness`, the
+  capture record and the health check each built
+  `~/.claude/plugins/installed_plugins.json` from scratch — three holders of one
+  fact, one level below the version and not yet disagreeing. It now lives once
+  in `registry.py`, and `resolve_pinned` falls back to it. The fallback is
+  resolved inside the function rather than as a default argument, because a
+  default binds at def time and a test patching the constant would have silently
+  read the developer's real registry.
+
+- **A dead parameter went with it.** `installed_version(manifest=...)` was passed
+  by nothing anywhere: both production call sites call it bare and no test used
+  it, while its docstring claimed "two callers need that" — the end-to-end tests
+  use the environment variable, which stays. The `--sleep` defect's shape, a way
+  in that looks supported and is exercised by no one.
+
+- **Both guards derive their subjects, and both were seen to fail first.** They
+  walk every module under `scripts/` rather than a list of names, because a
+  guard that names its subjects cannot fail on a module that does not exist yet
+  — which is how a fourth copy of the User-Agent appeared six days after a guard
+  was added to prevent exactly that. The marketplace guard failed pre-fix naming
+  `staleness.py:56`; the registry guard was mutation-confirmed by reintroducing
+  a second holder in `cli.py` and watching it go red. Docstrings are skipped, so
+  `registry.py` discussing "two marketplaces" in prose is not a false positive,
+  and a vacuity assertion carries the other direction: "nobody outside
+  registry.py names it" is also satisfied by a codebase that names it nowhere.
+
 ## 0.48.0 — 2026-09-02
 
 - **A 429 now widens that host's interval instead of being recorded and

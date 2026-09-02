@@ -27,6 +27,14 @@ from pathlib import Path
 PLUGIN_NAME = "zotero-provenance"
 _CACHE_PARTS = (".claude", "plugins", "cache")
 
+# The one place this path is written. It was written in three (staleness, the
+# capture record, the health check), which is the same "one fact, several
+# holders" shape as the clone-vs-registry split that 0.49.0 removes -- one
+# level down and not yet drifted. Held here because this module is what reads
+# it; the shell trampolines necessarily keep their own copy, and that pair is
+# deliberate and guarded.
+REGISTRY_PATH = Path.home() / ".claude" / "plugins" / "installed_plugins.json"
+
 
 def _identity(own_root: Path | None) -> tuple[str, str | None, Path | None]:
     """(plugin, marketplace, subtree) implied by where the caller lives.
@@ -62,13 +70,18 @@ def _parse_when(entry: dict) -> datetime | None:
 
 
 def resolve_pinned(
-    *, own_root: Path | None, registry_path: Path
+    *, own_root: Path | None, registry_path: Path | None = None
 ) -> tuple[Path | None, datetime | None]:
     """The canonical pinned root and when it was pinned, or (None, None).
 
     None means "do not guess", never "nothing is installed" — callers must treat
     it as unknown rather than as a mismatch.
     """
+    # Resolved here, not as a default argument: a default is bound at def time,
+    # so monkeypatching REGISTRY_PATH would silently fail to take effect and a
+    # test would quietly read the developer's real registry.
+    if registry_path is None:
+        registry_path = REGISTRY_PATH
     try:
         data = json.loads(Path(registry_path).read_text())
     except (OSError, ValueError):
