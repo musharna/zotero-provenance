@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.51.0 — 2026-09-03
+## 0.51.0 — 2026-09-02
 
 - **A page can answer 200 and not be the page.** `raise_for_status` was the only
   gate this tool had on "are these bytes the resource we asked for", and it is
@@ -29,6 +29,18 @@
   pair measured **0.0000** (360,179 bytes over 3,222 lines against 21,382 over
   33). Near-zero coverage is not a volatile document. It is two categorically
   different responses.
+
+- **Three wrong verdicts, not one, and the worst was invisible until the
+  fixture was mutated.** Disabling the gate shows what the library gets
+  instead: `ok` — the wall recorded as the cited document's own baseline hash;
+  `unstable` — the source called too volatile to characterise; and `changed` —
+  an affirmative claim that the cited source has DRIFTED. The last is the worst
+  and was the one nobody was looking for. A challenge served identically twice
+  makes the two reads agree with each other and differ from the stored hash,
+  which is exactly the corroboration `changed` demands, so the safeguard that
+  requires a second read cannot help here: both reads are of the wrong
+  document. It surfaced only because the first fixture carried no nonce and
+  mutation testing asked what it was really proving.
 
 - **The evidence is the document's own words, never a sniff of its text.** A
   reCAPTCHA interstitial sets `<base href="https://www.google.com/recaptcha/
