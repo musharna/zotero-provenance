@@ -9,7 +9,7 @@ is that one of our two reads was not the document at all. A fact about us,
 recorded in the library as a finding about a citation, which is the precise
 harm this whole tool exists to prevent.
 
-Measured live 2026-09-03 before any of this was written:
+Measured live 2026-09-02 before any of this was written:
 
   * `pmc.ncbi.nlm.nih.gov` served the real article 5 times in 6 and a
     reCAPTCHA interstitial once. The wall is INTERMITTENT -- it is not a
@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import itertools
 from datetime import date
 from pathlib import Path
 
@@ -61,13 +62,20 @@ import pytest
 
 from zotero_capture.snapshot import (
     BLOCKED,
+    UNSTABLE,
     NotTheResource,
     classify_failure,
     hash_page,
     responding_url,
     snapshot,
+    verify,
 )
-from zotero_capture.sqlite_cache import init_db, insert_url, row_for_url
+from zotero_capture.sqlite_cache import (
+    init_db,
+    insert_url,
+    row_for_url,
+    set_content_hash,
+)
 
 SEEN = date(2026, 9, 3)
 
@@ -90,9 +98,23 @@ REAL = b"<html><head><base href=\"/\"><title>An article</title></head><body>" \
        + b"x" * 4000 + b"</body></html>"
 
 
-def _serving(body: bytes, *, host_url: str = ARTICLE) -> httpx.Client:
+def _serving(body: bytes, *, nonce: bool = False) -> httpx.Client:
+    """`nonce=True` gives every response a fresh token, which is the live shape.
+
+    The real interstitial carries one -- measured 21,382 and 21,385 bytes over
+    two reads seconds apart, 27 of 33 lines identical. Without it a fixture
+    serves the SAME wall twice, the two reads agree, and verify reports
+    `changed`: an affirmative claim that the cited source drifted. Both are
+    wrong and both are pinned below, because a fixture that can only produce one
+    of them hides the other.
+    """
+    seen = itertools.count()
+
     def handler(req: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, content=body)
+        out = body
+        if nonce:
+            out = body.replace(b"nonce=abc123", f"nonce={next(seen)}".encode())
+        return httpx.Response(200, content=out)
 
     return httpx.Client(
         transport=httpx.MockTransport(handler), follow_redirects=True
@@ -217,3 +239,77 @@ def test_every_fetch_site_recognises_the_same_faults() -> None:
             "a fetch site whose handler does not use the shared fault tuple"
         )
     assert fetch_sites >= 3, f"expected the known fetch sites, found {fetch_sites}"
+
+
+def _hashed(tmp_path: Path) -> Path:
+    """A row that already holds a hash, which is what `verify` re-reads."""
+    db = tmp_path / "i.db"
+    init_db(db)
+    insert_url(db, ARTICLE, "K1", SEEN)
+    set_content_hash(
+        db,
+        ARTICLE,
+        content_hash=hashlib.sha256(REAL).hexdigest(),
+        hashed_at="THEN",
+        covers_bytes=len(REAL),
+        complete=True,
+    )
+    return db
+
+
+def test_verify_calls_a_challenge_blocked_and_never_unstable(tmp_path: Path) -> None:
+    """The path this fix was BUILT for, and the one the production run uses.
+
+    `unstable` says the source does not read the same way twice. When one of the
+    two reads was a challenge page that sentence is false about the source and
+    true only about us, and it is the sentence 622 rows in the live index were
+    carrying.
+    """
+    db = _hashed(tmp_path)
+    with _serving(WALL, nonce=True) as http:
+        verify(
+            db,
+            hasher=lambda u, n: hash_page(u, client=http, max_bytes=n),
+            clock=lambda: "NOW",
+        )
+    row = row_for_url(db, ARTICLE)
+    assert row["verify_outcome"] == BLOCKED
+    assert row["verify_outcome"] != UNSTABLE
+    # The stored hash is the evidence of what was consulted. A refusal must not
+    # touch it -- that rule predates this fix and must survive it.
+    assert row["content_hash"] == hashlib.sha256(REAL).hexdigest()
+
+
+def test_verify_still_reports_an_unchanged_page(tmp_path: Path) -> None:
+    """Positive control in the same surface: a gate that refused everything
+    would satisfy the assertion above and read as a pass."""
+    db = _hashed(tmp_path)
+    with _serving(REAL) as http:
+        verify(
+            db,
+            hasher=lambda u, n: hash_page(u, client=http, max_bytes=n),
+            clock=lambda: "NOW",
+        )
+    assert row_for_url(db, ARTICLE)["verify_outcome"] == "unchanged"
+
+
+def test_a_steady_challenge_is_not_reported_as_the_source_changing(
+    tmp_path: Path,
+) -> None:
+    """The OTHER harm, and the worse one.
+
+    A challenge served identically twice makes the two reads agree with each
+    other and differ from the stored hash, which is exactly the corroboration
+    `changed` requires. Without the gate, verify does not merely decline to
+    characterise the page -- it states that the cited source has drifted, on
+    evidence that never came from the source. Found by mutation-testing the
+    fixture above, which had no nonce and so could only ever produce this case.
+    """
+    db = _hashed(tmp_path)
+    with _serving(WALL) as http:
+        verify(
+            db,
+            hasher=lambda u, n: hash_page(u, client=http, max_bytes=n),
+            clock=lambda: "NOW",
+        )
+    assert row_for_url(db, ARTICLE)["verify_outcome"] == BLOCKED
