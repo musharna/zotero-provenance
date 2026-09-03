@@ -48,7 +48,7 @@
   threshold value separates the populations while the unit is the line.
 
 - **`stable_algo` records WHICH method produced a stored digest.** Without it
-  this release would have found ~2,400 stored digests mismatching at once and
+  this release would have found 1,217 stored digests mismatching at once and
   reported every one of those sources as having drifted — the tool
   manufacturing the exact class of finding it exists to report truthfully, which
   this project has already shipped and fixed for `unreachable`, `gone` and
@@ -60,6 +60,15 @@
 - The write-once rule on `stable_digest` is widened by exactly one clause and
   not weakened: a digest cut by a *different* method was never evidence about
   this one, so holding it in place could only preserve a false comparison.
+
+- **A count I wrote from arithmetic instead of a query was wrong.** The first
+  draft of this entry said ~2,400 rows would re-baseline, reached by adding
+  `stable_baseline` (1,217) to `unchanged` (1,179). `unchanged` means the
+  whole-response digest matched, so those rows never reach the stable path and
+  carry no stable digest at all. The real figure is 1,217 — every row that has
+  one. Caught by running `select count(*) ... where stable_digest <> ''` before
+  the sweep rather than after, which is the only reason it is not in the
+  release note as a fact.
 
 - **A negative control found my own framing wrong.** The pages I first selected
   as "app shells that must stay unstable" were chosen from rows recorded
