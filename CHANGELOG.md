@@ -1,5 +1,80 @@
 # Changelog
 
+## 0.51.0 — 2026-09-03
+
+- **A page can answer 200 and not be the page.** `raise_for_status` was the only
+  gate this tool had on "are these bytes the resource we asked for", and it is
+  keyed on transport status. A bot challenge served with HTTP 200 sailed
+  through it, its bytes reached the comparison, and the disagreement with the
+  real article was written down as `unstable` — a claim that the SOURCE is too
+  volatile to characterise. What actually happened is that one of our two reads
+  was not the document at all: a fact about us, recorded in the library as a
+  finding about a citation, which is the exact harm this plugin exists to
+  prevent.
+
+  `classify_failure` could never have been widened to cover it. It is reachable
+  only from `except` arms, and a 200 raises nothing.
+
+- **The wall is INTERMITTENT, and the earlier note saying otherwise was wrong.**
+  A memory file written 2026-09-02 called `pmc.ncbi.nlm.nih.gov` "101/101 a
+  reCAPTCHA wall". Measured properly the next day — six reads of one article —
+  PMC served the real document 5 times and the challenge once. The earlier
+  conclusion came from two probes that both happened to land on the challenge,
+  which is a sample, not a property of the host. Intermittence is also what
+  makes the defect bite: a verify pass takes two reads, and either one landing
+  on the wall produces the disagreement.
+
+  Coverage tells the two apart and was in the output all along: genuine
+  volatility on this corpus measures 75–99%, while the article-versus-challenge
+  pair measured **0.0000** (360,179 bytes over 3,222 lines against 21,382 over
+  33). Near-zero coverage is not a volatile document. It is two categorically
+  different responses.
+
+- **The evidence is the document's own words, never a sniff of its text.** A
+  reCAPTCHA interstitial sets `<base href="https://www.google.com/recaptcha/
+  challengepage/">` — the document declaring, through the mechanism HTML
+  provides for exactly that purpose, that it is a challenge page and not the
+  article. Deciding from a title string or a phrase in the body would be a
+  blacklist, and this repository has already shipped one of those and spent a
+  release removing it.
+
+  The false-positive rate was **measured before the rule was written**: 40 pages
+  across 40 distinct hosts, drawn at random from rows that had hashed
+  successfully. Three carried a `<base>` at all, exactly one was cross-origin,
+  and that one was a challenge page — served for a GEO accession the index
+  still recorded as a good hash. 0 false positives in 40 is a bound, not a proof
+  of zero, and the bound is the honest claim.
+
+- **The gate sits at the read boundary, so no caller can forget it.**
+  `hash_page` raises `NotTheResource` before any digest is returned, which
+  routes it through `classify_failure` — already the single place a failure is
+  given its name. A flag on `PageRead` for each caller to check would have been
+  one rule kept in three places. It matters that this covers the FIRST pass too,
+  not just re-reads: five `login.tailscale.com` rows are baselined at ~28,000
+  stable bytes, a login wall already recorded as a cited document's provenance
+  baseline.
+
+- **`blocked`, reused rather than given a fifth word.** That outcome already
+  reads "refused; the page may be perfectly fine", which is precisely what a
+  challenge is. The address recorded is the challenge's own, not the publisher
+  we asked — the 0.38.0 lesson one layer along, where a refusal that names the
+  wrong host blames a server that did nothing.
+
+- **Three open-coded copies of one rule became one.** All three fetch sites
+  repeated `isinstance(e, (httpx.HTTPError, httpx.InvalidURL))`, so adding a
+  fourth kind of failure to two of the three was the defect class that has
+  shipped five times here against zero caused by a missing check. They now share
+  `FETCH_FAULTS`, and the guard DERIVES its obligation by walking the AST for
+  every `try` that fetches — it cannot pass by naming only the call sites alive
+  the day it was written, which is the failure the 0.40.0 User-Agent guard had.
+
+- **KNOWN LIMIT, deliberately not fixed.** A SAME-ORIGIN login wall stays
+  undetectable and should. For an unauthenticated requester the login page
+  genuinely IS what `login.tailscale.com/admin/dns` serves, the same way
+  GitHub's 404 on a private repository is a fact about the requester's view
+  rather than about the resource. Guessing from a URL path would manufacture the
+  finding.
+
 ## 0.50.1 — 2026-09-02
 
 - **`--only-host` and `--only-outcome` were silently ignored on `--verify`.**
