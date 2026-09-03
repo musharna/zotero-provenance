@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.53.1 — 2026-09-03
+
+- **The guard added in 0.53.0 could not see a single one of the 1,217 rows it
+  existed for.** It was written
+  `if row["stable_algo"] and row["stable_algo"] != STABLE_ALGO:` — and `''` is
+  the tag every pre-0.53.0 row carries, because it is the column's default. The
+  leading truthiness check made the branch unreachable for exactly the
+  population it was built to protect.
+
+  Found on the first live run against those rows, five minutes after 0.53.0
+  deployed: five GitHub gists and repositories came back **DOCUMENT CHANGED** —
+  the tool stating that five cited sources had drifted when the only thing that
+  had moved was our own unit of comparison. That is the precise failure
+  `stable_algo` was introduced to prevent, shipped inside the fix for it.
+
+- **The fixture is what hid it.** The 0.53.0 test seeded `algo="lines/0"`, a
+  value production has never held and never will; against a non-empty tag the
+  broken guard behaves correctly. The test now seeds `""`, the real default, and
+  fails against the 0.53.0 guard with the exact production symptom
+  (`stable_changed` where `stable_rebaselined` belongs). This is the third time
+  this project has shipped a bug that a fixture's convenient value concealed —
+  after the frozen clock in `snapshot()` and `init_db` in the maintenance CLIs.
+
+- **"Has a tag" and "has a DIFFERENT tag" are not the same question**, and only
+  the second is about comparability. The check is now
+  `row["stable_algo"] != STABLE_ALGO`, any value including empty — with the
+  has-a-digest branch moved ahead of it, because a row that was never
+  characterised also carries an empty tag and that is a first baseline, not a
+  re-cut. The ordering has its own test; both branches live on the empty string
+  and only the digest tells them apart.
+
+- The five misreported rows never had their stored digest overwritten — the
+  `stable_changed` branch does not write — so they were repaired by re-verifying
+  them, and they now read `stable_rebaselined`.
+
 ## 0.53.0 — 2026-09-03
 
 - **The unit of comparison was the line, and a line's length belongs to the
