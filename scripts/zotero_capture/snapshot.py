@@ -1134,25 +1134,36 @@ def verify(
                 result.unstable_urls.append(url)
                 conclude(url, UNSTABLE)
                 continue
-            if row["stable_algo"] and row["stable_algo"] != STABLE_ALGO:
-                # The stored digest was cut by a different method, so it is not
-                # comparable with this one and a mismatch would say nothing
-                # about the source. Re-baseline and SAY SO -- the one thing
-                # this must never do is report the difference as drift, which
-                # is the tool inventing the finding it exists to report.
-                set_stable_digest(
-                    db_path, url, digest=stable.digest,
-                    covers_bytes=stable.covers_bytes, algo=STABLE_ALGO,
-                )
-                result.stable_rebaselined += 1
-                conclude(url, STABLE_REBASELINED)
-            elif not row["stable_digest"]:
+            if not row["stable_digest"]:
                 set_stable_digest(
                     db_path, url, digest=stable.digest,
                     covers_bytes=stable.covers_bytes, algo=STABLE_ALGO,
                 )
                 result.stable_baseline += 1
                 conclude(url, STABLE_BASELINE)
+            elif row["stable_algo"] != STABLE_ALGO:
+                # The stored digest was cut by a different method, so it is not
+                # comparable with this one and a mismatch would say nothing
+                # about the source. Re-baseline and SAY SO -- the one thing
+                # this must never do is report the difference as drift, which
+                # is the tool inventing the finding it exists to report.
+                #
+                # Any tag that is not this one, INCLUDING the empty string.
+                # 0.53.0 shipped this as `row["stable_algo"] and ... != ...`,
+                # and '' is the tag every pre-0.53.0 row carries -- so the guard
+                # was unreachable for the 1,217 rows it existed for and five of
+                # them were reported as DOCUMENT CHANGED on the first live run.
+                # "Has a tag" and "has a DIFFERENT tag" are not the same
+                # question; only the second one is about comparability.
+                #
+                # The order matters and is asserted: a row with no digest at all
+                # also has no tag, and that is a first baseline, not a re-cut.
+                set_stable_digest(
+                    db_path, url, digest=stable.digest,
+                    covers_bytes=stable.covers_bytes, algo=STABLE_ALGO,
+                )
+                result.stable_rebaselined += 1
+                conclude(url, STABLE_REBASELINED)
             elif row["stable_digest"] == stable.digest:
                 result.stable_unchanged += 1
                 conclude(url, STABLE_UNCHANGED)

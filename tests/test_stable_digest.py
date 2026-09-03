@@ -325,9 +325,19 @@ def test_a_digest_from_an_older_method_re_baselines_and_is_not_called_a_change(
     """
     url = "https://example.org/p"
     db = _seed(tmp_path / "i.db", url)
-    assert set_stable_digest(
-        db, url, digest="CUT_BY_LINES", covers_bytes=10, algo="lines/0"
-    )
+    # ALGO IS THE EMPTY STRING, because that is the tag every row written
+    # before 0.53.0 actually carries -- the column's DEFAULT.
+    #
+    # The first version of this test seeded "lines/0", a value production has
+    # never held, and it passed against a guard written as
+    # `row["stable_algo"] and row["stable_algo"] != STABLE_ALGO` -- which is
+    # False for '' and so could not fire for a single one of the 1,217 rows it
+    # existed for. Five live rows were reported as DOCUMENT CHANGED before the
+    # fixture was corrected. A fixture holding a value the production reader
+    # never sees is not a test of the production reader, and this project has
+    # now shipped that same shape three times (the frozen clock, `init_db`,
+    # and here).
+    assert set_stable_digest(db, url, digest="CUT_BY_LINES", covers_bytes=10, algo="")
 
     result = _run(db, _volatile_hasher([_page(1), _page(2)]))
 
@@ -337,6 +347,27 @@ def test_a_digest_from_an_older_method_re_baselines_and_is_not_called_a_change(
     assert result.stable_changed == 0
     assert row["stable_algo"] == snap.STABLE_ALGO
     assert row["stable_digest"] != "CUT_BY_LINES"
+
+
+def test_a_row_with_no_digest_at_all_baselines_rather_than_re_baselining(
+    tmp_path,
+) -> None:
+    """The order of the two branches, asserted.
+
+    A row that has never been characterised also has an empty `stable_algo`, so
+    a re-baseline check written before the has-a-digest check would claim every
+    first look was a re-cut. Both live on the empty string; only the digest
+    tells them apart.
+    """
+    url = "https://example.org/p"
+    db = _seed(tmp_path / "i.db", url)
+    assert row_for_url(db, url)["stable_algo"] == ""
+    assert row_for_url(db, url)["stable_digest"] == ""
+
+    result = _run(db, _volatile_hasher([_page(1), _page(2)]))
+    assert result.stable_baseline == 1
+    assert result.stable_rebaselined == 0
+    assert row_for_url(db, url)["verify_outcome"] == STABLE_BASELINE
 
 
 def test_a_stored_digest_with_the_current_tag_is_still_compared(tmp_path) -> None:
