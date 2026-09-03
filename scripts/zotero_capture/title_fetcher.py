@@ -17,7 +17,12 @@ import httpx
 from bs4 import BeautifulSoup
 
 from . import USER_AGENT
-from .url_processing import IPAddress, is_unsafe_address, parse_ip_literal
+from .url_processing import (
+    IPAddress,
+    document_disowns,
+    is_unsafe_address,
+    parse_ip_literal,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -357,6 +362,7 @@ def _fetch_title_raw(url: str, *, client: httpx.Client | None = None) -> str:
         # Identifier resolution is an optimisation, not a new point of failure:
         # fall through and scrape the page as before.
         with client.stream("GET", url) as resp:
+            answered_by = str(resp.url)
             if resp.status_code >= 400:
                 return url
             ctype = resp.headers.get("content-type", "")
@@ -391,6 +397,24 @@ def _fetch_title_raw(url: str, *, client: httpx.Client | None = None) -> str:
             if not complete:
                 return url
             body = bytes(buffer[:MAX_BYTES])
+            # A 200 is not proof these bytes are the resource. A bot challenge
+            # serves one, and its <title> is not a weak title -- it is a false
+            # statement about the cited source, in the field a reader trusts
+            # most. 54 items in the live library read "Checking your browser -
+            # reCAPTCHA", dated 2026-05-28 to 2026-09-02.
+            #
+            # The URL sentinel is this function's existing contract for "could
+            # not get a title", and it is the honest answer: it says we failed,
+            # and it leaves `title:unresolved` set so something revisits the
+            # item. A confidently wrong title clears that flag forever.
+            disowned = document_disowns(body, answered_by)
+            if disowned:
+                logger.info(
+                    "%s answered with a document declaring %s; no title taken",
+                    url,
+                    disowned,
+                )
+                return url
         try:
             soup = BeautifulSoup(body, "html.parser")
             tag = soup.find("title")

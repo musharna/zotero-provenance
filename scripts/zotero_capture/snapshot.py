@@ -48,7 +48,12 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
-from .url_processing import is_vcs_requirement, unbalanced_brackets
+from .url_processing import (
+    HEAD_SNIFF_BYTES,
+    document_disowns,
+    is_vcs_requirement,
+    unbalanced_brackets,
+)
 from .sqlite_cache import (
     rows_needing_hash,
     rows_with_hash,
@@ -278,18 +283,6 @@ def page_is_visible(url: str, *, client: httpx.Client) -> bool:
     return response.status_code not in (404, 410)
 
 
-# How much of the head to keep for the document's own declaration of what it
-# is. `<base>` and `<link rel=canonical>` are head elements, so this is
-# generous; it is bounded for the reason the body is streamed at all, which is
-# that page size must never become memory.
-HEAD_SNIFF_BYTES = 65_536
-
-# `<base href=...>`. The document's own statement of the address its relative
-# links resolve against -- which is the mechanism HTML provides for saying
-# "this is where I am", and therefore evidence rather than a sniff.
-_BASE_HREF = re.compile(rb"""<base[^>]*?\shref\s*=\s*["']([^"']+)""", re.I)
-
-
 class NotTheResource(Exception):
     """A successful response that is not the resource that was asked for.
 
@@ -308,34 +301,6 @@ class NotTheResource(Exception):
         super().__init__(f"{requested} answered with a document declaring {declared}")
         self.final_url = declared
         self.requested = requested
-
-
-def _site_of(url: str) -> str:
-    """The registrable-ish site of a URL, for "is this the same place".
-
-    Last two labels. Crude on multi-label suffixes -- `a.co.uk` and `b.co.uk`
-    both reduce to `co.uk` -- and that is the direction to be crude in: it can
-    only make two different sites look like ONE, which MISSES a challenge. The
-    opposite error would manufacture a refusal for a page that was served
-    perfectly well, and manufacturing findings is the thing this tool must not
-    do.
-    """
-    host = urlsplit(url).netloc.lower().partition(":")[0]
-    parts = [x for x in host.split(".") if x]
-    return ".".join(parts[-2:]) if len(parts) >= 2 else host
-
-
-def declared_base(head: bytes) -> str:
-    """The address this document declares as its own, or "" for none.
-
-    Empty means the document said nothing, which is the overwhelming majority:
-    of 40 pages sampled across 40 hosts from rows that had hashed successfully,
-    37 carried no `<base>` at all.
-    """
-    found = _BASE_HREF.search(head)
-    if not found:
-        return ""
-    return found.group(1).decode("utf-8", "replace").strip()
 
 
 def hash_page(
@@ -391,8 +356,8 @@ def hash_page(
     # `unbalanced_brackets` ("did we even send the cited address?") and
     # `absence_is_corroborated` ("may we read this 404 as absence?"). Each asks
     # what we are ENTITLED to conclude before the confident label is written.
-    declared = declared_base(bytes(head))
-    if declared and _site_of(declared) and _site_of(declared) != _site_of(final_url):
+    declared = document_disowns(bytes(head), final_url)
+    if declared:
         raise NotTheResource(declared=declared, requested=url)
     return PageRead(
         digest=digest.hexdigest(),

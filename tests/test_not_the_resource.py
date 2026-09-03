@@ -114,7 +114,13 @@ def _serving(body: bytes, *, nonce: bool = False) -> httpx.Client:
         out = body
         if nonce:
             out = body.replace(b"nonce=abc123", f"nonce={next(seen)}".encode())
-        return httpx.Response(200, content=out)
+        # content-type is REQUIRED, not decoration: `fetch_title` refuses a
+        # non-HTML response, so a mock without this header returns the URL
+        # sentinel for every case -- and the challenge test then PASSES on
+        # ungated code. The positive control beside it is what exposed that.
+        return httpx.Response(
+            200, content=out, headers={"content-type": "text/html; charset=utf-8"}
+        )
 
     return httpx.Client(
         transport=httpx.MockTransport(handler), follow_redirects=True
@@ -313,3 +319,50 @@ def test_a_steady_challenge_is_not_reported_as_the_source_changing(
             clock=lambda: "NOW",
         )
     assert row_for_url(db, ARTICLE)["verify_outcome"] == BLOCKED
+
+
+# --- the capture path: a challenge title is a false statement about the source -
+
+def test_a_challenge_title_is_not_stored_as_the_citation_title() -> None:
+    """MEASURED HARM, and larger than the verify path's.
+
+    54 items in the live library are titled "Checking your browser - reCAPTCHA",
+    dated 2026-05-28 through 2026-09-02, across roughly fifteen projects. That
+    string is not a weak title or a missing one; it is a false statement about
+    the cited source, sitting in the field a reader trusts most.
+
+    The sentinel is the URL, which is this module's existing contract for "could
+    not get a title". A URL-as-title is honest about having failed. The
+    challenge's title is confidently wrong, and confidently wrong is the worse
+    of the two -- it also clears `title:unresolved`, so nothing revisits it.
+    """
+    from zotero_capture.title_fetcher import fetch_title
+
+    with _serving(WALL) as http:
+        assert fetch_title(ARTICLE, client=http) == ARTICLE
+
+
+def test_a_real_page_still_yields_its_title() -> None:
+    """Positive control: a gate that failed every title would satisfy the
+    assertion above and read as a pass."""
+    from zotero_capture.title_fetcher import fetch_title
+
+    with _serving(REAL) as http:
+        assert fetch_title(ARTICLE, client=http) == "An article"
+
+
+def test_the_rule_has_exactly_one_definition() -> None:
+    """The guard that stops this becoming a fourth stale second copy.
+
+    Two call sites need this rule today -- the hasher and the title fetcher --
+    which is exactly the shape that produced the User-Agent defect, where a
+    consolidated value was re-hardcoded six days later in a new module. So the
+    obligation is that the PATTERN exists once across the package, derived by
+    scanning every module rather than by naming the two that have it now.
+    """
+    pkg = Path("scripts/zotero_capture")
+    holders = [
+        p.name for p in sorted(pkg.glob("*.py"))
+        if "<base" in p.read_text()
+    ]
+    assert holders == ["url_processing.py"], holders

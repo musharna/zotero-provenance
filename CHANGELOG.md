@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.52.0 — 2026-09-02
+
+- **54 items in the library are titled "Checking your browser - reCAPTCHA".**
+  Same defect as 0.51.0, in the CAPTURE path, with a larger blast radius and a
+  longer history: dated 2026-05-28 through 2026-09-02 — one created the day this
+  was found, so it was still happening — across roughly fifteen projects, on
+  `pmc.ncbi.nlm.nih.gov` and `www.ncbi.nlm.nih.gov`.
+
+  That string is not a weak title or a missing one. It is a false statement
+  about the cited source, sitting in the field a reader trusts most, and it is
+  worse than the hash defect because a title is what a human actually reads.
+
+- **The sentinel is the URL, which is honest.** `fetch_title` already returns
+  the URL for "could not get a title", and that answer says we failed and leaves
+  `title:unresolved` set so something revisits the item. A confidently wrong
+  title clears that flag forever, which is why "Real Tit" was fixed the same way
+  and for the same reason.
+
+- **The rule now has exactly one definition.** `document_disowns` moved to
+  `url_processing`, which both `snapshot` and `title_fetcher` already import and
+  which imports neither. Two call sites needing one rule is the precise shape
+  that produced the User-Agent defect, where a consolidated value was
+  re-hardcoded in a new module six days after it was consolidated. The guard
+  derives its obligation by scanning every module in the package for the
+  pattern, so it fails on a copy in a file nobody has written yet.
+
+- **A vacuous pass, caught by its positive control.** The first version of the
+  challenge-title test PASSED against ungated code. The mock served no
+  `content-type`, `fetch_title` refuses a non-HTML response before reading
+  anything, and so it returned the URL sentinel for the challenge and the real
+  page alike. The assertion was true for a reason that had nothing to do with
+  the fix. Only the control sitting beside it — asserting a real page still
+  yields its title — went red and exposed it.
+
 ## 0.51.0 — 2026-09-02
 
 - **A page can answer 200 and not be the page.** `raise_for_status` was the only

@@ -707,3 +707,66 @@ def is_unsafe_address(ip: IPAddress) -> bool:
     if mapped is not None and is_unsafe_address(mapped):
         return True
     return any(ip in net for net in PRIVATE_RANGES)
+
+
+# --- is this response the resource we asked for? ------------------------------
+
+# How much of the head to keep for the document's own declaration of what it is.
+# `<base>` is a head element, so this is generous; it is bounded for the reason
+# bodies are streamed at all, which is that page size must not become memory.
+HEAD_SNIFF_BYTES = 65_536
+
+# `<base href=...>`. The document's own statement of the address its relative
+# links resolve against -- the mechanism HTML provides for saying "this is where
+# I am", and therefore evidence rather than a sniff of page text.
+_BASE_HREF = re.compile(rb"""<base[^>]*?\shref\s*=\s*["']([^"']+)""", re.I)
+
+
+def site_of(url: str) -> str:
+    """The registrable-ish site of a URL, for "is this the same place".
+
+    Last two labels. Crude on multi-label suffixes -- `a.co.uk` and `b.co.uk`
+    both reduce to `co.uk` -- and that is the direction to be crude in: it can
+    only make two different sites look like ONE, which MISSES a challenge. The
+    opposite error would manufacture a refusal for a page that was served
+    perfectly well, and manufacturing findings is the one thing this tool must
+    not do.
+    """
+    host = urlsplit(url).netloc.lower().partition(":")[0]
+    parts = [x for x in host.split(".") if x]
+    return ".".join(parts[-2:]) if len(parts) >= 2 else host
+
+
+def declared_base(head: bytes) -> str:
+    """The address this document declares as its own, or "" for none.
+
+    Empty is the overwhelming majority: of 40 pages sampled across 40 hosts from
+    rows that had hashed successfully, 37 carried no `<base>` at all.
+    """
+    found = _BASE_HREF.search(head)
+    if not found:
+        return ""
+    return found.group(1).decode("utf-8", "replace").strip()
+
+
+def document_disowns(head: bytes, answered_by: str) -> str:
+    """The foreign address this document claims to be, or "" if it claims none.
+
+    ONE function, imported by every reader of a response body, because this rule
+    is needed at two call sites already -- the hasher and the title fetcher --
+    and "one rule kept in two places" is the defect class that has shipped five
+    times in this repository against zero caused by a missing check.
+
+    A bot challenge served with HTTP 200 sets
+    `<base href="https://www.google.com/recaptcha/challengepage/">`, which is the
+    document stating it is not the resource. False-positive rate measured before
+    this was written: 40 pages, 40 hosts, one cross-origin base, and that one
+    was a challenge. 0/40 is a bound, not a proof of zero.
+    """
+    declared = declared_base(head)
+    if not declared:
+        return ""
+    mine, theirs = site_of(answered_by), site_of(declared)
+    if not theirs or theirs == mine:
+        return ""
+    return declared
