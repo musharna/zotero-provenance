@@ -1,5 +1,75 @@
 # Changelog
 
+## 0.53.0 — 2026-09-03
+
+- **The unit of comparison was the line, and a line's length belongs to the
+  source's formatter.** `stable_digest` compares two reads of a page and hashes
+  what they agree on, so a per-request token stops reading as provenance drift.
+  It aligned lines — so a unit differing in 9 bytes forfeited all 105,082 of
+  them, and *the source decided* how much one nonce could cost us.
+
+  Measured live on 2026-09-03, fetching 38 index rows twice three seconds apart
+  and scoring against what actually differs:
+
+      huggingface.co/datasets/google/frames-benchmark   ONE line of 630 KB,
+                                                        0.05% truly different
+                                                        -> coverage 0.65, refused
+      link.springer.com/article/10.1186/s13059-...      81 per-render anchor ids
+                                                        ~9 bytes each = 0.12%
+                                                        -> coverage 0.70, refused
+
+  Springer stamps a per-render number into every reference anchor
+  (`id="ref-link-section-d10994812e529"` vs `d1246762e529`); because those sit
+  inside one 105,082-byte line, **111,300 bytes were forfeited for 729 that had
+  moved**. `stable_digest`'s own docstring already named "a per-render element
+  id" as the thing it existed to derive away. The intent was right; the
+  granularity defeated it.
+
+- **The unit is now a content-defined chunk, cut on a rolling hash of the bytes
+  themselves** — how rsync, borg and git packfiles compare two versions of a
+  stream. Over the 38 pairs the line unit refused 21 documents it could have
+  characterised; the new unit refuses 1, a genuine borderline at 3.95% truly
+  different, and wrongly accepts none.
+
+- **Smaller units are not the fix; re-synchronising boundaries are.** Fixed
+  512-byte blocks were run as a control: an edit that changes a document's
+  length shifts every later block and they never re-align — one page fell from
+  0.9966 coverage to 0.1881, another scored 0.2885 where content-defined chunks
+  scored 0.9188. Across the corpus fixed blocks rescued 2 rows and broke 2;
+  content-defined chunks rescued 20 and broke none. That control is kept as a
+  test, so "we made the units smaller" cannot become the remembered account of
+  this fix.
+
+- **`MIN_STABLE_COVERAGE` did not move, and that is the evidence.** Everything
+  characterisable scores 0.92 or better and everything genuinely volatile 0.81
+  or worse — a yahoo news page rebuilt 22% of itself between two reads seconds
+  apart. The floor still sits in the gap it was chosen for. Changing the
+  threshold was the band-aid hypothesis and the measurement ruled it out: no
+  threshold value separates the populations while the unit is the line.
+
+- **`stable_algo` records WHICH method produced a stored digest.** Without it
+  this release would have found ~2,400 stored digests mismatching at once and
+  reported every one of those sources as having drifted — the tool
+  manufacturing the exact class of finding it exists to report truthfully, which
+  this project has already shipped and fixed for `unreachable`, `gone` and
+  `blocked`. A row whose stored tag is not the current one is **re-baselined**
+  and counted under its own name, never compared. Mutation-tested: removing the
+  tag check makes the row come out `stable_changed`, which is the failure being
+  guarded against.
+
+- The write-once rule on `stable_digest` is widened by exactly one clause and
+  not weakened: a digest cut by a *different* method was never evidence about
+  this one, so holding it in place could only preserve a false comparison.
+
+- **A negative control found my own framing wrong.** The pages I first selected
+  as "app shells that must stay unstable" were chosen from rows recorded
+  `unstable` — the very verdict under suspicion. Their near-zero line coverage
+  was the same minified-single-line artefact, not volatility. Circular. The real
+  control is a page that genuinely rebuilds itself, and it holds: yahoo stays
+  refused at 0.7485. Separately checked that no two distinct URLs collide on a
+  stable digest, including four claude.ai artifacts — the boilerplate-only
+  hazard does not materialise.
+
 ## 0.52.0 — 2026-09-02
 
 - **54 items in the library are titled "Checking your browser - reCAPTCHA".**
