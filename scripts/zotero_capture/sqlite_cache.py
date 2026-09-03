@@ -154,6 +154,17 @@ MIGRATIONS = (
     # are the "never" value, never "zero bytes agreed".
     "ALTER TABLE url_index ADD COLUMN stable_digest TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE url_index ADD COLUMN stable_bytes INTEGER NOT NULL DEFAULT -1",
+    # WHICH method produced the digest beside it. A stable digest is a hash of
+    # the units two reads agreed on, so it is comparable only with one cut the
+    # same way -- and 0.53.0 changed the unit from the line to a content-defined
+    # chunk. Without this column that release would have found ~2,400 stored
+    # digests mismatching at once and reported every one of those sources as
+    # having changed, which is the tool manufacturing the exact finding it
+    # exists to report truthfully.
+    #
+    # '' is the pre-0.53.0 value and means "cut into lines": not unknown, just
+    # older, and it mismatches today's tag, which is the point.
+    "ALTER TABLE url_index ADD COLUMN stable_algo TEXT NOT NULL DEFAULT ''",
 )
 
 # The alphabet the Zotero API accepts for an object key: base32 without the
@@ -841,23 +852,30 @@ def set_verify_outcome(
 
 
 def set_stable_digest(
-    db_path: Path, url_canonical: str, *, digest: str, covers_bytes: int
+    db_path: Path, url_canonical: str, *, digest: str, covers_bytes: int, algo: str
 ) -> bool:
-    """Record the first stable digest for a row, and never overwrite it.
+    """Record a stable digest for a row when there is nothing comparable there.
 
-    Same rule as `content_hash`, for the same reason: the stored digest is the
-    evidence of what was consulted. A pass that found the document had changed
-    and then wrote today's version over the baseline would erase the finding at
-    the instant it was made, and the next pass would report agreement.
+    Two cases, one predicate: there is no digest yet, or the one stored was cut
+    by a DIFFERENT method and so cannot be compared with this one at all. A
+    digest made the same way is never overwritten.
 
-    The WHERE clause carries that, rather than a read-then-write in the caller:
-    two passes racing on one row would both see '' and the second would win.
+    That last clause is the original rule and it is unchanged: the stored digest
+    is the evidence of what was consulted, and a pass that found the document
+    had changed and then wrote today's version over the baseline would erase the
+    finding at the instant it was made. Widening it to admit an algorithm change
+    does not weaken it, because a digest from another method was never evidence
+    about this one -- comparing them can only produce a verdict about US.
+
+    The WHERE clause carries both, rather than a read-then-write in the caller:
+    two passes racing on one row would both see the same state and the second
+    would win.
     """
     with closing(_connect(db_path)) as conn:
         cursor = conn.execute(
-            "UPDATE url_index SET stable_digest = ?, stable_bytes = ?"
-            " WHERE url_canonical = ? AND stable_digest = ''",
-            (digest, covers_bytes, url_canonical),
+            "UPDATE url_index SET stable_digest = ?, stable_bytes = ?, stable_algo = ?"
+            " WHERE url_canonical = ? AND (stable_digest = '' OR stable_algo != ?)",
+            (digest, covers_bytes, algo, url_canonical, algo),
         )
     return cursor.rowcount == 1
 
@@ -901,7 +919,8 @@ def rows_with_hash(
     """
     sql = (
         "SELECT url_canonical, zotero_key, content_hash, hashed_at,"
-        " hash_bytes, hash_truncated, verified_at, stable_digest FROM url_index"
+        " hash_bytes, hash_truncated, verified_at, stable_digest, stable_algo"
+        " FROM url_index"
         " WHERE content_hash != ''"
     )
     params: list[str] = []

@@ -78,9 +78,9 @@ EDITED = (
 )
 
 
-def _lines(text_lines):
+def _units(text_lines):
     return tuple(
-        snap.LineRead(hashlib.sha256(x.encode()).hexdigest(), len(x))
+        snap.UnitRead(hashlib.sha256(x.encode()).hexdigest(), len(x))
         for x in text_lines
     )
 
@@ -92,7 +92,7 @@ def _read(text_lines, *, digest="D", complete=True) -> PageRead:
         final_url="https://example.org/p",
         covers_bytes=total,
         complete=complete,
-        lines=None if text_lines is None else _lines(text_lines),
+        units=None if text_lines is None else _units(text_lines),
     )
 
 
@@ -138,16 +138,24 @@ def test_a_real_edit_moves_the_digest() -> None:
     assert before.digest != after.digest
 
 
-def test_a_single_line_minified_document_declines_rather_than_guessing() -> None:
-    """The one page of six that did not reproduce, and why the floor exists.
+def test_units_that_do_not_align_decline_rather_than_guessing() -> None:
+    """The floor, driven directly: given units that disagree, decline.
 
-    Both directions in one test: the SAME content, given line structure, does
+    Until 0.53.0 this test was called "a single-line minified document declines"
+    and it described production, because the unit WAS the line: a minified page
+    is one line, so one token anywhere in it aligned to nothing. That is the
+    defect 0.53.0 removed, and production no longer produces this shape from a
+    minified page -- `test_content_defined_units.py` drives that end to end.
+    What survives here is the property this function is responsible for on its
+    own, whatever cut the units.
+
+    Both directions in one test: the SAME content, given units that align, does
     yield a digest. Without that control, "returns None" would also pass on a
     function that had simply stopped working.
     """
-    minified_a = ["".join(_page(1))]
-    minified_b = ["".join(_page(2))]
-    assert stable_digest(_read(minified_a), _read(minified_b)) is None
+    one_big_unit_a = ["".join(_page(1))]
+    one_big_unit_b = ["".join(_page(2))]
+    assert stable_digest(_read(one_big_unit_a), _read(one_big_unit_b)) is None
 
     assert stable_digest(_read(_page(1)), _read(_page(2))) is not None
 
@@ -158,8 +166,8 @@ def test_a_page_that_mostly_disagrees_declines() -> None:
     assert stable_digest(_read(a), _read(b)) is None
 
 
-def test_unrecorded_lines_never_produce_a_digest() -> None:
-    """`lines=None` means "we did not record them", not "there were none".
+def test_unrecorded_units_never_produce_a_digest() -> None:
+    """`units=None` means "we did not record them", not "there were none".
 
     One value meaning two things is the defect that cost this project a release
     each for `unreachable` (gone vs blocked) and `gone` (absent vs not-visible).
@@ -169,35 +177,38 @@ def test_unrecorded_lines_never_produce_a_digest() -> None:
     assert stable_digest(_read(None), _read(None)) is None
 
 
-# --- producing the line digests while streaming --------------------------------
+# --- producing the unit digests while streaming --------------------------------
 
 
-def test_line_digests_do_not_depend_on_how_the_body_was_chunked() -> None:
-    """Chunk sizes belong to the transport.
+def test_unit_digests_do_not_depend_on_how_the_body_was_chunked() -> None:
+    """Transport chunk sizes belong to the transport.
 
     `hash_page` already says so about the byte cap -- "a digest that depended on
     them would differ for a document that had not". The same trap is one layer
-    down here: a chunk boundary landing mid-line must not invent two lines.
+    down here, and the rolling hash is what makes it a live risk: its state has
+    to carry ACROSS an `iter_bytes` boundary, so a boundary landing mid-unit
+    must not become a cut.
+
+    The byte total is asserted as well as the agreement, and that is the half
+    that carries the test. Comparing split-fed against whole-fed only says they
+    AGREE -- both losing the unterminated tail satisfies that while dropping the
+    end of the document. Mutation-tested on the line version this replaces:
+    asserting only agreement did not notice a discarded trailing line.
     """
-    text = _page(1)
-    body = b"\n".join(x.encode() for x in text)
+    body = b"\n".join(x.encode() for x in _page(1)) * 40
 
-    # The property, not a proxy. Comparing split-fed against whole-fed only
-    # asserts they AGREE -- both dropping the unterminated last line satisfies
-    # that and loses a line of the document. Mutation-tested: asserting only
-    # agreement did not notice the trailing line being discarded.
-    expected = tuple(
-        snap.LineRead(hashlib.sha256(x.encode()).hexdigest(), len(x)) for x in text
-    )
-    whole = snap._LineDigester()
+    whole = snap._ChunkDigester()
     whole.update(body)
-    assert whole.finish() == expected
+    expected = whole.finish()
+    assert expected is not None
+    assert sum(u.nbytes for u in expected) == len(body)
+    assert len(expected) > 1, "fixture too small to have any boundaries to get wrong"
 
-    for size in (1, 3, 7, 13, len(body) - 1):
-        split = snap._LineDigester()
+    for size in (1, 3, 7, 13, 1024, len(body) - 1):
+        split = snap._ChunkDigester()
         for i in range(0, len(body), size):
             split.update(body[i : i + size])
-        assert split.finish() == expected, f"chunk size {size}"
+        assert split.finish() == expected, f"transport chunk size {size}"
 
 
 def test_a_recorded_baseline_is_never_overwritten(tmp_path) -> None:
@@ -211,19 +222,50 @@ def test_a_recorded_baseline_is_never_overwritten(tmp_path) -> None:
     """
     db = _seed(tmp_path / "i.db", "https://example.org/p")
     assert set_stable_digest(
-        db, "https://example.org/p", digest="FIRST", covers_bytes=10
+        db, "https://example.org/p", digest="FIRST", covers_bytes=10,
+        algo=snap.STABLE_ALGO,
     )
     assert not set_stable_digest(
-        db, "https://example.org/p", digest="SECOND", covers_bytes=20
+        db, "https://example.org/p", digest="SECOND", covers_bytes=20,
+        algo=snap.STABLE_ALGO,
     )
     row = row_for_url(db, "https://example.org/p")
     assert row["stable_digest"] == "FIRST"
     assert row["stable_bytes"] == 10
 
 
-def test_too_many_lines_records_nothing_rather_than_a_partial_list() -> None:
-    d = snap._LineDigester(max_lines=3)
-    d.update(b"a\nb\nc\nd\ne\n")
+def test_a_digest_from_another_method_is_replaced_rather_than_compared(
+    tmp_path,
+) -> None:
+    """The other half of the write-once rule, and the reason it was widened.
+
+    A digest cut by a different method is not evidence about this one, so the
+    write-once guard must NOT hold it in place -- if it did, every row baselined
+    before 0.53.0 would keep an incomparable digest forever and report drift on
+    every pass. Both directions: a different tag replaces, the same tag does not.
+    """
+    db = _seed(tmp_path / "i.db", "https://example.org/p")
+    assert set_stable_digest(
+        db, "https://example.org/p", digest="OLDWAY", covers_bytes=10, algo="lines/0"
+    )
+    assert set_stable_digest(
+        db, "https://example.org/p", digest="NEWWAY", covers_bytes=20,
+        algo=snap.STABLE_ALGO,
+    )
+    row = row_for_url(db, "https://example.org/p")
+    assert row["stable_digest"] == "NEWWAY"
+    assert row["stable_algo"] == snap.STABLE_ALGO
+
+    assert not set_stable_digest(
+        db, "https://example.org/p", digest="AGAIN", covers_bytes=30,
+        algo=snap.STABLE_ALGO,
+    )
+    assert row_for_url(db, "https://example.org/p")["stable_digest"] == "NEWWAY"
+
+
+def test_too_many_units_records_nothing_rather_than_a_partial_list() -> None:
+    d = snap._ChunkDigester(max_units=3)
+    d.update(b"".join(bytes([i % 251]) for i in range(20_000)))
     assert d.finish() is None
 
 
@@ -255,7 +297,7 @@ def _volatile_hasher(pages):
             final_url=url,
             covers_bytes=sum(len(x) for x in text),
             complete=True,
-            lines=_lines(text),
+            units=_units(text),
         )
 
     return hasher
@@ -263,6 +305,52 @@ def _volatile_hasher(pages):
 
 def _run(db, hasher):
     return verify(db, hasher=hasher, clock=lambda: "NOW")
+
+
+def test_a_digest_from_an_older_method_re_baselines_and_is_not_called_a_change(
+    tmp_path,
+) -> None:
+    """The release-safety property, and the reason `stable_algo` exists.
+
+    0.53.0 changed the unit from the line to a content-defined chunk, so every
+    digest stored before it mismatches today's. Compared blindly that is ~2,400
+    rows reporting that their sources drifted on the day WE changed -- the tool
+    manufacturing the exact class of finding it exists to report truthfully,
+    which is the defect this project has now shipped and fixed for `unreachable`,
+    `gone` and `blocked`.
+
+    Both directions, because "not stable_changed" alone would pass on a verify
+    that had stopped concluding anything: the row must come out re-baselined,
+    carrying today's tag and today's digest.
+    """
+    url = "https://example.org/p"
+    db = _seed(tmp_path / "i.db", url)
+    assert set_stable_digest(
+        db, url, digest="CUT_BY_LINES", covers_bytes=10, algo="lines/0"
+    )
+
+    result = _run(db, _volatile_hasher([_page(1), _page(2)]))
+
+    row = row_for_url(db, url)
+    assert row["verify_outcome"] == snap.STABLE_REBASELINED
+    assert result.stable_rebaselined == 1
+    assert result.stable_changed == 0
+    assert row["stable_algo"] == snap.STABLE_ALGO
+    assert row["stable_digest"] != "CUT_BY_LINES"
+
+
+def test_a_stored_digest_with_the_current_tag_is_still_compared(tmp_path) -> None:
+    """The control for the test above: re-baselining must not swallow a real
+    change. Same shape, same code path, only the stored tag differs."""
+    url = "https://example.org/p"
+    db = _seed(tmp_path / "i.db", url)
+    baseline = _run(db, _volatile_hasher([_page(1), _page(2)]))
+    assert baseline.stable_baseline == 1
+
+    result = _run(db, _volatile_hasher([_edited(8), _edited(9)]))
+    assert result.stable_changed == 1
+    assert result.stable_rebaselined == 0
+    assert row_for_url(db, url)["verify_outcome"] == STABLE_CHANGED
 
 
 def test_the_first_unstable_look_records_a_baseline(tmp_path) -> None:
@@ -299,7 +387,16 @@ def test_a_later_look_that_disagrees_is_stable_changed(tmp_path) -> None:
     assert row["stable_digest"] == before
 
 
-def test_a_minified_page_stays_unstable_and_stores_nothing(tmp_path) -> None:
+def test_a_page_whose_units_do_not_align_stays_unstable_and_stores_nothing(
+    tmp_path,
+) -> None:
+    """`verify` records nothing when the digest declines.
+
+    The fixture hands it ONE unit holding the whole document, which is what a
+    minified page produced when the unit was the line. That is no longer how a
+    minified page is cut -- see `test_content_defined_units.py` -- so this is
+    now a test of the refusal path itself rather than of that page.
+    """
     db = _seed(tmp_path / "i.db", "https://example.org/p")
     result = _run(db, _volatile_hasher([["".join(_page(1))], ["".join(_page(2))]]))
     row = row_for_url(db, "https://example.org/p")
@@ -323,7 +420,7 @@ def test_a_page_that_agrees_with_itself_never_reaches_this_path(tmp_path) -> Non
             final_url=url,
             covers_bytes=64,
             complete=True,
-            lines=_lines(_page(1)),
+            units=_units(_page(1)),
         )
 
     result = _run(db, hasher)
