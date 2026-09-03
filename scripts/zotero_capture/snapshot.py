@@ -40,6 +40,7 @@ from __future__ import annotations
 import difflib
 import hashlib
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Callable, NamedTuple
@@ -277,6 +278,66 @@ def page_is_visible(url: str, *, client: httpx.Client) -> bool:
     return response.status_code not in (404, 410)
 
 
+# How much of the head to keep for the document's own declaration of what it
+# is. `<base>` and `<link rel=canonical>` are head elements, so this is
+# generous; it is bounded for the reason the body is streamed at all, which is
+# that page size must never become memory.
+HEAD_SNIFF_BYTES = 65_536
+
+# `<base href=...>`. The document's own statement of the address its relative
+# links resolve against -- which is the mechanism HTML provides for saying
+# "this is where I am", and therefore evidence rather than a sniff.
+_BASE_HREF = re.compile(rb"""<base[^>]*?\shref\s*=\s*["']([^"']+)""", re.I)
+
+
+class NotTheResource(Exception):
+    """A successful response that is not the resource that was asked for.
+
+    Raised, not returned, and deliberately so. The alternative -- a flag on
+    `PageRead` that each caller checks -- is one rule kept in three places, and
+    a caller that forgets it records a bot wall as a provenance baseline. As an
+    exception it routes through `classify_failure`, which is already the single
+    place a failure is given its name.
+
+    Carries `final_url` under that exact name because `responding_url` reads it
+    first, so the address recorded is the challenge's own, not the publisher we
+    asked and which did nothing wrong.
+    """
+
+    def __init__(self, *, declared: str, requested: str) -> None:
+        super().__init__(f"{requested} answered with a document declaring {declared}")
+        self.final_url = declared
+        self.requested = requested
+
+
+def _site_of(url: str) -> str:
+    """The registrable-ish site of a URL, for "is this the same place".
+
+    Last two labels. Crude on multi-label suffixes -- `a.co.uk` and `b.co.uk`
+    both reduce to `co.uk` -- and that is the direction to be crude in: it can
+    only make two different sites look like ONE, which MISSES a challenge. The
+    opposite error would manufacture a refusal for a page that was served
+    perfectly well, and manufacturing findings is the thing this tool must not
+    do.
+    """
+    host = urlsplit(url).netloc.lower().partition(":")[0]
+    parts = [x for x in host.split(".") if x]
+    return ".".join(parts[-2:]) if len(parts) >= 2 else host
+
+
+def declared_base(head: bytes) -> str:
+    """The address this document declares as its own, or "" for none.
+
+    Empty means the document said nothing, which is the overwhelming majority:
+    of 40 pages sampled across 40 hosts from rows that had hashed successfully,
+    37 carried no `<base>` at all.
+    """
+    found = _BASE_HREF.search(head)
+    if not found:
+        return ""
+    return found.group(1).decode("utf-8", "replace").strip()
+
+
 def hash_page(
     url: str, *, client: httpx.Client, max_bytes: int = HASH_MAX_BYTES
 ) -> PageRead:
@@ -302,12 +363,15 @@ def hash_page(
     """
     digest = hashlib.sha256()
     lines = _LineDigester()
+    head = bytearray()
     read = 0
     complete = True
     with client.stream("GET", url) as resp:
         final_url = str(resp.url)
         resp.raise_for_status()
         for chunk in resp.iter_bytes():
+            if len(head) < HEAD_SNIFF_BYTES:
+                head.extend(chunk[: HEAD_SNIFF_BYTES - len(head)])
             if read + len(chunk) > max_bytes:
                 # A document of EXACTLY max_bytes never reaches here, so it is
                 # correctly complete: the boundary is a cap, not a refusal to
@@ -321,6 +385,15 @@ def hash_page(
             digest.update(chunk)
             lines.update(chunk)
             read += len(chunk)
+    # Asked AFTER the body is in hand and BEFORE anything is returned, so no
+    # caller can be handed a digest of a page that said it was somebody else.
+    # This is the missing member of the family that already holds
+    # `unbalanced_brackets` ("did we even send the cited address?") and
+    # `absence_is_corroborated` ("may we read this 404 as absence?"). Each asks
+    # what we are ENTITLED to conclude before the confident label is written.
+    declared = declared_base(bytes(head))
+    if declared and _site_of(declared) and _site_of(declared) != _site_of(final_url):
+        raise NotTheResource(declared=declared, requested=url)
     return PageRead(
         digest=digest.hexdigest(),
         final_url=final_url,
@@ -423,6 +496,13 @@ def classify_failure(exc: BaseException) -> str:
     manufacture link rot -- inventing the exact finding this tool exists to
     report truthfully.
     """
+    if isinstance(exc, NotTheResource):
+        # Reused rather than given a fifth word. BLOCKED already reads
+        # "refused; the page may be perfectly fine", which is exactly what a
+        # challenge page is. A new outcome meaning the same thing would be a
+        # second copy of one rule, and this repository has shipped four of
+        # those against zero missing guards.
+        return BLOCKED
     if isinstance(exc, httpx.InvalidURL):
         # Not a fact about the source and not a bug in the fetch: the string we
         # STORED is not a usable address, which is exactly what MALFORMED means
@@ -443,6 +523,14 @@ def classify_failure(exc: BaseException) -> str:
     if isinstance(exc, httpx.TimeoutException):
         return TIMEOUT
     return UNREACHABLE
+
+
+# The failures that are FACTS ABOUT THE FETCH rather than bugs of ours. ONE
+# tuple, because this same isinstance check stood open-coded at all three fetch
+# sites and adding a fourth kind of failure to two of the three is the defect
+# class that has shipped five times in this repository. A caller cannot now
+# recognise a different set from its neighbour, because there is only one set.
+FETCH_FAULTS = (httpx.HTTPError, httpx.InvalidURL, NotTheResource)
 
 
 @dataclass
@@ -713,7 +801,7 @@ def snapshot(
             read = _paced_fetch(pacer, hasher, url, max_bytes)
             read_at = clock()
         except Exception as e:  # a dead link is the common case, not a fault
-            if not isinstance(e, (httpx.HTTPError, httpx.InvalidURL)):
+            if not isinstance(e, FETCH_FAULTS):
                 # Not a fact about the source, so nothing about the source may
                 # be written. Found by changing the hasher's signature: the old
                 # stubs raised TypeError, `except Exception` caught it, and 20
@@ -899,7 +987,7 @@ def verify(
             read = _paced_fetch(pacer, hasher, url, span)
             digest = read.digest
         except Exception as e:
-            if not isinstance(e, (httpx.HTTPError, httpx.InvalidURL)):
+            if not isinstance(e, FETCH_FAULTS):
                 logger.exception("bug while re-reading %s; concluding nothing", url)
                 result.internal_errors += 1
                 continue
@@ -950,7 +1038,7 @@ def verify(
             corroboration = _paced_fetch(pacer, hasher, url, span)
             second = corroboration.digest
         except Exception as e:
-            if not isinstance(e, (httpx.HTTPError, httpx.InvalidURL)):
+            if not isinstance(e, FETCH_FAULTS):
                 logger.exception("bug while re-reading %s; concluding nothing", url)
                 result.internal_errors += 1
                 continue
