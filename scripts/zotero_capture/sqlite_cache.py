@@ -157,7 +157,7 @@ MIGRATIONS = (
     # WHICH method produced the digest beside it. A stable digest is a hash of
     # the units two reads agreed on, so it is comparable only with one cut the
     # same way -- and 0.53.0 changed the unit from the line to a content-defined
-    # chunk. Without this column that release would have found ~2,400 stored
+    # chunk. Without this column that release would have found 1,217 stored
     # digests mismatching at once and reported every one of those sources as
     # having changed, which is the tool manufacturing the exact finding it
     # exists to report truthfully.

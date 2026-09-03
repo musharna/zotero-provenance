@@ -146,7 +146,7 @@ MAX_UNIT_DIGESTS = 200_000
 # not this one the row is re-baselined, never reported as the source having
 # changed. Without it, changing the unit -- as 0.53.0 did, from the line to the
 # content-defined chunk -- would have made every stored digest mismatch at
-# once, and the tool would have announced that ~2,400 sources had drifted when
+# once, and the tool would have announced that 1,217 sources had drifted when
 # the only thing that moved was us.
 STABLE_ALGO = "cdc64/1"
 

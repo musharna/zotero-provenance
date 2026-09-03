@@ -313,7 +313,7 @@ def test_a_digest_from_an_older_method_re_baselines_and_is_not_called_a_change(
     """The release-safety property, and the reason `stable_algo` exists.
 
     0.53.0 changed the unit from the line to a content-defined chunk, so every
-    digest stored before it mismatches today's. Compared blindly that is ~2,400
+    digest stored before it mismatches today's. Compared blindly that is 1,217
     rows reporting that their sources drifted on the day WE changed -- the tool
     manufacturing the exact class of finding it exists to report truthfully,
     which is the defect this project has now shipped and fixed for `unreachable`,
