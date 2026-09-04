@@ -106,6 +106,31 @@ def _edited(n: int):
     return EDITED[:1] + [NONCE.format(n)] + EDITED[1:]
 
 
+# EDITED moves ONE paragraph of 22. Under the equality test that was a
+# detectable change, but so was a page that had not changed at all -- the
+# comparison answered "different" for every pair of reads, which is how 175
+# rows came to hold a `stable_changed` verdict that was really our own
+# sampling. A test asserting "changed" against a method that says changed for
+# everything cannot fail, so the two below were passing for the wrong reason.
+#
+# Similarity measures overlap, so a change has to clear the noise that moving
+# domains produce. Measured live: unchanged pages sit at 0.958-1.000, two
+# DIFFERENT articles at 0.239-0.595. This fixture is the second shape -- the
+# document replaced rather than tweaked -- which is what the method now claims
+# to detect. The tweak it can no longer see has its own test below, stating the
+# cost instead of hiding it.
+REPLACED = (
+    ["<html>"]
+    + [f"<p>an entirely different sentence {i}</p>" for i in range(20)]
+    + ["</html>"]
+)
+
+
+def _replaced(n: int):
+    """A different document at the same address, still carrying a moving token."""
+    return REPLACED[:1] + [NONCE.format(n)] + REPLACED[1:]
+
+
 # --- the digest itself --------------------------------------------------------
 
 
@@ -378,7 +403,7 @@ def test_a_stored_digest_with_the_current_tag_is_still_compared(tmp_path) -> Non
     baseline = _run(db, _volatile_hasher([_page(1), _page(2)]))
     assert baseline.stable_baseline == 1
 
-    result = _run(db, _volatile_hasher([_edited(8), _edited(9)]))
+    result = _run(db, _volatile_hasher([_replaced(8), _replaced(9)]))
     assert result.stable_changed == 1
     assert result.stable_rebaselined == 0
     assert row_for_url(db, url)["verify_outcome"] == STABLE_CHANGED
@@ -409,7 +434,7 @@ def test_a_later_look_that_disagrees_is_stable_changed(tmp_path) -> None:
     _run(db, _volatile_hasher([_page(1), _page(2)]))
     before = row_for_url(db, "https://example.org/p")["stable_digest"]
 
-    result = _run(db, _volatile_hasher([_edited(5), _edited(6)]))
+    result = _run(db, _volatile_hasher([_replaced(5), _replaced(6)]))
 
     row = row_for_url(db, "https://example.org/p")
     assert row["verify_outcome"] == STABLE_CHANGED
@@ -512,3 +537,103 @@ def test_the_fix_is_not_a_list_of_volatile_field_names() -> None:
     )
     # Non-vacuous: the thing that replaces the list has to exist.
     assert callable(stable_digest)
+
+
+# --- the domain moves between passes ------------------------------------------
+
+# A page wide enough that one moved element is a realistic fraction of it. The
+# fixtures above are 22 lines, so a single moved unit would be 4% of the
+# document -- the live case is 46 chunks of 3,475, which is 1.3%.
+WIDE = (
+    ["<html>"]
+    + [f"<p>paragraph {i} of the cited work</p>" for i in range(200)]
+    + ["</html>"]
+)
+# Volatile, but SLOWER than the pair. springer stamps one of these into every
+# reference anchor; it is fixed within a render and different across renders, so
+# two reads seconds apart routinely agree on it and it is admitted as content.
+SLOW = "<a id=ref-link-section-{}>16</a>"
+
+
+def _render(nonce: int, render: str):
+    return WIDE[:1] + [NONCE.format(nonce), SLOW.format(render)] + WIDE[1:]
+
+
+def test_a_later_look_whose_agreed_set_moved_is_not_called_changed(
+    tmp_path,
+) -> None:
+    """The defect, end to end.
+
+    Both passes see the same document. Each pair strips its own per-request
+    nonce, but each ADMITS the slower render id, because that id does not move
+    within the two seconds between the reads. So the two passes fingerprint
+    sets that differ by one element out of 202, and equality called that
+    `stable_changed` -- 175 rows of it in the live index, 41 of them nature.com
+    ARTICLES, which do not change.
+
+    A verdict must not depend on which bytes the read-pair happened to agree on.
+    """
+    db = _seed(tmp_path / "i.db", "https://example.org/p")
+    _run(db, _volatile_hasher([_render(1, "a"), _render(2, "a")]))
+
+    result = _run(db, _volatile_hasher([_render(3, "b"), _render(4, "b")]))
+
+    row = row_for_url(db, "https://example.org/p")
+    assert row["verify_outcome"] == STABLE_UNCHANGED
+    assert result.stable_unchanged == 1
+    assert result.stable_changed == 0
+
+
+def test_a_document_that_really_changed_is_still_called_changed(tmp_path) -> None:
+    """The positive control for the test above, in the same shape.
+
+    Tolerating a moved domain must not become tolerating anything. Here the
+    document itself is rewritten while the render id moves exactly as before, so
+    the only difference from the test above is the content -- which is the one
+    thing a provenance check exists to notice.
+    """
+    db = _seed(tmp_path / "i.db", "https://example.org/p")
+    _run(db, _volatile_hasher([_render(1, "a"), _render(2, "a")]))
+
+    rewritten = (
+        ["<html>"]
+        + [f"<p>ENTIRELY DIFFERENT TEXT {i}</p>" for i in range(200)]
+        + ["</html>"]
+    )
+
+    def _other(nonce: int, render: str):
+        return rewritten[:1] + [NONCE.format(nonce), SLOW.format(render)] + rewritten[1:]
+
+    result = _run(db, _volatile_hasher([_other(3, "b"), _other(4, "b")]))
+
+    row = row_for_url(db, "https://example.org/p")
+    assert row["verify_outcome"] == STABLE_CHANGED
+    assert result.stable_changed == 1
+
+
+def test_an_edit_smaller_than_the_pair_noise_is_not_reported(tmp_path) -> None:
+    """The measured cost of the method, asserted so it cannot be forgotten.
+
+    One paragraph of 22 is rewritten -- a REAL change -- and this reports
+    `stable_unchanged`. That is not a threshold that wants tuning: unchanged
+    pages measured 0.958 to 1.000 across 120 seconds, while rewriting 1,000
+    bytes of a 271 KB article measured 0.990. The small edit sits INSIDE the
+    band that unchanged pages occupy, so no threshold separates them and
+    raising this one only converts the miss into false reports of drift.
+
+    What was lost is smaller than it looks: the equality test this replaced
+    reported `changed` for unchanged pages too, so it never distinguished this
+    edit from noise either -- it just always said "changed" and was right by
+    accident here.
+
+    Detecting an edit this small needs a different measurement (more reads, over
+    a longer span, to identify the volatile chunks properly), not a different
+    number.
+    """
+    db = _seed(tmp_path / "i.db", "https://example.org/p")
+    _run(db, _volatile_hasher([_page(1), _page(2)]))
+
+    result = _run(db, _volatile_hasher([_edited(5), _edited(6)]))
+
+    assert result.stable_changed == 0
+    assert result.stable_unchanged == 1
