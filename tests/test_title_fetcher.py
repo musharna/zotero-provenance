@@ -8,12 +8,24 @@ import pytest
 from zotero_capture.title_fetcher import MAX_BYTES, build_fetch_client, fetch_title
 
 
+
+# A document with a <title> and no body at all is not a page any host serves;
+# it is a convenience of these fixtures, which exist to exercise TITLE PARSING
+# (chunk splits, case, a closing tag inside a script) and never cared what came
+# after the head. Since 0.54.0 a COMPLETE document carrying almost no prose is
+# refused as an access gate, so a bare fixture now asserts, accidentally, that a
+# content-free document yields a title -- the exact behaviour that release
+# removes. The prose below makes each fixture a plausible page again; every
+# assertion about the extracted title is unchanged.
+_PROSE = b"<body><p>" + b"A sentence of ordinary page content. " * 30 + b"</p></body>"
+
+
 def test_fetch_title_extracts_title_tag():
     transport = httpx.MockTransport(
         lambda req: httpx.Response(
             200,
             headers={"content-type": "text/html"},
-            content=b"<html><head><title>Hello World</title></head></html>",
+            content=b"<html><head><title>Hello World</title></head>" + _PROSE + b"</html>",
         )
     )
     with httpx.Client(transport=transport) as client:
@@ -84,7 +96,7 @@ def test_fetch_title_handles_nested_tags_in_title():
         lambda req: httpx.Response(
             200,
             headers={"content-type": "text/html"},
-            content=b"<html><head><title>foo <span>bar</span></title></head></html>",
+            content=b"<html><head><title>foo <span>bar</span></title></head>" + _PROSE + b"</html>",
         )
     )
     with httpx.Client(transport=transport) as client:
@@ -140,7 +152,8 @@ def test_doi_is_resolved_by_content_negotiation_not_by_scraping():
             return httpx.Response(200, json={"title": "Consistent standards"})
         return httpx.Response(
             200,
-            html="<html><title>Publisher Landing Page</title></html>",
+            content=b"<html><title>Publisher Landing Page</title>" + _PROSE + b"</html>",
+            headers={"content-type": "text/html"},
         )
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
@@ -164,7 +177,8 @@ def test_doi_falls_back_to_html_when_negotiation_fails():
             return httpx.Response(503)
         return httpx.Response(
             200,
-            html="<html><title>Publisher Landing Page</title></html>",
+            content=b"<html><title>Publisher Landing Page</title>" + _PROSE + b"</html>",
+            headers={"content-type": "text/html"},
         )
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
@@ -176,7 +190,11 @@ def test_non_doi_url_is_not_content_negotiated():
 
     def handler(req: httpx.Request) -> httpx.Response:
         seen.append(req.headers.get("accept", ""))
-        return httpx.Response(200, html="<html><title>Ordinary Page</title></html>")
+        return httpx.Response(
+            200,
+            content=b"<html><title>Ordinary Page</title>" + _PROSE + b"</html>",
+            headers={"content-type": "text/html"},
+        )
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         assert fetch_title("https://fixturehost.org/page", client=client) == "Ordinary Page"
@@ -605,7 +623,7 @@ def test_a_deadline_inside_the_title_returns_the_url_not_half_a_title(monkeypatc
 def test_an_uppercase_closing_tag_still_stops_the_read():
     """The byte stop was case-sensitive, so </TITLE> read the whole page."""
     with httpx.Client(
-        transport=_serve(b"<html><head><TITLE>Shouty</TITLE></head></html>")
+        transport=_serve(b"<html><head><TITLE>Shouty</TITLE></head>" + _PROSE + b"</html>")
     ) as client:
         assert fetch_title("https://fixturehost.org/x", client=client) == "Shouty"
 
@@ -613,7 +631,7 @@ def test_an_uppercase_closing_tag_still_stops_the_read():
 def test_a_tag_split_across_many_tiny_chunks_is_still_found():
     """A two-chunk lookback missed a tag dribbled across three or more."""
     parts = tuple(
-        bytes([b]) for b in b"<html><head><title>Dribbled</title></head></html>"
+        bytes([b]) for b in b"<html><head><title>Dribbled</title></head>" + _PROSE + b"</html>"
     )
     with httpx.Client(transport=_serve(*parts)) as client:
         assert fetch_title("https://fixturehost.org/x", client=client) == "Dribbled"
@@ -623,7 +641,7 @@ def test_a_closing_tag_inside_a_script_does_not_win():
     """Stopping on the first </title> byte-match can stop before the real one."""
     body = (
         b"<html><head><script>var s = '</title>';</script>"
-        b"<title>The Real One</title></head></html>"
+        b"<title>The Real One</title></head>" + _PROSE + b"</html>"
     )
     with httpx.Client(transport=_serve(body)) as client:
         assert fetch_title("https://fixturehost.org/x", client=client) == "The Real One"

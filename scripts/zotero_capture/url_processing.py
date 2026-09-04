@@ -7,6 +7,7 @@ import re
 import socket
 
 import idna
+from bs4 import BeautifulSoup
 from linkify_it import LinkifyIt
 from markdown_it import MarkdownIt
 from urllib.parse import unquote, unquote_plus, urlsplit, urlunsplit
@@ -770,3 +771,64 @@ def document_disowns(head: bytes, answered_by: str) -> str:
     if not theirs or theirs == mine:
         return ""
     return declared
+
+
+# The largest access gate measured is 614 visible characters, over 51 live
+# re-fetches on 2026-09-03. 800 sits above it with room to spare.
+#
+# This threshold does NOT separate gates from resources on its own, and the
+# first version of this comment wrongly said it did. A 45-URL control sample of
+# rows that had hashed successfully found 19 REAL pages under 800 characters --
+# GitHub issues and pull requests run 351-689 because GitHub renders through
+# JavaScript, and a Nature article measured 274. What keeps those safe is that
+# they are hundreds of kilobytes and are never read whole, so no verdict is
+# ever formed about them (see `document_is_a_gate`).
+#
+# Nor does size separate them on its own: bioconductor serves a real package
+# page in 29 KB, SMALLER than the 51 KB Hugging Face login wall, and it carries
+# 4,832 characters. Only the two conditions together do the work.
+MIN_RESOURCE_TEXT_CHARS = 800
+
+_NON_PROSE = ("script", "style", "noscript", "template")
+
+
+def visible_text_chars(body: bytes) -> int:
+    """Characters of rendered prose in a document, ignoring code and markup.
+
+    Byte length cannot stand in for this and the difference is not marginal: a
+    Hugging Face login wall is 51 KB against a 42 KB arXiv abstract, so the
+    GATE is the larger document. What separates them is that 51 KB is almost
+    entirely JavaScript wrapping 557 characters of prose.
+    """
+    soup = BeautifulSoup(body, "html.parser")
+    for tag in soup(list(_NON_PROSE)):
+        tag.decompose()
+    return len(soup.get_text(" ", strip=True))
+
+
+def document_is_a_gate(body: bytes) -> bool:
+    """Whether a COMPLETE document carries too little prose to be a resource.
+
+    ONE function, beside `document_disowns`, because that is where a reader
+    looks for "are these bytes the thing we asked for" -- and a rule kept in
+    two places is the defect class that has shipped five times here against
+    zero caused by a missing check.
+
+    THE CALLER MUST HAVE READ THE WHOLE DOCUMENT, and that is not merely a
+    correctness detail -- it is half the discriminator. A response cut off at a
+    byte budget has only the prose that arrived, so judging it would make the
+    verdict a function of network speed. It is also what protects the 19 real
+    low-prose pages in the control sample: they are large, so they are never
+    read whole and never judged. `_fetch_title_raw` tracks this and declines to
+    ask.
+
+    Measured false positives among pages this rule would actually JUDGE: 0 of
+    2 real pages in a 45-URL control sample (the third judged page was a Reddit
+    shell, correctly refused). n=2 is a weak bound and is stated as one.
+
+    Used by the TITLE path only. The hasher is deliberately unchanged: for an
+    anonymous requester the login page genuinely is what the address serves,
+    and recording its bytes is a true statement about our view, whereas
+    storing its <title> as a citation's name is a false one about the source.
+    """
+    return visible_text_chars(body) < MIN_RESOURCE_TEXT_CHARS
