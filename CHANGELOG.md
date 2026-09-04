@@ -1,5 +1,77 @@
 # Changelog
 
+## 0.54.0 — 2026-09-03
+
+- **A login page was becoming the name of a cited work.** 0.51.0 refuses a
+  document that *declares* it is not the resource — a reCAPTCHA interstitial
+  sets a cross-site `<base>` — and that rule is untouched. It is also narrow:
+  measured against the live collection, 100 items carry a title naming an
+  access barrier rather than the source, and the `<base>` rule catches 10 of
+  them. The other 90 declare nothing. They are Imperva's "Client Challenge" on
+  46 pypi package pages, "Sign in to GitHub", "Tailscale", "Log in · PyPI" —
+  ordinary walls served with HTTP 200.
+
+  `fetch_title` now also refuses a document that carries too little prose to be
+  a resource. A gate is short because it has nothing to say.
+
+- **The rule that was tried first is recorded because it was REFUTED**, so it
+  is not proposed again. A corpus rule — one title shared by URLs with no
+  common path ancestor — scored **precision 0.12** over all 144 duplicate-title
+  groups (TP=7, FP=52, FN=2). Its false positives are *one paper cited at
+  several addresses*: doi.org and the publisher, arXiv `/html` and `/pdf`. That
+  is the case a citation index exists to serve. No tuning helps: "many
+  addresses, one title" is produced identically by a legitimate multi-address
+  work and by a gate, so the corpus statistics are the same object. The
+  separating information is in the response, which the title path was throwing
+  away.
+
+- **Two conditions, both load-bearing: a COMPLETE document, under 64 KB,
+  carrying under 800 characters of prose.** The first draft claimed prose alone
+  separated the populations, and a control sample refuted it — 19 of 33 real
+  pages sampled from successfully-hashed rows carry under 800 characters,
+  because GitHub issues and pull requests (351–689) and a Nature article (274)
+  render their content in JavaScript. They are safe because they are 236 KB to
+  5.5 MB and are never read whole, so no verdict is formed. Size alone does not
+  separate them either: bioconductor serves a real package page in 29 KB —
+  smaller than the 51 KB Hugging Face wall — carrying 4,832 characters.
+
+- **A verdict is pronounced only on a document read whole**, which is the guard
+  rail rather than a detail. A slow article cut off at the byte budget has
+  little prose *so far* and would be condemned for being slow; the error would
+  be a function of network speed. Truncated means no opinion, so the title
+  survives. The read no longer stops at `</title>`, but it stops at 64 KB once
+  the title is in hand — past the largest gate measured, so the extra bytes
+  cannot change the answer.
+
+- **False positives measured before the rule was written, not assumed**: 0 of
+  the 2 real pages a 45-URL control sample would actually judge (the third
+  judged page was a Reddit shell, correctly refused). n=2 is a weak bound and
+  is stated as one, in the manner of the 0/40 bound the `<base>` rule carries.
+
+- **Scope is deliberately narrow: the title path only.** `hash_page` is
+  unchanged, so 0.51.0's stated limit — a same-origin login wall stays
+  invisible to the *hasher* — still holds. Overturning it for titles is a
+  judgement and the argument is recorded: for the hasher, the login page
+  genuinely is what that address serves an anonymous requester, and recording
+  its bytes is a true statement about our view. Storing "Tailscale" as a
+  citation's *name* is a false one about the source, and it is worse than
+  storing nothing, because a confident title clears `title:unresolved` and
+  nothing revisits the item again.
+
+- **Two of my own errors, both caught by mutation testing and both recorded.**
+  The first version of the strip list was vacuous — BeautifulSoup already omits
+  `<script>`, `<style>` and `<template>` from `get_text`, so emptying the list
+  changed nothing and the mutation survived. `<noscript>` is the one it counts,
+  and it is the one that matters: a shell's "You need to enable JavaScript"
+  block is prose no reader ever sees, and counting it would lift a shell over
+  the threshold. The second was the calibration bound, drawn from four control
+  pages and wrong; it is corrected above from a 45-URL sample.
+
+- Seven existing title-fetcher fixtures were bare documents — a `<title>` and
+  no body — which under this release assert, accidentally, that a content-free
+  document yields a title. They now carry ordinary page prose. Every assertion
+  about the extracted title is unchanged.
+
 ## 0.53.1 — 2026-09-03
 
 - **The guard added in 0.53.0 could not see a single one of the 1,217 rows it

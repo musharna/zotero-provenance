@@ -20,8 +20,10 @@ from . import USER_AGENT
 from .url_processing import (
     IPAddress,
     document_disowns,
+    document_is_a_gate,
     is_unsafe_address,
     parse_ip_literal,
+    visible_text_chars,
 )
 
 logger = logging.getLogger(__name__)
@@ -32,6 +34,12 @@ DEFAULT_TIMEOUT_S = 1.0
 # arrives, so an ordinary page still reads about a kilobyte; only a page that
 # buries its head pays for the larger ceiling.
 MAX_BYTES = 256 * 1024
+
+# The largest access gate measured is 51 KB (a Hugging Face login wall). Past
+# this point a document cannot be one of them, so the read stops: the extra
+# bytes cannot change the verdict, and before this the loop stopped at the
+# closing </title> and never paid for them at all.
+GATE_SCAN_BYTES = 64 * 1024
 
 
 class UnsafeHostError(Exception):
@@ -370,6 +378,7 @@ def _fetch_title_raw(url: str, *, client: httpx.Client | None = None) -> str:
                 return url
             buffer = bytearray()
             complete = False
+            whole_document = False
             for chunk in resp.iter_bytes():
                 buffer += chunk
                 # A title counts only once its CLOSING tag has arrived. Anything
@@ -384,8 +393,14 @@ def _fetch_title_raw(url: str, *, client: httpx.Client | None = None) -> str:
                 # </TITLE> stops the read, and a stray "</title>" inside a script
                 # cannot stop it early, because there is no opening tag in front
                 # of it to complete the pattern.
-                if _TITLE_BYTES_RE.search(buffer):
+                if not complete and _TITLE_BYTES_RE.search(buffer):
                     complete = True
+                # Reading does not stop at the title any more. Whether these
+                # bytes are the resource at all is decided from how much prose
+                # the document carries, and that is in the body -- but only a
+                # document read WHOLE may be judged, so the loop must be able
+                # to tell "the stream ended" from "we stopped".
+                if complete and len(buffer) >= GATE_SCAN_BYTES:
                     break
                 if len(buffer) >= MAX_BYTES:
                     break
@@ -394,6 +409,10 @@ def _fetch_title_raw(url: str, *, client: httpx.Client | None = None) -> str:
                 # whole, which the flag above decides.
                 if time.monotonic() > deadline:
                     break
+            else:
+                # for/else: no `break` fired, so the response ended on its own
+                # and what is in the buffer is the entire document.
+                whole_document = True
             if not complete:
                 return url
             body = bytes(buffer[:MAX_BYTES])
@@ -413,6 +432,18 @@ def _fetch_title_raw(url: str, *, client: httpx.Client | None = None) -> str:
                     "%s answered with a document declaring %s; no title taken",
                     url,
                     disowned,
+                )
+                return url
+            # The same question one step further: a wall that declares nothing
+            # is still not the resource. Only a document read WHOLE may be
+            # judged -- a slow article cut off at the budget has little prose
+            # SO FAR and would be condemned for being slow.
+            if whole_document and document_is_a_gate(body):
+                logger.info(
+                    "%s answered with %d characters of prose; too little to be the "
+                    "resource, so no title taken",
+                    url,
+                    visible_text_chars(body),
                 )
                 return url
         try:
