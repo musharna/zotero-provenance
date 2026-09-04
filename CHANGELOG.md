@@ -1,5 +1,84 @@
 # Changelog
 
+## 0.55.0 — 2026-09-04
+
+- **The stable digest was reporting our own sampling as drift.** Measured
+  against the live index, `stable_changed` stood at **175 against
+  `stable_unchanged` 2** — a corpus of published papers cannot be 99% drifted,
+  and 41 of the 175 were nature.com ARTICLES. The shape was the finding before
+  any probe ran.
+
+  The proof it was ours: a nature.com article read twice, 120 seconds apart.
+  The two bodies differed in **32 byte positions** and they were one CSRF
+  token; the article was byte-identical. Yet the agreed list held 3,475 chunks
+  in one round and 3,429 in the next, so the two hashes covered **different
+  regions of the page**.
+
+  > A stable digest's domain is chosen by the pair of reads that produced it,
+  > but the comparison treated that domain as fixed. Two hashes over different
+  > byte sets are not comparable, so `stable_changed` was not a claim about the
+  > source.
+
+  This is the same shape as two defects already fixed here — comparing a 5 MiB
+  prefix against a 32 MiB one, and re-reading a truncated row over the wrong
+  span. Both were caught by insisting a comparison cover the same thing. This
+  one survived because the span is **derived rather than configured**, so no
+  parameter looked wrong.
+
+- **The comparison is now overlap, not equality.** `sketch_of` builds a
+  bottom-k (KMV) sketch of the agreed chunk SET — order-free, repeat-free, and
+  bounded at ~2 KB however large the document — and `stable_similarity`
+  estimates Jaccard between two of them. A page that gained 46 volatile chunks
+  reads 98.7% similar instead of "CHANGED". The domain is allowed to move,
+  because it always did.
+
+- **The threshold is measured, not chosen.** Over 12 live pages:
+
+  | population | range |
+  |---|---|
+  | same document, two pairs 120s apart | 0.958 – 1.000 |
+  | two different articles, same host | 0.239 – 0.595 |
+
+  Nothing lies between 0.595 and 0.958. `MIN_STABLE_SIMILARITY = 0.80` sits
+  near the middle of that gap rather than against either edge, and a test
+  asserts `0.59479 < MIN < 0.95824` so a value outside the measured range fails.
+
+- **The cost is stated rather than tuned away.** From the same run: rewriting
+  100 bytes of a 271 KB article moves similarity to 0.998, and 1,000 bytes to
+  0.990 — both ABOVE the 0.958 floor that unchanged pages occupy. **A small
+  edit is invisible and no threshold recovers it**, because the noise from
+  moving domains is larger than the edit. 10,000 bytes reads 0.90 and 50,000
+  reads 0.68. What this detects is a page becoming substantially different.
+  Less was lost than it appears: the equality test reported `changed` for
+  unchanged pages too, so it never distinguished a small edit from noise
+  either — it said "changed" always and was right by accident.
+
+- **Two of the suite's own tests were passing for the wrong reason.** They
+  asserted that a one-paragraph edit reports `stable_changed`, under a
+  comparison that answered "different" for every pair of reads. A test asserting
+  "changed" against a method that says changed for everything cannot fail. Their
+  fixture now makes a change the method actually claims to detect, and the edit
+  it can no longer see has its own test recording the limit.
+
+- **A surviving mutation found a guard nothing could feed.** Making an empty
+  sketch return an empty set instead of `None` broke no test — `verify` cannot
+  reach that branch, because a row holding no sketch takes the baseline path.
+  The 0.22.0 audit named this class twice. Now driven directly, because an
+  empty set would compare as total agreement with another empty one.
+
+- **Existing rows re-baseline themselves.** The format changed, so the tag did:
+  `cdc64/1` → `cdc64+kmv128/1`. Every stored value is now incomparable by
+  declaration and re-baselines through the path that already exists, which is
+  the mechanism `stable_algo` was added for. No migration, no schema change —
+  the sketch lives in the `stable_digest` column, whose format that tag
+  declares. The 879 rows re-baselined earlier today onto `cdc64/1` are re-cut
+  again; that cost is real and is the price of the tag doing its job.
+
+- Verified by real execution, not fixtures: nature, springer and github — three
+  pages among the 175 — driven through the shipped `verify` twice on a temp
+  index, over the live network. Pass 1 recorded baselines, pass 2 returned
+  `stable_unchanged` for all three.
+
 ## 0.54.0 — 2026-09-03
 
 - **A login page was becoming the name of a cited work.** 0.51.0 refuses a

@@ -43,7 +43,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Callable, NamedTuple
+from typing import Callable, Iterable, NamedTuple
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -93,11 +93,19 @@ class UnitRead(NamedTuple):
 
 
 class StableRead(NamedTuple):
-    """A digest over the units two reads agreed on, and the bytes it covers.
+    """A SKETCH of the units two reads agreed on, and the bytes it covers.
 
-    The scope travels with the digest for the same reason `PageRead` carries
-    `covers_bytes`: a digest that cannot say what it covers can only be
+    The scope travels with it for the same reason `PageRead` carries
+    `covers_bytes`: a value that cannot say what it covers can only be
     all-or-nothing, and this one covers a subset by construction.
+
+    `digest` keeps its name because it is what the `stable_digest` COLUMN
+    holds, and renaming a field is not worth a migration -- but it is no longer
+    a digest, and nothing may compare two of these with `==`. That is precisely
+    what `verify` used to do, and because the set being fingerprinted is chosen
+    by whichever two reads produced it, equality asked whether we had sampled
+    the page the same way twice. 175 rows answered no and were recorded as
+    changed SOURCES. Compare with `stable_similarity`.
     """
 
     digest: str
@@ -148,7 +156,7 @@ MAX_UNIT_DIGESTS = 200_000
 # content-defined chunk -- would have made every stored digest mismatch at
 # once, and the tool would have announced that 1,217 sources had drifted when
 # the only thing that moved was us.
-STABLE_ALGO = "cdc64/1"
+STABLE_ALGO = "cdc64+kmv128/1"
 
 # How much of the document the agreed units must cover before the digest is
 # worth anything. Not a hedge, and NOT the knob that fixes coverage: measured
@@ -258,7 +266,14 @@ class _ChunkDigester:
 
 
 def stable_digest(first: PageRead, second: PageRead) -> StableRead | None:
-    """A digest over what two reads of the same page agreed on, or None.
+    """A bounded sketch of what two reads of the same page agreed on, or None.
+
+    What this returns is a fingerprint of a SET, to be compared by overlap and
+    never by equality -- see `sketch_of` and `stable_similarity`. The agreed set
+    is derived from the pair of reads in hand, so it MOVES between passes even
+    when the document does not: measured 2026-09-04, a nature.com article gave
+    3,475 agreed chunks in one pass and 3,429 in the next while its bytes
+    differed only in a CSRF token.
 
     The volatile bytes are DERIVED, never named. Whatever two reads seconds
     apart disagree on is per-request by definition -- a nonce, a CSRF field, a
@@ -286,10 +301,104 @@ def stable_digest(first: PageRead, second: PageRead) -> StableRead | None:
     kept = sum(x.nbytes for x in agreed)
     if total <= 0 or kept / total < MIN_STABLE_COVERAGE:
         return None
-    rolling = hashlib.sha256()
-    for line in agreed:
-        rolling.update(line.digest.encode())
-    return StableRead(digest=rolling.hexdigest(), covers_bytes=kept)
+    return StableRead(
+        digest=sketch_of(unit.digest for unit in agreed), covers_bytes=kept
+    )
+
+
+SKETCH_SIZE = 128
+
+# Measured 2026-09-04 over 12 live pages, three populations:
+#
+#   same document, two pairs 120s apart : 0.958 - 1.000   (n=12)
+#   two different articles, same host   : 0.239 - 0.595   (n=10)
+#
+# Nothing lies between 0.595 and 0.958, and this sits near the middle of that
+# gap rather than against either edge. The asymmetry that decides which way to
+# lean is the same one MIN_STABLE_COVERAGE was set by: too LOW only withholds a
+# conclusion, while too HIGH reports our own sampling as a change in the source
+# -- which is the entire defect this replaced.
+#
+# The honest limit, from the same run: rewriting 100 bytes of a 271 KB article
+# moves similarity to 0.998 and 1,000 bytes to 0.990, both far above the 0.958
+# noise floor, so a SMALL edit is invisible and no threshold can recover it.
+# 10,000 bytes reads 0.90 and 50,000 reads 0.68. What this detects is a page
+# becoming substantially different, not a sentence changing.
+MIN_STABLE_SIMILARITY = 0.80
+
+
+def sketch_of(unit_digests: Iterable[str]) -> str:
+    """A bounded, order-free fingerprint of a SET of chunk digests.
+
+    The value this replaces folded the agreed units in DOCUMENT ORDER, so the
+    same content re-cut into a different sequence -- or carrying one more copy
+    of a chunk already present -- produced a different value. Measured live on
+    2026-09-04: nature's unit count moved 3,476 to 3,478 across two bodies of
+    identical length whose only difference was a 32-character CSRF token.
+
+    A set has neither order nor multiplicity, and neither has this. Only the
+    smallest SKETCH_SIZE values survive, which bounds what a row stores at
+    about 2 KB however large the document, and -- because "smallest" is a
+    property of the content and not of how much content there was -- makes the
+    retained sample land on the same chunks in both reads. That is what the
+    similarity estimate rests on; keeping the FIRST k, or a random k, would
+    sample the two sets at different points and estimate nothing.
+
+    The leading 64 bits are taken because sha256 hex is uniform there.
+    """
+    values = sorted({int(d[:16], 16) for d in unit_digests})
+    return ",".join(f"{v:016x}" for v in values[:SKETCH_SIZE])
+
+
+def _sketch_values(sketch: str) -> set[int] | None:
+    """The values in a stored sketch, or None for "this cannot be read".
+
+    None is not an empty set. An empty set would compare as total agreement
+    with another empty one, so a row written by a method this code does not
+    understand would report `stable_unchanged` -- a verdict manufactured out of
+    our own inability to read it, which is the class of defect this whole file
+    exists to remove.
+    """
+    if not sketch:
+        return None
+    parts = sketch.split(",")
+    if any(len(part) != 16 for part in parts):
+        return None
+    try:
+        return {int(part, 16) for part in parts}
+    except ValueError:
+        return None
+
+
+def stable_similarity(stored: str, fresh: str) -> float | None:
+    """How much two sketched sets overlap, or None if either cannot be read.
+
+    Equality was the wrong question to ask of these. The set being fingerprinted
+    is whatever two reads of the moment agreed on, so it moves between passes
+    even when the document does not: measured live, a nature.com article gave
+    3,475 agreed chunks in one pass and 3,429 in the next while its bytes
+    differed only in a CSRF token. Two hashes over different regions of a page
+    can only produce a verdict about US.
+
+    Similarity does not need the two domains to be identical, which is the point
+    -- it needs them to OVERLAP, and reports how much.
+    """
+    a = _sketch_values(stored)
+    b = _sketch_values(fresh)
+    if a is None or b is None:
+        return None
+    if not a or not b:
+        return 1.0 if not a and not b else 0.0
+    if len(a) < SKETCH_SIZE and len(b) < SKETCH_SIZE:
+        # Neither sketch was truncated, so these ARE the sets and the answer is
+        # the real Jaccard rather than an estimate of it.
+        return len(a & b) / len(a | b)
+    # Bottom-k. Over the k smallest values of the union, the fraction present in
+    # both -- sampling both sets at the same points, which is what makes this an
+    # estimate of overlap rather than of size.
+    k = min(SKETCH_SIZE, len(a), len(b))
+    window = sorted(a | b)[:k]
+    return sum(1 for value in window if value in a and value in b) / k
 
 
 @dataclass(frozen=True)
@@ -1164,13 +1273,31 @@ def verify(
                 )
                 result.stable_rebaselined += 1
                 conclude(url, STABLE_REBASELINED)
-            elif row["stable_digest"] == stable.digest:
-                result.stable_unchanged += 1
-                conclude(url, STABLE_UNCHANGED)
             else:
-                result.stable_changed += 1
-                result.stable_changed_urls.append(url)
-                conclude(url, STABLE_CHANGED)
+                # Similarity, not equality. The set being fingerprinted is
+                # whatever THESE two reads agreed on, so it moves between passes
+                # even when the document does not -- measured live, a nature.com
+                # article gave 3,475 agreed chunks in one pass and 3,429 in the
+                # next while its bytes differed only in a CSRF token. Asking
+                # whether two such fingerprints are EQUAL asks whether we
+                # sampled the page the same way twice, and 175 rows answered no
+                # and were recorded as changed sources.
+                similarity = stable_similarity(row["stable_digest"], stable.digest)
+                if similarity is None:
+                    # The stored value carries this tag and still cannot be
+                    # read. Nothing is concluded, exactly as for a page that
+                    # would not align: a verdict drawn from our own confusion is
+                    # the thing being removed here.
+                    result.unstable += 1
+                    result.unstable_urls.append(url)
+                    conclude(url, UNSTABLE)
+                elif similarity >= MIN_STABLE_SIMILARITY:
+                    result.stable_unchanged += 1
+                    conclude(url, STABLE_UNCHANGED)
+                else:
+                    result.stable_changed += 1
+                    result.stable_changed_urls.append(url)
+                    conclude(url, STABLE_CHANGED)
             continue
         if not was_truncated and not read.complete:
             # Stored whole, read short. The digests differ, but they cover
