@@ -307,6 +307,7 @@ def _seed(db, url, *, stored_hash="OLD"):
         hashed_at="T1",
         covers_bytes=64,
         complete=True,
+        sketch="", sketch_algo="",
     )
     return db
 

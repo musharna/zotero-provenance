@@ -1,5 +1,93 @@
 # Changelog
 
+## 0.56.0 — 2026-09-05
+
+- **A `changed` verdict could not tell a view counter from a rewrite.** 714
+  rows carry `changed`, and **710 of them have no stable digest at all**: they
+  read identically twice 2s apart, so `verify` never enters the stable path and
+  the verdict rests entirely on a whole-document hash taken weeks earlier.
+
+  Probed by reading 14 of them as two pairs ~20 minutes apart, driving the
+  production chunker and `stable_digest` rather than a replica, with a pinned
+  immutable blob as positive control (byte-identical throughout).
+
+  | bucket | n |
+  |---|---|
+  | agrees within its 2s pair, DIFFERS over 20 min | 4 |
+  | steady over 20 min | 9 |
+  | volatile within 2s today | 2 |
+
+  What moved, from diffing the bodies rather than trusting the digests: a CSRF
+  token whose TTL sits between 2s and 20 min (4help.vt.edu), ad cache-busters
+  `c=-303483026` -> `c=1158063100` (nature.com), a redeploy id
+  (code.claude.com), and `Views: 308` -> `Views: 310` (doi.org).
+
+  > Agreement inside a 2-second pair rules out fast volatility and nothing
+  > slower. A view counter is enough to manufacture "this citation changed".
+
+- **The prediction was written down first and was WRONG.** Predicted >=8 of 14
+  manufactured; measured **4** (Wilson 95% CI 6–49%). The majority held steady,
+  so unlike `unstable` (47% = our method) and `stable_changed` (175 vs 2), this
+  bucket largely SURVIVED the probe built to break it. Three prior findings of
+  one shape do not make a fourth. **"Steady over 20 minutes" is not "the
+  difference was real"** — it bounds the claim by the interval and nothing more.
+
+- **A sketch is now stored BESIDE `content_hash`, and the hash keeps its exact
+  sensitivity.** New columns `content_sketch` / `content_sketch_algo` hold a
+  bottom-k sketch of every chunk of the SAME read that produced the hash, so a
+  mismatch can be given a size. The rejected alternative was to suppress the
+  verdict when overlap is high: that trades a visible false positive for a
+  silent false negative, and for a link-rot tool the silent one is worse.
+
+- **Its own tag, `cdc64+kmv128-full/1`.** The stable sketch samples the subset
+  two reads AGREED on; this one samples every chunk of a single read. Same
+  arithmetic, different populations — which is exactly what makes mixing them
+  plausible and wrong, since comparing them answers a question about how we
+  sampled. That is the defect 0.55.0 spent a release removing, so the two are
+  made incomparable by declaration rather than by anyone remembering.
+
+- **Backfill is legitimate in exactly one situation, and only there.** A sketch
+  cannot be invented for the 3,813 existing rows from a later read: it would
+  describe different bytes than the hash beside it. But when a fresh read still
+  EQUALS `content_hash`, the bytes are proven identical, so a sketch cut now is
+  a truthful sketch of what was hashed then. That equality is the whole licence.
+  Rows that already differ can **never** acquire one — only a digest of those
+  bytes was ever kept. Storing only a hash means you can never afterwards ask
+  what changed.
+
+- **`None` is a real answer and stays distinguishable from 0.0.** No sketch, a
+  sketch cut by another method, or a read that recorded no units all yield "we
+  cannot say", and the report prints that sentence instead of a number. Rendering
+  an absent value as 0.0 would announce a total rewrite on the strength of our
+  own gap — the shape of every finding this project has had to withdraw.
+
+- **The report no longer says "of the document".** A sketch is 128 chunk
+  digests, not the document. Live on 4help.vt.edu, 11 chunks differed and the
+  sketch saw none of them, printing `1.000` beside `CHANGED` — two halves that
+  contradict each other, inviting the reader to believe the friendlier one. It
+  now names its resolution: `(no difference the sketch can resolve; a small edit
+  hides here)`, or `(0.992 of the sampled chunks shared)`. The same run scored
+  1.000 and then 0.992 on consecutive passes, which is the sampling variance
+  made visible rather than hidden behind a confident number.
+
+- **`set_content_hash` requires the sketch rather than defaulting it.** Its
+  only sensible default is "none", so a caller that forgot would silently store
+  an uncharacterisable hash, invisibly from both ends. This project shipped
+  `--sleep` parsed and never passed for an entire release.
+
+- **Mutation testing removed a second copy of one rule.** Six mutations, all
+  caught — but the first run had two survivors, and both were informative. One
+  was a badly built mutation that did not test what it was labelled. The other
+  showed that the Python guard `not row["content_sketch"]` was **redundant with
+  the SQL write-once WHERE clause**: deleting it changed no behaviour, which is
+  what proved it was never the guard. Removed, so write-once lives in one place.
+  A test seeding `algo=""` was also found to return at the tag check and never
+  reach the empty-sketch branch — two tests exercising one path.
+
+- Verified by real execution on a scratch index over the live network, seeded
+  from bodies fetched 40 minutes earlier: a real change characterised, a
+  backfill where bytes matched, and no backfill where they differed.
+
 ## 0.55.0 — 2026-09-04
 
 - **The stable digest was reporting our own sampling as drift.** Measured

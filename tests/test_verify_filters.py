@@ -47,6 +47,7 @@ def _seed(db, urls, outcome=""):
             hashed_at=f"T{i}",
             covers_bytes=64,
             complete=True,
+            sketch="", sketch_algo="",
         )
         if outcome:
             set_verify_outcome(db, url, outcome=outcome, at="EARLIER")

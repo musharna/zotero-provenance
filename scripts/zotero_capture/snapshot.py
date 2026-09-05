@@ -58,6 +58,7 @@ from .sqlite_cache import (
     rows_needing_hash,
     rows_with_hash,
     set_content_hash,
+    set_content_sketch,
     set_fetch_outcome,
     set_stable_digest,
     set_verify_outcome,
@@ -157,6 +158,16 @@ MAX_UNIT_DIGESTS = 200_000
 # once, and the tool would have announced that 1,217 sources had drifted when
 # the only thing that moved was us.
 STABLE_ALGO = "cdc64+kmv128/1"
+
+# The tag for the sketch stored BESIDE `content_hash`. Deliberately not
+# `STABLE_ALGO`, and the difference is the POPULATION, not the arithmetic: this
+# one samples every chunk of a single read, while a stable sketch samples the
+# subset two reads agreed on. Both are bottom-k over chunk digests, which is
+# exactly what makes mixing them plausible and wrong -- comparing a whole-
+# document sample against an agreed-subset sample answers a question about how
+# we sampled, which is the defect 0.55.0 removed. Separate tags make the two
+# incomparable by declaration rather than by anyone remembering.
+CONTENT_SKETCH_ALGO = "cdc64+kmv128-full/1"
 
 # How much of the document the agreed units must cover before the digest is
 # worth anything. Not a hedge, and NOT the knob that fixes coverage: measured
@@ -762,6 +773,17 @@ class VerifyResult:
     partial_match_urls: list[str] = field(default_factory=list)
     internal_errors: int = 0
     changed_urls: list[str] = field(default_factory=list)
+    # url -> how much of the document a change left in place, or None when the
+    # row carries no comparable sketch. A bare `changed` count cannot separate
+    # "Views: 308 -> 310" from a rewritten source, and measured 2026-09-05 that
+    # is not a hypothetical: 4 of 14 sampled `changed` rows differed over 20
+    # minutes with no content change available to them.
+    #
+    # None is a real answer and must stay distinguishable from a low score. It
+    # means the question could not be asked -- no sketch was stored, or it was
+    # cut by another method -- and reporting that as 0.0 would invent a total
+    # rewrite out of our own missing data.
+    changed_similarity: dict[str, float | None] = field(default_factory=dict)
     unreachable_urls: list[str] = field(default_factory=list)
     # "unreachable" alone re-creates exactly the conflation 0.36.0 removed from
     # snapshot: a 403 from a paywall and a 404 on a dead citation are not the
@@ -1065,6 +1087,11 @@ def snapshot(
             result.stamp_refused += 1
             result.stamp_refused_urls.append(url)
             continue
+        # The sketch is cut from THIS read, the one that produced `digest`.
+        # That is the whole basis on which they can later be used together: a
+        # sketch taken at any other moment describes different bytes than the
+        # hash beside it. A read that recorded no units stores '' -- the honest
+        # "no sketch", never a partial one.
         set_content_hash(
             db_path,
             url,
@@ -1072,6 +1099,11 @@ def snapshot(
             hashed_at=read_at,
             covers_bytes=read.covers_bytes,
             complete=read.complete,
+            sketch=(
+                "" if read.units is None
+                else sketch_of(unit.digest for unit in read.units)
+            ),
+            sketch_algo="" if read.units is None else CONTENT_SKETCH_ALGO,
         )
         result.hashed += 1
         result.hashed_urls.append(url)
@@ -1084,6 +1116,25 @@ def snapshot(
                 read.covers_bytes,
             )
     return result
+
+
+def _characterise(row: dict, read: PageRead) -> float | None:
+    """How much of the stored document this read still shares, or None.
+
+    None whenever the question cannot be asked -- no sketch stored, a sketch cut
+    by a different method, or a read that recorded no units. Every one of those
+    is "we do not know", and the caller must not render it as a number: a
+    missing sketch reported as 0.0 would claim a total rewrite on the strength
+    of our own gap, which is the shape of every manufactured finding this
+    project has had to withdraw.
+    """
+    if row.get("content_sketch_algo") != CONTENT_SKETCH_ALGO:
+        return None
+    if not row.get("content_sketch") or read.units is None:
+        return None
+    return stable_similarity(
+        row["content_sketch"], sketch_of(unit.digest for unit in read.units)
+    )
 
 
 def verify(
@@ -1194,6 +1245,27 @@ def verify(
                 result.partial_match_urls.append(url)
                 conclude(url, PREFIX_AGREED)
                 continue
+            # The document is byte-identical to what we hashed, so a sketch
+            # cut from THIS read is a truthful sketch of THOSE bytes. That
+            # equality is the whole licence, which is why this sits here and
+            # not in the branch above: `prefix_agreed` compared a prefix, and
+            # a sketch of a prefix stored against a whole-document hash would
+            # be the same mismatched-domain error in miniature.
+            # No "is it empty?" test here on purpose. Write-once is ONE rule
+            # and it lives in `set_content_sketch`'s WHERE clause, where two
+            # racing passes cannot both pass it. Repeating it here would be a
+            # second copy of the truth -- the defect this project has now had
+            # four times -- and a mutation deleting this half changed no
+            # behaviour at all, which is what showed it was never the guard.
+            # `units is not None` stays: that is a precondition of cutting a
+            # sketch, not a second opinion about whether to store one.
+            if read.units is not None:
+                set_content_sketch(
+                    db_path,
+                    url,
+                    sketch=sketch_of(unit.digest for unit in read.units),
+                    algo=CONTENT_SKETCH_ALGO,
+                )
             result.unchanged += 1
             conclude(url, UNCHANGED)
             continue
@@ -1307,8 +1379,15 @@ def verify(
             result.partial_match_urls.append(url)
             conclude(url, PREFIX_AGREED)
             continue
+        # The verdict is unchanged: a whole-document hash differs, so something
+        # about the response moved and this row still says so. What is added is
+        # a SIZE. Suppressing the verdict when the overlap is high was the
+        # rejected alternative -- it trades a visible false positive for a
+        # silent false negative, and a sketch cannot see a small edit at all
+        # (measured: 10 differing chunks of 7,208, none inside the bottom-128).
         result.changed += 1
         result.changed_urls.append(url)
+        result.changed_similarity[url] = _characterise(row, read)
         conclude(url, CHANGED)
     result.unverified_remaining = unverified_count(db_path)
     return result
@@ -1359,8 +1438,39 @@ def format_snapshot_report(result: SnapshotResult, *, dry_run: bool) -> list[str
     return lines
 
 
+def _overlap_note(similarity: float | None) -> str:
+    """The size of a change, in words that do not overclaim.
+
+    `None` prints its own sentence instead of a number. Rendering "we could not
+    ask" as an overlap of 0.0 would report a total rewrite on the strength of a
+    column that did not exist when the row was hashed -- the tool manufacturing
+    the finding it exists to report truthfully, which is the error this project
+    has now withdrawn for `unreachable`, `gone`, `blocked` and `stable_changed`.
+    """
+    if similarity is None:
+        return "  (no sketch of the hashed bytes; size unknown)"
+    if similarity >= 1.0:
+        # NOT "the document is unchanged". The whole-document hash has just
+        # said otherwise, and printing 1.000 beside CHANGED reads as a
+        # contradiction that invites the reader to believe the friendlier half.
+        # A sketch is a SAMPLE: 128 chunk digests, so on a 2,011-chunk page any
+        # one differing chunk has about a 6% chance of landing inside the
+        # window. Measured live on 4help.vt.edu -- 11 chunks differed and the
+        # sketch saw none of them. The honest sentence names the resolution
+        # rather than claiming the reading.
+        return "  (no difference the sketch can resolve; a small edit hides here)"
+    return f"  ({similarity:.3f} of the sampled chunks shared)"
+
+
 def format_verify_report(result: VerifyResult) -> list[str]:
-    lines = [f"  CHANGED: {url}" for url in result.changed_urls]
+    # A bare "CHANGED" cannot separate a rewritten source from a view counter,
+    # and measured 2026-09-05 that is 4 of 14 sampled rows. Where a sketch of
+    # the hashed bytes exists, say how much of the document survived; where it
+    # does not, say THAT rather than printing a number we do not have.
+    lines = [
+        f"  CHANGED: {url}{_overlap_note(result.changed_similarity.get(url))}"
+        for url in result.changed_urls
+    ]
     lines += [
         f"  prefix agreed: {url}  (only the first bytes are covered; "
         f"this is not 'unchanged')"
