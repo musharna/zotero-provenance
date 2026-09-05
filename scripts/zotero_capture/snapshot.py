@@ -513,6 +513,38 @@ class NotTheResource(Exception):
         self.requested = requested
 
 
+# Success statuses that carry no representation of the resource (RFC 9110).
+# A frozenset and not an `in (202, 204, 205)` at the call site: the check exists
+# because a rule kept where each caller remembers it is the defect class this
+# repository has shipped five times.
+NO_REPRESENTATION_STATUSES = frozenset({202, 204, 205})
+
+
+class NoRepresentation(Exception):
+    """A success status that carries no representation of the resource.
+
+    202, 204 and 205 mean "your request was accepted / there is nothing to
+    return", not "here is the document". `raise_for_status` cannot see this at
+    all -- it asks whether the request FAILED, and these did not -- so before
+    this existed a 202 with no body was hashed as `sha256("")` and stored as the
+    provenance record for the citation.
+
+    Kept apart from `NotTheResource`, which routes to BLOCKED. A bot wall really
+    is a refusal and that word is right for it; a 204 refused nothing, and
+    calling it a refusal would assert a fact about the host that never happened.
+    One word covering both is how `unreachable` came to mean gone AND blocked.
+
+    Carries `final_url` under that exact name so `responding_url` records the
+    host that ANSWERED -- six live rows asked doi.org and were refused by
+    ieeexplore one hop later.
+    """
+
+    def __init__(self, *, status: int, final_url: str) -> None:
+        super().__init__(f"{final_url} answered {status}, which carries no document")
+        self.status = status
+        self.final_url = final_url
+
+
 def hash_page(
     url: str, *, client: httpx.Client, max_bytes: int = HASH_MAX_BYTES
 ) -> PageRead:
@@ -544,6 +576,14 @@ def hash_page(
     with client.stream("GET", url) as resp:
         final_url = str(resp.url)
         resp.raise_for_status()
+        # `raise_for_status` asked whether the request FAILED. This asks whether
+        # a DOCUMENT came back, which is a different question and the one this
+        # tool actually needs: 202/204/205 are successes that carry nothing.
+        # Before this, a 202 with no body was hashed as sha256("") and stored
+        # as the provenance record, and verify then matched one refusal against
+        # another and called it `unchanged` -- 25 live rows on 2026-09-05.
+        if resp.status_code in NO_REPRESENTATION_STATUSES:
+            raise NoRepresentation(status=resp.status_code, final_url=final_url)
         for chunk in resp.iter_bytes():
             if len(head) < HEAD_SNIFF_BYTES:
                 head.extend(chunk[: HEAD_SNIFF_BYTES - len(head)])
@@ -597,6 +637,11 @@ NOT_VISIBLE = "not_visible"      # 404/410 whose whole container is also hidden
 # A failure on an address we ourselves damaged. The 404 is a fact about the
 # string we stored, not about the source -- see tests/test_truncated_urls.py.
 MALFORMED = "malformed"          # our record is a prefix of the cited address
+# A response that carried no document at all: 202/204/205. NOT `blocked` (a 204
+# refused nothing) and NOT `unreachable` (we reached it; it answered). Nothing
+# is claimed about the source, which is the whole point -- the alternative was
+# claiming the source was UNCHANGED on the strength of two refusals matching.
+NO_CONTENT = "no_content"
 
 # What a RE-READ concluded, as opposed to how a fetch ended. Disjoint from the
 # outcomes above on purpose: both vocabularies land in `verify_outcome`, and a
@@ -677,6 +722,12 @@ def classify_failure(exc: BaseException) -> str:
     manufacture link rot -- inventing the exact finding this tool exists to
     report truthfully.
     """
+    if isinstance(exc, NoRepresentation):
+        # NOT reused as BLOCKED, unlike NotTheResource below. A bot wall is a
+        # refusal and that word fits it; a 204 refused nothing, and one word
+        # covering both is exactly how `unreachable` came to mean gone AND
+        # blocked.
+        return NO_CONTENT
     if isinstance(exc, NotTheResource):
         # Reused rather than given a fifth word. BLOCKED already reads
         # "refused; the page may be perfectly fine", which is exactly what a
@@ -711,7 +762,7 @@ def classify_failure(exc: BaseException) -> str:
 # sites and adding a fourth kind of failure to two of the three is the defect
 # class that has shipped five times in this repository. A caller cannot now
 # recognise a different set from its neighbour, because there is only one set.
-FETCH_FAULTS = (httpx.HTTPError, httpx.InvalidURL, NotTheResource)
+FETCH_FAULTS = (httpx.HTTPError, httpx.InvalidURL, NotTheResource, NoRepresentation)
 
 
 @dataclass

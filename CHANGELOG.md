@@ -1,5 +1,68 @@
 # Changelog
 
+## 0.57.0 — 2026-09-05
+
+- **A refusal was hashed as the document, and then reported as an intact
+  source.** 26 rows in the live index store `sha256("")` as their
+  `content_hash`, and 25 of them verified `unchanged` on 09-05. Probed all 26
+  read-only through the production client, with a control that returned 9,083
+  bytes:
+
+  | what answered | n |
+  |---|---|
+  | HTTP 202, `Content-Length: 0`, CloudFront | 18 |
+  | HTTP 202, `Content-Length: 0`, awselb/2.0 | 6 |
+  | HTTP 200, `Content-Length: 0` (a REAL empty response) | 1 |
+  | HTTP 200, 168,811 bytes (the page came back) | 1 |
+
+  Who actually answered: ieeexplore (7), figshare (4), sketchfab (3),
+  morningstar (3), dataverse.harvard.edu (2), semanticscholar (2),
+  degruyterbrill, cgtrader, jove. **Six of the nine `doi.org` rows resolve onto
+  ieeexplore**, which is only visible because the responding address is now
+  recorded — all 26 rows predate 0.38.0 and carry an empty `final_url`.
+
+  Root cause: `hash_page` asked `raise_for_status()` — *did the request fail?* —
+  and never asked *did we receive a document?*. 202 is a SUCCESS status, so a
+  response carrying nothing passed every gate, was hashed, and became the
+  provenance record; `verify` then re-read the same 202, found the digest
+  matched, and concluded `unchanged`. **Worse than the `unreachable` and `gone`
+  defects that preceded it: those mislabelled a failure, this reported a success
+  we never had.**
+
+- **The fix is on the STATUS, not on the emptiness.** 202/204/205 carry no
+  representation by definition (RFC 9110), whatever the body length turns out to
+  be. Refusing to hash an empty body was the rejected alternative and it points
+  the wrong way in both directions: a 202 that ships a challenge body would
+  still be hashed, and `biodiversitylibrary.org/api3` really does answer 200
+  with zero bytes — a true fact this tool exists to keep. Both directions are
+  pinned by tests, and the mutation that implements the band-aid is caught by
+  the positive control.
+
+- **`no_content`, not `blocked`.** `NotTheResource` routes a challenge page to
+  `blocked` and "refused; the page may be perfectly fine" fits a bot wall
+  exactly — but a 204 refused nothing, and calling it a refusal asserts a fact
+  about the host that never happened. One word covering both findings is how
+  `unreachable` came to mean gone AND blocked, which has cost this project a
+  release twice.
+
+- Mutation-tested 6/6 caught on the first round, including "only 202 counts",
+  "blame the address we asked rather than the one that answered", and the
+  band-aid above. Real execution against the hosts that produced the finding:
+  the `doi.org` row is refused and names **ieeexplore** as the answering host,
+  the genuinely empty 200 still hashes, and the control hashes 9,083 bytes.
+  1,169 tests.
+
+- **Blast radius is a LOWER BOUND, not a count.** Response status is not stored,
+  so a 202 that carried a challenge body is indistinguishable in the index from
+  a real document. 26 is what this signature can see, not what happened.
+
+- **KNOWN, deliberately not fixed here:** `page_is_visible` counts anything that
+  is not a clean 404/410 as visible, so a parent behind a 202 wall reads as
+  *seen* and can corroborate a `gone` on its leaf. Changing it would make `gone`
+  strictly harder to claim, which is the right direction — but the last rule
+  proposed for that function was killed by listing the rows it would touch
+  first, and that measurement has not been made.
+
 ## 0.56.0 — 2026-09-05
 
 - **A `changed` verdict could not tell a view counter from a rewrite.** 714
