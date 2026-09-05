@@ -238,6 +238,7 @@ def test_a_changed_page_is_reported(db: Path) -> None:
     set_content_hash(
         db, URL, content_hash=DIGEST, hashed_at="THEN",
         covers_bytes=len(BODY), complete=True,
+        sketch="", sketch_algo="",
     )
 
     result = verify(db, clock=lambda: "NOW", hasher=_reads("a-different-digest"))
@@ -254,6 +255,7 @@ def test_an_unchanged_page_is_not_reported(db: Path) -> None:
     set_content_hash(
         db, URL, content_hash=DIGEST, hashed_at="THEN",
         covers_bytes=len(BODY), complete=True,
+        sketch="", sketch_algo="",
     )
 
     result = verify(db, clock=lambda: "NOW", hasher=_reads())
@@ -270,6 +272,7 @@ def test_verify_does_not_overwrite_the_stored_hash(db: Path) -> None:
     set_content_hash(
         db, URL, content_hash=DIGEST, hashed_at="THEN",
         covers_bytes=len(BODY), complete=True,
+        sketch="", sketch_algo="",
     )
 
     verify(db, clock=lambda: "NOW", hasher=_reads("a-different-digest"))

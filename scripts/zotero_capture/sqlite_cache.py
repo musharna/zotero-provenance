@@ -165,6 +165,24 @@ MIGRATIONS = (
     # '' is the pre-0.53.0 value and means "cut into lines": not unknown, just
     # older, and it mismatches today's tag, which is the point.
     "ALTER TABLE url_index ADD COLUMN stable_algo TEXT NOT NULL DEFAULT ''",
+    # A bottom-k sketch of every chunk of the SAME read that produced
+    # `content_hash`, so a later mismatch can be given a size instead of only a
+    # yes. Without it a view counter and a rewritten paragraph are the same
+    # observation: measured 2026-09-05, 4 of 14 sampled `changed` rows differ
+    # over 20 minutes with no content change at all -- a CSRF token, ad
+    # cache-busters, a deploy id, and "Views: 308" -> "Views: 310".
+    #
+    # It is written by the pass that writes the hash and by nothing else. A
+    # sketch taken at a different moment would describe different bytes than
+    # the hash beside it, which is precisely the incomparability 0.55.0 spent a
+    # release removing. `verify` may fill it in only when the fresh read still
+    # EQUALS `content_hash`, because that equality is the proof the bytes match.
+    #
+    # '' means no sketch: true of every row hashed before this column existed,
+    # and permanently true of any row whose document already differs -- only a
+    # digest of those bytes was ever kept, so their sketch is unrecoverable.
+    "ALTER TABLE url_index ADD COLUMN content_sketch TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE url_index ADD COLUMN content_sketch_algo TEXT NOT NULL DEFAULT ''",
 )
 
 # The alphabet the Zotero API accepts for an object key: base32 without the
@@ -668,6 +686,8 @@ def set_content_hash(
     hashed_at: str,
     covers_bytes: int,
     complete: bool,
+    sketch: str,
+    sketch_algo: str,
 ) -> bool:
     """Record what the page said, when it was read, and HOW MUCH of it was read.
 
@@ -679,18 +699,30 @@ def set_content_hash(
     stored row that reads as authoritative. This project has already shipped one
     omittable parameter that was therefore omitted for a whole release.
 
+    `sketch` and `sketch_algo` describe the SAME read as `content_hash`, which is
+    the only thing that makes them usable together later. They are required
+    rather than defaulted for the reason `covers_bytes` and `complete` are: the
+    tempting default is '' -- "no sketch" -- so a caller that simply forgot
+    would silently store a hash that can never be characterised, and the loss
+    would be invisible from both ends until someone asked what changed. This
+    project shipped `--sleep` parsed and never passed for an entire release.
+    Pass '' deliberately when there genuinely is none.
+
     True if the row existed.
     """
     with closing(_connect(db_path)) as conn:
         cursor = conn.execute(
             "UPDATE url_index SET content_hash = ?, hashed_at = ?,"
-            " hash_bytes = ?, hash_truncated = ?"
+            " hash_bytes = ?, hash_truncated = ?,"
+            " content_sketch = ?, content_sketch_algo = ?"
             " WHERE url_canonical = ?",
             (
                 content_hash,
                 hashed_at,
                 int(covers_bytes),
                 0 if complete else 1,
+                sketch,
+                sketch_algo,
                 url_canonical,
             ),
         )
@@ -851,6 +883,29 @@ def set_verify_outcome(
     return cursor.rowcount == 1
 
 
+def set_content_sketch(db_path: Path, url_canonical: str, *, sketch: str, algo: str) -> bool:
+    """Fill in a sketch for a row hashed before the column existed.
+
+    Legitimate in EXACTLY one situation, and the caller must have established
+    it: a fresh read produced the same digest as `content_hash`, so the bytes
+    are proven identical and a sketch cut now describes the bytes that were
+    hashed then. Anywhere else this would bind today's sample to an older hash
+    and make the pair silently incomparable -- the defect 0.55.0 spent a release
+    removing, reintroduced one column across.
+
+    Write-once, and the rule lives in the WHERE clause rather than in a
+    read-then-write above it, for the reason `set_stable_digest` keeps it there:
+    two passes racing on one row would both see '' and the second would win.
+    """
+    with closing(_connect(db_path)) as conn:
+        cursor = conn.execute(
+            "UPDATE url_index SET content_sketch = ?, content_sketch_algo = ?"
+            " WHERE url_canonical = ? AND content_sketch = ''",
+            (sketch, algo, url_canonical),
+        )
+    return cursor.rowcount == 1
+
+
 def set_stable_digest(
     db_path: Path, url_canonical: str, *, digest: str, covers_bytes: int, algo: str
 ) -> bool:
@@ -919,7 +974,8 @@ def rows_with_hash(
     """
     sql = (
         "SELECT url_canonical, zotero_key, content_hash, hashed_at,"
-        " hash_bytes, hash_truncated, verified_at, stable_digest, stable_algo"
+        " hash_bytes, hash_truncated, verified_at, stable_digest, stable_algo,"
+        " content_sketch, content_sketch_algo"
         " FROM url_index"
         " WHERE content_hash != ''"
     )

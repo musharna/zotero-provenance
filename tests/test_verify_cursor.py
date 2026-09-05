@@ -63,6 +63,7 @@ def _seed_hashed(db, urls):
         set_content_hash(
             db, url, content_hash="OLD", hashed_at=f"T{i}",
             covers_bytes=64, complete=True,
+            sketch="", sketch_algo="",
         )
     return db
 

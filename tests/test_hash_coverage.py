@@ -166,7 +166,8 @@ def test_a_page_read_cannot_be_built_without_its_coverage() -> None:
 def test_the_stored_hash_carries_its_coverage(db: Path) -> None:
     insert_url(db, URL, "K1", datetime.date(2026, 9, 1))
     set_content_hash(
-        db, URL, content_hash="abc", hashed_at="T", covers_bytes=1024, complete=False
+        db, URL, content_hash="abc", hashed_at="T", covers_bytes=1024, complete=False,
+        sketch="", sketch_algo="",
     )
     row = row_for_url(db, URL)
     assert row["hash_bytes"] == 1024
@@ -179,7 +180,7 @@ def test_a_hash_cannot_be_stored_without_saying_what_it_covers(db: Path) -> None
     the exact false negative the old all-or-nothing rule existed to prevent."""
     insert_url(db, URL, "K1", datetime.date(2026, 9, 1))
     with pytest.raises(TypeError):
-        set_content_hash(db, URL, content_hash="abc", hashed_at="T")  # type: ignore[call-arg]
+        set_content_hash(db, URL, content_hash="abc", hashed_at="T", sketch="", sketch_algo="")  # type: ignore[call-arg]
 
 
 def test_rows_hashed_before_this_existed_read_as_COMPLETE(db: Path) -> None:
@@ -235,6 +236,7 @@ def _seed(db, url, *, digest, covers, complete):
     set_content_hash(
         db, url, content_hash=digest, hashed_at="THEN",
         covers_bytes=covers, complete=complete,
+        sketch="", sketch_algo="",
     )
     return db
 

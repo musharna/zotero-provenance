@@ -153,6 +153,7 @@ def _seed(db, rows):
         set_content_hash(
             db, url, content_hash="OLD", hashed_at="THEN",
             covers_bytes=64, complete=True,
+            sketch="", sketch_algo="",
         )
     return db
 

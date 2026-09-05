@@ -259,6 +259,7 @@ def _hashed(tmp_path: Path) -> Path:
         hashed_at="THEN",
         covers_bytes=len(REAL),
         complete=True,
+        sketch="", sketch_algo="",
     )
     return db
 
