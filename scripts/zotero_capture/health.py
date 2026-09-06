@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
@@ -61,12 +62,23 @@ MAX_KINDS_SHOWN = 3
 UNLABELLED = "unlabelled"
 
 
+_BARE_OFFSET = re.compile(r"([+-]\d{2})(\d{2})$")
+
+
 def _parse_ts(raw: Any) -> datetime | None:
-    """Log timestamps are ISO-8601 with an offset, written -0400 or -04:00."""
+    """Log timestamps are ISO-8601 with an offset, written -0400 or -04:00.
+
+    Both forms are normalised here, ONCE, because every writer (the hooks'
+    `date +%z`, the CLI's `strftime("%z")`) emits the colon-less one and
+    Python 3.10's `fromisoformat` accepts only the colon form. On 3.10 that
+    dropped every record as unreadable and the health check reported a log
+    it could not assess -- the docstring's promise was never true there.
+    Found by CI's 3.10 jobs on their first run (0.62.2).
+    """
     if not isinstance(raw, str):
         return None
     try:
-        parsed = datetime.fromisoformat(raw)
+        parsed = datetime.fromisoformat(_BARE_OFFSET.sub(r"\1:\2", raw))
     except ValueError:
         return None
     return parsed if parsed.tzinfo is not None else None
