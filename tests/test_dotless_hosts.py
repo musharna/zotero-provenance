@@ -27,7 +27,7 @@ from zotero_capture.url_processing import is_excluded
         "http://prometheus:9090",
         "http://homelab:3000",
         "http://host:11434/api/embeddings",
-        "https://mjarnoldgt76",
+        "https://labhost",
         "https://public/api/fidelity.json",
         "https://h/R&D",
         "https://a",
@@ -42,7 +42,7 @@ def test_a_dotless_host_is_excluded(url):
     "url",
     [
         "https://doi.org/10.1016/j.cell.2013.12.027",
-        "https://github.com/musharna/figcite",
+        "https://github.com/someone/a-repo",
         "https://de.wikipedia.org/wiki/München",
         "https://fixturehost.org/foo",
     ],

@@ -24,7 +24,7 @@ from zotero_capture.sqlite_cache import (
 A = {
     "api_origin": "https://api.zotero.org",
     "library_type": "user",
-    "library_id": "6532713",
+    "library_id": "1234567",
     "collection_key": "AAAACOLL",
 }
 B = {**A, "collection_key": "BBBBCOLL"}

@@ -119,7 +119,7 @@ def test_the_default_plan_holds_policy_rows_back():
         "https://de.wikipedia.org/wiki/München",
         "https://example.org.uk/a/b",  # NOT the reserved example.org
         "https://foo.example.io/release_",
-        "https://github.com/musharna/figcite",
+        "https://github.com/someone/a-repo",
     ],
 )
 def test_a_real_citation_is_left_alone(url):

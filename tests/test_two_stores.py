@@ -544,7 +544,7 @@ def test_a_dot_git_url_without_a_ref_is_still_an_ordinary_address() -> None:
     both would silence real findings."""
     from zotero_capture.url_processing import is_vcs_requirement
 
-    assert is_vcs_requirement("https://github.com/musharna/dreamer-chassis.git") is False
+    assert is_vcs_requirement("https://github.com/someone/other-repo.git") is False
 
 
 def test_verify_says_how_old_an_unfinished_claim_is() -> None:

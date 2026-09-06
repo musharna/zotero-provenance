@@ -30,21 +30,21 @@ from zotero_capture.github_visibility import (
 @pytest.mark.parametrize(
     "url,slug",
     [
-        ("https://github.com/musharna/orchid-sdxl", ("musharna", "orchid-sdxl")),
-        ("https://github.com/musharna/orchid-sdxl/", ("musharna", "orchid-sdxl")),
+        ("https://github.com/someone/private-repo", ("someone", "private-repo")),
+        ("https://github.com/someone/private-repo/", ("someone", "private-repo")),
         # `.git` is a suffix of the clone URL, not part of the name.
         (
-            "https://github.com/musharna/dreamer-chassis.git",
-            ("musharna", "dreamer-chassis"),
+            "https://github.com/someone/other-repo.git",
+            ("someone", "other-repo"),
         ),
         # Deeper paths are already discriminated by containment; asking about
         # them here would query a repo the URL does not name.
-        ("https://github.com/musharna/repo/pull/332", None),
-        ("https://github.com/musharna/repo/issues", None),
+        ("https://github.com/someone/repo/pull/332", None),
+        ("https://github.com/someone/repo/issues", None),
         # Not a repository at all.
-        ("https://github.com/musharna", None),
+        ("https://github.com/someone", None),
         ("https://github.com/settings/tokens", None),
-        ("https://gist.github.com/musharna/abc123", None),
+        ("https://gist.github.com/someone/abc123", None),
         ("https://raw.githubusercontent.com/a/b", None),
         ("https://notgithub.com/a/b", None),
         # A host that merely CONTAINS github.com must not match -- this project
@@ -69,7 +69,7 @@ def test_a_private_repo_that_exists_is_visible() -> None:
     """The finding: 17 rows call these dead links."""
     with _client(200) as c:
         assert (
-            repo_visibility(("musharna", "orchid-sdxl"), client=c, token="t") == VISIBLE
+            repo_visibility(("someone", "private-repo"), client=c, token="t") == VISIBLE
         )
 
 

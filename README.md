@@ -23,6 +23,7 @@ will run, plus `jq`:
 
 ```
 python3 -m pip install httpx beautifulsoup4 idna linkify-it-py markdown-it-py
+sudo apt install jq        # macOS: brew install jq coreutils
 ```
 
 Setup asks for a Zotero API key with library **write** access
