@@ -40,8 +40,14 @@ ZP_LOG="${ZOTERO_CAPTURE_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/zotero
 
 zp_tramp_log() {
 	mkdir -p "$(dirname "$ZP_LOG")" 2>/dev/null
+	# Escaped for JSON (backslash, then quote) before interpolation: a path
+	# holding a `"` produced a line health counted as an unreadable log.
+	local self="${ZP_MINE//\\/\\\\}" detail="${2:-}"
+	self="${self//\"/\\\"}"
+	detail="${detail//\\/\\\\}"
+	detail="${detail//\"/\\\"}"
 	printf '{"ts": "%s", "event": "%s", "self": "%s", "detail": "%s"}\n' \
-		"$(date '+%Y-%m-%dT%H:%M:%S%z')" "$1" "$ZP_MINE" "${2:-}" >>"$ZP_LOG" 2>/dev/null
+		"$(date '+%Y-%m-%dT%H:%M:%S%z')" "$1" "$self" "$detail" >>"$ZP_LOG" 2>/dev/null
 }
 
 # Only a managed cache root can be superseded. A development checkout runs its

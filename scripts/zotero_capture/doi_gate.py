@@ -20,6 +20,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+
+from .url_processing import DOI_HOSTS
 import subprocess
 from dataclasses import dataclass, field
 
@@ -28,7 +30,8 @@ logger = logging.getLogger(__name__)
 # The doi.org forms capture actually stores. biorxiv/medrxiv carry the DOI in
 # the path, which the title resolver already relies on.
 _DOI_URL_RE = re.compile(
-    r"^https?://(?:dx\.)?doi\.org/(10\.\d{4,9}/\S+)$", re.IGNORECASE
+    r"^https?://(?:" + "|".join(re.escape(h) for h in sorted(DOI_HOSTS)) + r")/(10\.\d{4,9}/\S+)$",
+    re.IGNORECASE,
 )
 _EMBEDDED_DOI_RE = re.compile(r"(10\.\d{4,9}/[^\s?#]+)")
 

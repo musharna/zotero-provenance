@@ -604,6 +604,11 @@ def _is_real_hostname(host: str) -> bool:
 # suffix that must not be empty. Anything else on doi.org names no document.
 DOI_PATH_RE = re.compile(r"^10\.\d{4,9}/\S+$")
 
+# The hosts that resolve a DOI. ONE definition: the title resolver and the DOI
+# gate each kept their own list, and this one was shorter, so a malformed
+# `www.doi.org/10.x` was captured and then resolved (0.61.0).
+DOI_HOSTS = frozenset({"doi.org", "dx.doi.org", "www.doi.org"})
+
 
 def _is_asset_path(path: str) -> bool:
     """True when the path points at an asset rather than a page.
@@ -630,7 +635,7 @@ def _is_malformed_doi(host: str, path: str) -> bool:
     whether a well-formed one resolves — `doi.org` answers that, and a valid DOI
     that 404s is a dead source rather than a malformed one.
     """
-    if host not in ("doi.org", "dx.doi.org"):
+    if host not in DOI_HOSTS:
         return False
     return not DOI_PATH_RE.match((path or "").lstrip("/"))
 
