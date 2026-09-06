@@ -47,6 +47,8 @@ REFUSAL_EVENTS = (
     # and said nothing at all.
     "configuration-error",
     "capture-bootstrap-error",
+    # The hook's own `timeout` fired mid-capture (0.58.0). A fact about us.
+    "hook-terminated",
 )
 
 MAX_KINDS_SHOWN = 3
