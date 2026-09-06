@@ -233,3 +233,25 @@ def test_setup_script_sends_the_shared_user_agent():
     import zotero_setup
 
     assert zotero_setup._headers("k")["User-Agent"] == USER_AGENT
+
+
+def test_the_readme_test_count_is_within_ten_percent_of_reality() -> None:
+    """README said 780 while the suite ran 1,169. Nothing tied the prose to the
+    code. Ten percent, not exact: a count that must be edited on every commit
+    gets edited by hand into something else."""
+    import subprocess
+    import sys
+
+    root = Path(__file__).resolve().parents[1]
+    text = (root / "README.md").read_text()
+    m = re.search(r"(\d[\d,]*) tests run by default", text)
+    assert m, "README no longer states a test count"
+    stated = int(m.group(1).replace(",", ""))
+    out = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider"],
+        capture_output=True, text=True, cwd=root, timeout=180,
+    ).stdout
+    m2 = re.search(r"(\d+) tests? collected", out) or re.search(r"(\d+)/(\d+) tests collected", out)
+    assert m2, out[-400:]
+    collected = int(m2.group(1))
+    assert abs(stated - collected) <= collected * 0.1, f"README says {stated}, collected {collected}"

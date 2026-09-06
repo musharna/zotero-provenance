@@ -382,7 +382,7 @@ loud failure rather than a clean-looking run.
 predate it — a release cannot fix a root that already exists — and `--verify`
 proves forwarding by behaviour rather than by grep.
 
-780 tests run by default and need no network. The 10 live ones are opted _into_
+About 1,200 tests run by default and need no network. The 10 live ones are opted _into_
 with `-m live` rather than out of — `addopts = -m "not live"` is set, because
 they used to run on a bare `pytest -q` and reach the internet despite this
 section promising otherwise. The hook tests execute the real shell scripts as
