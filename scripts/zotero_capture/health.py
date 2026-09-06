@@ -260,13 +260,6 @@ def evaluate(
     stats: dict = {}
     future_n = 0
 
-    stale_n = 0
-    stale_newest: tuple[datetime, str] | None = None
-    stale_roots: set[str] = set()
-
-    unverified_n = 0
-    unverified_newest: datetime | None = None
-
     refusal_n = 0
     refusal_newest: datetime | None = None
     refusal_kinds: set[str] = set()
@@ -350,20 +343,10 @@ def evaluate(
             f"and they would otherwise be treated as recent faults indefinitely"
         )
 
-    if stale_n and stale_newest is not None:
-        newest_ts, newest_root = stale_newest
-        warnings.append(
-            f"{stale_n} capture(s) ran from plugin {', '.join(sorted(stale_roots))}, "
-            f"which was not the installed version at the time (most recent "
-            f"{newest_ts.isoformat()}, {newest_root}) — see --list-incidents, "
-            f"then --ack <id> once the rows are checked"
-        )
-
-    if unverified_n and unverified_newest is not None:
-        warnings.append(
-            f"{unverified_n} capture(s) wrote while the installed plugin root "
-            f"could not be verified (most recent {unverified_newest.isoformat()})"
-        )
+    # Stale and unverified writes are NOT counted from the log here. They
+    # were, until 0.18.0 moved integrity into the ledger; the counters and
+    # their two warnings outlived the code that fed them by nine releases,
+    # reading as a report the log path still made (0.60.0).
 
     if refusal_n and refusal_newest is not None:
         kinds = sorted(refusal_kinds)[:MAX_KINDS_SHOWN]
