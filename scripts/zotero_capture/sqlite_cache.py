@@ -656,6 +656,18 @@ def retry_queue_depth(db_path: Path) -> int:
             return 0
 
 
+def _limit_clause(limit: int | None) -> str:
+    """SQLite treats a negative LIMIT as no limit at all, so `--limit -1` --
+    the value someone types to be careful -- ran the whole corpus. Refused
+    here, once, where the SQL is built, so no CLI has to remember (two of
+    four did not)."""
+    if limit is None:
+        return ""
+    if limit < 0:
+        raise ValueError(f"limit must be >= 0, got {limit}")
+    return f" LIMIT {int(limit)}"
+
+
 def retry_queue_entries(db_path: Path, *, limit: int | None = None) -> list[RetryEntry]:
     """Oldest failure first, so a drain works through the backlog in order."""
     sql = (
@@ -663,8 +675,7 @@ def retry_queue_entries(db_path: Path, *, limit: int | None = None) -> list[Retr
         " last_failed, attempts, last_error FROM retry_queue"
         " ORDER BY first_failed, url_canonical"
     )
-    if limit is not None:
-        sql += f" LIMIT {int(limit)}"
+    sql += _limit_clause(limit)
     with closing(_connect(db_path)) as conn:
         return [cast(RetryEntry, dict(row)) for row in conn.execute(sql)]
 
@@ -787,18 +798,19 @@ def _host_boundary(only_host: str) -> tuple[str, list[str]]:
     if not host:
         raise ValueError("only_host must name a host")
     escaped = host.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    clause = (
-        " AND (url_canonical LIKE ? ESCAPE '\\'"
-        " OR url_canonical LIKE ? ESCAPE '\\'"
-        " OR url_canonical LIKE ? ESCAPE '\\'"
-        " OR url_canonical LIKE ? ESCAPE '\\')"
-    )
-    return clause, [
-        f"http://{escaped}/%",
-        f"https://{escaped}/%",
-        f"http://%.{escaped}/%",
-        f"https://%.{escaped}/%",
-    ]
+    # After the host a canonical URL may END (canonicalize strips a bare "/",
+    # so a site root has an EMPTY path), or continue with "/" or "?". A
+    # fragment never survives canonicalize. Patterns of `host/%` alone missed
+    # every site root -- 191 live rows -- while the report still called the
+    # run scoped. LIKE has no alternation, so it is one pattern per case; a
+    # bare `host%` would take example.com.evil.test, the suffix the boundary
+    # exists to refuse.
+    patterns: list[str] = []
+    for scheme in ("http", "https"):
+        for prefix in (f"{scheme}://{escaped}", f"{scheme}://%.{escaped}"):
+            patterns += [prefix, f"{prefix}/%", f"{prefix}?%"]
+    clause = " AND (" + " OR ".join(["url_canonical LIKE ? ESCAPE '\\'"] * len(patterns)) + ")"
+    return clause, patterns
 
 
 def rows_needing_hash(
@@ -853,8 +865,7 @@ def rows_needing_hash(
         sql += clause
         params += host_params
     sql += " ORDER BY first_seen, url_canonical"
-    if limit is not None:
-        sql += f" LIMIT {int(limit)}"
+    sql += _limit_clause(limit)
     with closing(_connect(db_path)) as conn:
         return [dict(row) for row in conn.execute(sql, params)]
 
@@ -991,7 +1002,6 @@ def rows_with_hash(
         sql += clause
         params += host_params
     sql += " ORDER BY verified_at, url_canonical"
-    if limit is not None:
-        sql += f" LIMIT {int(limit)}"
+    sql += _limit_clause(limit)
     with closing(_connect(db_path)) as conn:
         return [dict(row) for row in conn.execute(sql, params)]

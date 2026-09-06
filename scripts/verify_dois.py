@@ -57,7 +57,7 @@ def main() -> int:
         if doi and doi not in by_url:
             by_url[doi] = url
 
-    dois = list(by_url)[: args.limit] if args.limit else list(by_url)
+    dois = list(by_url)[: args.limit] if args.limit is not None else list(by_url)
     print(f"library rows : {len(urls)}")
     print(f"DOIs found   : {len(by_url)}")
     if args.dry_run:

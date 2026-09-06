@@ -207,3 +207,82 @@ def test_every_flag_is_either_honoured_by_verify_or_refused_by_it() -> None:
     # Non-vacuous in both directions: the sets must not be empty, or a module
     # with no flags at all would pass.
     assert dests and honoured & dests and refused & dests
+
+
+def test_only_host_matches_the_site_root_row(tmp_path) -> None:
+    """canonicalize strips a bare `/`, so `https://example.com` has an EMPTY
+    path and a pattern of `https://example.com/%` never matched it: a scoped
+    re-run reported complete while skipping every site root. 191 of 5,133
+    live rows were site roots when this was written. The two control rows are
+    what keep this a boundary and not a prefix."""
+    db = _seed(
+        tmp_path / "i.db",
+        [
+            "https://example.com",
+            "https://example.com?q=1",
+            "https://www.example.com",
+            "https://example.com/x",
+            "https://notexample.com",  # control: substring, not boundary
+            "https://example.com.evil.test",  # control: suffix, not boundary
+        ],
+    )
+    seen: list[str] = []
+    verify(db, hasher=_recording_hasher(seen), clock=lambda: "NOW", only_host="example.com")
+    assert sorted(seen) == [
+        "https://example.com",
+        "https://example.com/x",
+        "https://example.com?q=1",
+        "https://www.example.com",
+    ]
+
+
+# --- a negative limit is a mistake, not the whole corpus ----------------------
+
+
+import pytest  # noqa: E402
+
+from zotero_capture.sqlite_cache import (  # noqa: E402
+    enqueue_retry,
+    retry_queue_entries,
+    rows_needing_hash,
+    rows_with_hash,
+)
+
+
+def _two_of_each(tmp_path):
+    db = _seed(tmp_path / "i.db", ["https://a.test/1", "https://b.test/1"])
+    # rows_needing_hash wants UNhashed rows; give it two of those as well
+    insert_url(db, "https://c.test/1", "K8", datetime.date(2026, 5, 5))
+    insert_url(db, "https://d.test/1", "K9", datetime.date(2026, 5, 5))
+    for i in range(2):
+        enqueue_retry(db, url_canonical=f"https://q.test/{i}", project="home", context=None,
+                      seen_date="2026-05-05", error="e", now="2026-05-05T00:00:00+00:00")
+    return db
+
+
+@pytest.mark.parametrize("fn", [rows_needing_hash, rows_with_hash, retry_queue_entries])
+def test_a_negative_limit_is_refused_not_unlimited(tmp_path, fn) -> None:
+    """SQLite reads `LIMIT -1` as no limit at all. `--limit -1` is what
+    someone types to be careful, and it ran the whole corpus. Refused at the
+    one place the SQL is built, so no CLI can forget to."""
+    db = _two_of_each(tmp_path)
+    with pytest.raises(ValueError, match="limit"):
+        fn(db, limit=-1)
+    # Positive controls: 0 means none, 1 means one, None means everything.
+    assert len(fn(db, limit=0)) == 0
+    assert len(fn(db, limit=1)) == 1
+    assert len(fn(db, limit=None)) == 2
+
+
+def test_a_negative_limit_is_refused_at_the_cli(tmp_path) -> None:
+    import os
+
+    env = {k: v for k, v in os.environ.items() if not k.startswith("ZOTERO_")}
+    env["ZOTERO_CAPTURE_STATE_DIR"] = str(tmp_path)
+    for flags in (["--limit", "-1"], ["--verify", "--limit", "-1"]):
+        done = subprocess.run(
+            [sys.executable, str(CLI), *flags],
+            capture_output=True, text=True, timeout=60, env=env,
+        )
+        assert done.returncode != 0, flags
+        assert "limit" in done.stderr, done.stderr

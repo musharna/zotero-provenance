@@ -50,6 +50,11 @@ def main() -> int:
     p.add_argument("--limit", type=int, default=None, help="only the first N entries")
     args = p.parse_args()
 
+    # Refused here for the message; sqlite_cache refuses it again for the
+    # mechanism. `if args.limit:` is the wrong test -- 0 is a real value.
+    if args.limit is not None and args.limit < 0:
+        p.error("--limit must be >= 0")
+
     config = load_config()
     db_path = config.db_path
     ledger_path = _state_dir({}) / "health.db"

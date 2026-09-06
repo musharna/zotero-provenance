@@ -457,3 +457,25 @@ def test_a_dry_run_still_works_on_an_unverifiable_index(
 
     assert retire_rows.main(["--db-path", str(db)]) == 0
     assert _planned(capsys) == len(JUNK)
+
+
+def test_the_held_count_is_about_the_plan_not_the_slice(tmp_path: Path, capsys, _creds) -> None:
+    """`held` was computed AFTER `--limit` truncated the steps, so `--limit 1`
+    over 3 hard + 1 policy printed "3 more are policy exclusions" when the
+    true number was 1. The count is a claim about the plan; the slice is a
+    claim about this run."""
+    db = _index(tmp_path)
+    with closing(sqlite3.connect(db)) as conn:
+        conn.execute(
+            "INSERT INTO url_index (url_canonical, zotero_key, first_seen, last_seen)"
+            " VALUES ('http://localhost:8080/x', 'KEYP', '2026-01-01', '2026-01-01')"
+        )
+        conn.commit()
+
+    assert retire_rows.main(["--db-path", str(db)]) == 0
+    full = capsys.readouterr().out
+    assert "(1 more are policy exclusions" in full, full  # positive control
+
+    assert retire_rows.main(["--db-path", str(db), "--limit", "1"]) == 0
+    limited = capsys.readouterr().out
+    assert "(1 more are policy exclusions" in limited, limited

@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.59.0 — 2026-09-06
+
+- **A scoped run never reached the site root.** `--only-host example.com`
+  matched `https://example.com/%` and `https://%.example.com/%`, but
+  `canonicalize` strips a bare `/`, so a site root has an EMPTY path and
+  matched nothing. Measured with the real `_host_boundary` over every
+  site-root row in the live index:
+
+  | site-root rows | reachable by `--only-host <own host>`, old | new |
+  |---|---|---|
+  | 191 of 5,133 | 0 | 191 |
+
+  The report still called the run scoped and complete. Fixed at the one
+  function: after the host the URL may end, or continue with `/` or `?`
+  (a fragment never survives canonicalize); six LIKE patterns per host
+  level, because `host%` alone would take `example.com.evil.test`, the
+  suffix the boundary exists to refuse. The boundary tests still pin
+  `notexample.com` and that suffix as controls.
+
+- **`--limit -1` meant the whole corpus.** SQLite reads a negative LIMIT as
+  no limit; `repair_urls` and `retire_rows` guarded it, `snapshot_pages` and
+  `drain_queue` did not, so the value someone types to be careful started a
+  multi-hour run. Refused ONCE where the SQL is built (`_limit_clause`,
+  three call sites) so no CLI has to remember, and again at the two CLIs for
+  the message. `verify_dois --limit 0` used `if args.limit:` and checked
+  every DOI; `is not None` now, the `--limit 0` class fixed a third time.
+
+- **`retire_rows` reported the rows the limit held back as policy
+  exclusions.** `held` was computed after `--limit` truncated the plan, so
+  `--limit 1` over 3 hard + 1 policy printed "3 more are policy exclusions".
+  Counted against the plan now; the slice is a claim about this run only.
+
+  Mutations, all caught first round: site-root patterns dropped; boundary
+  loosened to `host%`; the negative-limit raise removed; the CLI guard
+  removed (sqlite still refuses, and the CLI test asks for the message);
+  held computed after the slice.
+
+  Audit findings M1, M2, L2 of `audit_whole_repo_2026-09-06.md`.
+
 ## 0.58.0 — 2026-09-06
 
 - **A hook timeout left no record, and a POST it cut off was never revisited.**
