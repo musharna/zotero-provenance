@@ -8,6 +8,8 @@ Read the index for *what changed*; read the entry for *why*.
 
 | version | date | headline |
 |---|---|---|
+| 0.62.1 | 2026-09-06 | CI's first run: the new dependency guard imported `tomllib`, which 3.10 does not have |
+| 0.62.0 | 2026-09-06 | Readiness for a stranger's first install |
 | 0.61.0 | 2026-09-06 | "Prefix agreed" was stamped when nothing agreed |
 | 0.60.0 | 2026-09-06 | A test that could not fail, guarding a report the hook did not make |
 | 0.59.0 | 2026-09-06 | A scoped run never reached the site root |
@@ -86,6 +88,19 @@ Read the index for *what changed*; read the entry for *why*.
 | 0.1.0 | 2026-08-20 | Initial release: capture hook, commands, end-to-end tests, README. |
 
 ---
+
+## 0.62.1 — 2026-09-06
+
+- **CI's first run failed on both Python 3.10 jobs, and the failure was the
+  new dependency guard itself:** it imported `tomllib`, which arrived in
+  3.11, while the manifest promises 3.10. The matrix caught it within
+  minutes of existing. The guard now parses the dependency list with a
+  regex; verified to pass as-is and to fail naming `idna` when the
+  declaration is removed. No runtime change.
+
+  This entry was written AFTER 0.62.1 was merged: the release chain's
+  CHANGELOG edit failed an assertion and the chain went on. A test now
+  holds the index and the entries to the current version.
 
 ## 0.62.0 — 2026-09-06
 

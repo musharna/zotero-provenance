@@ -255,3 +255,16 @@ def test_the_readme_test_count_is_within_ten_percent_of_reality() -> None:
     assert m2, out[-400:]
     collected = int(m2.group(1))
     assert abs(stated - collected) <= collected * 0.1, f"README says {stated}, collected {collected}"
+
+
+def test_the_changelog_index_and_entries_cover_the_current_version() -> None:
+    """0.62.1 shipped with no CHANGELOG entry: the release script's edit
+    asserted on an index row for 0.62.0 that had never been generated, and
+    the chain went on without it. The index is derived from the entries and
+    both must name the version that is about to ship."""
+    text = (Path(__file__).resolve().parents[1] / "CHANGELOG.md").read_text()
+    assert f"\n## {__version__} — " in text, f"no CHANGELOG entry for {__version__}"
+    assert f"\n| {__version__} | " in text, f"no release-index row for {__version__}"
+    entries = re.findall(r"(?m)^## (\d+\.\d+\.\d+) — ", text)
+    rows = re.findall(r"(?m)^\| (\d+\.\d+\.\d+) \| ", text)
+    assert entries == rows, "release index does not match the entries, in order"
