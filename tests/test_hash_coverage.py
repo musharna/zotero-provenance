@@ -494,8 +494,9 @@ def test_a_short_re_read_that_DIFFERS_is_incomparable_not_agreed(db: Path) -> No
     was stamped `prefix_agreed`, whose report line says "only the first
     bytes are covered". Nothing agreed. `unreachable` covering gone AND
     blocked was this same collapse; the word is the defect."""
+    import sqlite3
+
     from zotero_capture.snapshot import INCOMPARABLE
-    from zotero_capture.sqlite_cache import lookup_url
 
     _seed(db, URL, digest="OLDWHOLE", covers=64, complete=True)
     result = verify(
@@ -505,7 +506,10 @@ def test_a_short_re_read_that_DIFFERS_is_incomparable_not_agreed(db: Path) -> No
     assert result.incomparable == 1 and result.incomparable_urls == [URL]
     assert result.partial_match == 0
     assert result.changed == 0
-    assert lookup_url(db, URL)["verify_outcome"] == INCOMPARABLE
+    stored = sqlite3.connect(db).execute(
+        "SELECT verify_outcome FROM url_index WHERE url_canonical = ?", (URL,)
+    ).fetchone()[0]
+    assert stored == INCOMPARABLE
 
 
 def test_a_short_re_read_that_MATCHES_is_still_prefix_agreed(db: Path) -> None:
