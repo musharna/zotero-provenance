@@ -108,6 +108,11 @@ def main() -> int:
         if unusable:
             p.error(f"{', '.join(unusable)} cannot be combined with --verify")
 
+    # Refused here for the message; sqlite_cache refuses it again for the
+    # mechanism. `if args.limit:` is the wrong test -- 0 is a real value.
+    if args.limit is not None and args.limit < 0:
+        p.error("--limit must be >= 0")
+
     config = load_config()
     db_path = config.db_path
     # Read per page inside the loop: `hashed_at` is when THAT page was read,

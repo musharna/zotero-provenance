@@ -656,6 +656,18 @@ def retry_queue_depth(db_path: Path) -> int:
             return 0
 
 
+def _limit_clause(limit: int | None) -> str:
+    """SQLite treats a negative LIMIT as no limit at all, so `--limit -1` --
+    the value someone types to be careful -- ran the whole corpus. Refused
+    here, once, where the SQL is built, so no CLI has to remember (two of
+    four did not)."""
+    if limit is None:
+        return ""
+    if limit < 0:
+        raise ValueError(f"limit must be >= 0, got {limit}")
+    return f" LIMIT {int(limit)}"
+
+
 def retry_queue_entries(db_path: Path, *, limit: int | None = None) -> list[RetryEntry]:
     """Oldest failure first, so a drain works through the backlog in order."""
     sql = (
@@ -663,8 +675,7 @@ def retry_queue_entries(db_path: Path, *, limit: int | None = None) -> list[Retr
         " last_failed, attempts, last_error FROM retry_queue"
         " ORDER BY first_failed, url_canonical"
     )
-    if limit is not None:
-        sql += f" LIMIT {int(limit)}"
+    sql += _limit_clause(limit)
     with closing(_connect(db_path)) as conn:
         return [cast(RetryEntry, dict(row)) for row in conn.execute(sql)]
 
@@ -854,8 +865,7 @@ def rows_needing_hash(
         sql += clause
         params += host_params
     sql += " ORDER BY first_seen, url_canonical"
-    if limit is not None:
-        sql += f" LIMIT {int(limit)}"
+    sql += _limit_clause(limit)
     with closing(_connect(db_path)) as conn:
         return [dict(row) for row in conn.execute(sql, params)]
 
@@ -992,7 +1002,6 @@ def rows_with_hash(
         sql += clause
         params += host_params
     sql += " ORDER BY verified_at, url_canonical"
-    if limit is not None:
-        sql += f" LIMIT {int(limit)}"
+    sql += _limit_clause(limit)
     with closing(_connect(db_path)) as conn:
         return [dict(row) for row in conn.execute(sql, params)]
