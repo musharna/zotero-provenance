@@ -8,6 +8,7 @@ Read the index for *what changed*; read the entry for *why*.
 
 | version | date | headline |
 |---|---|---|
+| 0.62.2 | 2026-09-06 | On Python 3.10 the health check could not read a single record |
 | 0.62.1 | 2026-09-06 | CI's first run: the new dependency guard imported `tomllib`, which 3.10 does not have |
 | 0.62.0 | 2026-09-06 | Readiness for a stranger's first install |
 | 0.61.0 | 2026-09-06 | "Prefix agreed" was stamped when nothing agreed |
@@ -88,6 +89,22 @@ Read the index for *what changed*; read the entry for *why*.
 | 0.1.0 | 2026-08-20 | Initial release: capture hook, commands, end-to-end tests, README. |
 
 ---
+
+## 0.62.2 — 2026-09-06
+
+- **On Python 3.10 the health check was blind.** Every writer of a log
+  timestamp -- the hooks' `date +%z`, the CLI's `strftime("%z")` -- emits
+  the colon-less offset (`+0000`), and `_parse_ts`'s docstring promised to
+  read both forms. Python 3.10's `fromisoformat` accepts only `+00:00`
+  (3.11 widened it), so on 3.10 every record was dropped as unreadable and
+  SessionStart reported "the capture log has N line(s) but no readable
+  records". The manifest has promised 3.10 since 0.1. Reproduced on a real
+  3.10 (11 failures across four test files, the CI signature exactly);
+  fixed ONCE at the parser by normalising a bare `[+-]HHMM` to `[+-]HH:MM`,
+  so the writers keep writing `%z`. Test parametrised over both forms with
+  the colon form as the control; red on 3.10, green on 3.13 before the fix,
+  green on both after. Found by CI's 3.10 jobs, one release after they
+  were added. No behaviour change on 3.11+.
 
 ## 0.62.1 — 2026-09-06
 

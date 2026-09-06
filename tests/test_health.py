@@ -19,6 +19,8 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 
 from zotero_capture.health import evaluate
 
@@ -526,3 +528,18 @@ def test_the_hook_env_reads_nothing_from_this_machine(tmp_path: Path) -> None:
     assert not Path(env["ZOTERO_SECRETS_FILE"]).exists()
     # Positive control: the state dir is still the one the test asked for.
     assert env["ZOTERO_CAPTURE_STATE_DIR"] == str(tmp_path)
+
+
+@pytest.mark.parametrize("raw", ["2026-09-06T12:00:00+0000", "2026-09-06T08:00:00-0400", "2026-09-06T12:00:00+00:00"])
+def test_a_log_timestamp_is_readable_on_every_supported_python(raw: str) -> None:
+    """The hooks and the capture CLI write `%z`, which is `+0000` with no
+    colon. `_parse_ts`'s docstring promised both forms; on Python 3.10
+    `fromisoformat` accepts only the colon form, so every record was dropped
+    as unreadable and the health check reported a log it could not assess.
+    Found by CI's 3.10 jobs on their first run (0.62.1)."""
+    from zotero_capture.health import _parse_ts
+
+    parsed = _parse_ts(raw)
+    assert parsed is not None, raw
+    assert parsed.utcoffset() is not None
+    assert parsed.astimezone(timezone.utc).hour == 12
