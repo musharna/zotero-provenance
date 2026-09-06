@@ -160,7 +160,7 @@ def test_a_drain_settles_an_old_claim_by_asking_zotero(tmp_path) -> None:
 
     db = tmp_path / "i.db"
     init_db(db)
-    url = _cut_off_capture(db)
+    _cut_off_capture(db)
     pending = sqlite3.connect(db).execute("SELECT pending_key FROM url_index").fetchone()[0]
 
     z = MagicMock()

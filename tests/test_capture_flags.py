@@ -11,7 +11,6 @@ files alive the day it was written.
 from __future__ import annotations
 
 import ast
-import json
 from pathlib import Path
 
 import zotero_capture.cli as cli

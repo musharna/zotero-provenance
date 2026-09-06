@@ -81,7 +81,6 @@ be read whole -- the largest measured is 51 KB against a 256 KB budget.
 from __future__ import annotations
 
 import gzip
-import itertools
 from pathlib import Path
 
 import httpx

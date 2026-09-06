@@ -279,7 +279,6 @@ def test_a_negative_limit_is_refused_not_unlimited(tmp_path, fn) -> None:
 
 
 def test_a_negative_limit_is_refused_at_the_cli(tmp_path) -> None:
-    import os
 
     env = clean_env(tmp_path)
     for flags in (["--limit", "-1"], ["--verify", "--limit", "-1"]):

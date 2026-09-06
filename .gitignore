@@ -6,3 +6,4 @@ venv/
 *.egg-info/
 secrets.env
 .codex-consult/
+.ruff_cache/

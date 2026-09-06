@@ -10,6 +10,47 @@ bibliography of your research trail instead of a scrollback you have to re-read.
 It only ever **writes**. Reading and searching your library is well covered by
 existing Zotero MCP servers; run one of those alongside this if you want both.
 
+## Install
+
+```
+/plugin marketplace add musharna/zotero-provenance
+/plugin install zotero-provenance
+/zotero-setup
+```
+
+You need `python3` (3.10+) with five packages on the interpreter the hooks
+will run, plus `jq`:
+
+```
+python3 -m pip install httpx beautifulsoup4 idna linkify-it-py markdown-it-py
+```
+
+Setup asks for a Zotero API key with library **write** access
+(<https://www.zotero.org/settings/keys>), verifies it with a live round-trip,
+and stores it at `~/.config/zotero-provenance/secrets.env` (mode `0600`).
+Details, alternatives, and troubleshooting: [Install](#install-details).
+
+### Platform support
+
+| platform                  | status                                                             |
+| ------------------------- | ------------------------------------------------------------------ |
+| Linux                     | supported; where it is developed and tested                        |
+| macOS                     | supported; `brew install jq coreutils` (`gtimeout` is accepted)    |
+| Windows, WSL              | supported inside WSL; the hooks are bash                           |
+| Windows, native           | **not supported** — the hooks are bash scripts and need `jq`       |
+
+Without `timeout`/`gtimeout` capture still runs, only without a wall-clock limit.
+
+### How this differs from a Zotero MCP server
+
+Every other Claude-to-Zotero integration ([zotero-mcp](https://github.com/54yyyu/zotero-mcp),
+[Zoteus](https://forums.zotero.org/discussion/132067/), [ZoFiles](https://github.com/X1AOX1A/ZoFiles),
+[llm-for-zotero](https://github.com/yilewang/llm-for-zotero) and the hosted ones) lets the
+model read or write your library **when it is asked to**. This plugin captures **every URL
+the model actually cited**, whether or not anyone asked, from a hook the model cannot skip,
+and then keeps checking that those pages still say what they said. The two are
+complementary: one is a tool the agent uses, this is a record of what the agent used.
+
 ## What a captured item looks like
 
 ```
@@ -113,7 +154,7 @@ because the bare URL is not a claim about anything.
 Claims are recorded going forward only. The sentence around a URL cited before this
 existed cannot be recovered — the conversation is not kept.
 
-## Install
+## Install details
 
 ```
 /plugin marketplace add musharna/zotero-provenance

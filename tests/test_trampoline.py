@@ -470,7 +470,7 @@ def test_an_unresolvable_forward_is_reported_not_silent(tmp_path: Path, hook: st
     log = tmp_path / "state" / "capture.log"
     assert log.exists(), "the refusal left no record"
     lines = log.read_text().splitlines()
-    assert any('"forward-unresolved"' in l for l in lines), lines
+    assert any('"forward-unresolved"' in line for line in lines), lines
     from datetime import datetime, timedelta
 
     warnings = evaluate(lines, pinned_root=None, now=datetime.now().astimezone(), window=timedelta(hours=24))
