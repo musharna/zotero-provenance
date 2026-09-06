@@ -441,6 +441,14 @@ def main(argv: list[str] | None = None) -> int:
                 },
             )
         return 0
+    except HookTerminated as e:
+        # The hook's own `timeout`. A BaseException on purpose so the per-URL
+        # loop cannot swallow it, which means it arrives HERE and nowhere
+        # else catches it: left alone it printed a traceback that health
+        # counted as an unreadable log, and the next success erased. It is a
+        # refusal of ours and is recorded as one.
+        _emit_bootstrap_event("hook-terminated", str(e))
+        return 0
     except Exception as e:
         logging.exception("zotero-provenance capture failed")
         _emit_bootstrap_event("capture-bootstrap-error", f"{type(e).__name__}: {e}")
