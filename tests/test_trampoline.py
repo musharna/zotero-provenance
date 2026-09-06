@@ -432,3 +432,46 @@ def test_a_failing_jq_does_not_yield_a_usable_candidate(
     assert proc.returncode == 0, proc.stderr
     assert _stays_absent(setup["marker"]), f"accepted a candidate from a failed jq ({order})"
     assert _stays_absent(argv_out), "captured from a superseded root"
+
+
+# --- 0.60.0: the health hook forwards too, and a refusal is reported ----------
+
+
+@requires_jq
+def test_health_hook_forwards_from_a_superseded_root(tmp_path: Path) -> None:
+    """HOOKS above lists the two capture hooks; the health hook carries the
+    same byte-identical block and nothing drove it. A monitor that ran its
+    own superseded code would report on rules a later release corrected."""
+    setup = _install(tmp_path, mine="0.9.0", pinned="1.0.0", hook="session-health.sh")
+    proc = _run(setup["hook"], _env(tmp_path, setup["home"]), {"session_id": "s1"})
+
+    assert proc.returncode == 0, proc.stderr
+    assert _appears(setup["marker"]), f"health hook never forwarded; stderr: {proc.stderr!r}"
+
+
+@pytest.mark.parametrize("hook", HOOKS)
+def test_an_unresolvable_forward_is_reported_not_silent(tmp_path: Path, hook: str) -> None:
+    """Deliberately NOT gated on jq. Without jq every superseded root resolves
+    no target and takes this exact branch, so on a machine without jq the
+    whole trampoline suite used to skip and the one behaviour that machine
+    depends on went untested. Refusing is right; refusing SILENTLY is the
+    failure class the health check exists for."""
+    from zotero_capture.health import evaluate
+
+    setup = _install(tmp_path, mine="0.9.0", pinned="1.0.0", hook=hook)
+    (setup["home"] / ".claude" / "plugins" / "installed_plugins.json").unlink()
+    argv_out = _fake_python(tmp_path)
+
+    proc = _run(setup["hook"], _env(tmp_path, setup["home"]), _payload())
+
+    assert proc.returncode == 0, proc.stderr
+    assert _stays_absent(setup["marker"])
+    assert _stays_absent(argv_out), "stale root captured with no way to check itself"
+    log = tmp_path / "state" / "capture.log"
+    assert log.exists(), "the refusal left no record"
+    lines = log.read_text().splitlines()
+    assert any('"forward-unresolved"' in l for l in lines), lines
+    from datetime import datetime, timedelta
+
+    warnings = evaluate(lines, pinned_root=None, now=datetime.now().astimezone(), window=timedelta(hours=24))
+    assert any("forward-unresolved" in w for w in warnings), warnings
