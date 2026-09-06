@@ -330,7 +330,7 @@ def test_extract_strips_sentence_punctuation_after_a_balanced_paren():
         ("http://127.0.0.1/x", True),
         ("http://0.0.0.0:8080/x", True),
         ("https://homelab.tail-abc12.ts.net/grafana", True),
-        ("https://100.113.204.41:8765/jobs", True),
+        ("https://100.64.0.1:8765/jobs", True),
         ("http://10.0.0.110/", True),
         ("http://192.168.1.1/", True),
         ("http://172.16.5.5/", True),
@@ -354,7 +354,7 @@ def test_extract_strips_sentence_punctuation_after_a_balanced_paren():
         ),
         ("https://upload.wikimedia.org/wikipedia/commons/3/3e/A_rose_bush.jpg", True),
         (
-            "https://raw.githubusercontent.com/musharna/stackhealth/main/stackhealth.py",
+            "https://raw.githubusercontent.com/someone/a-tool/main/a-tool.py",
             False,
         ),
         ("https://fixturehost.org/theme.css", True),
@@ -368,7 +368,7 @@ def test_extract_strips_sentence_punctuation_after_a_balanced_paren():
             False,
         ),
         (
-            "https://github.com/musharna/stackhealth/actions/workflows/smoke.yml/badge.svg",
+            "https://github.com/someone/a-tool/actions/workflows/smoke.yml/badge.svg",
             False,
         ),
         ("https://commons.wikimedia.org/wiki/File:Glycine_max_kz01.jpg", False),

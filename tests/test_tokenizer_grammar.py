@@ -34,8 +34,8 @@ def test_a_trailing_pipe_in_prose_is_not_part_of_the_url():
 
 
 def test_a_padded_table_cell_yields_the_url_without_its_delimiters():
-    assert extract_urls("| repo | https://github.com/musharna/ARFDSynInt.git |") == [
-        "https://github.com/musharna/ARFDSynInt.git"
+    assert extract_urls("| repo | https://github.com/someone/some-repo.git |") == [
+        "https://github.com/someone/some-repo.git"
     ]
 
 
@@ -53,7 +53,7 @@ def test_an_unpadded_table_cell_yields_nothing_and_that_is_the_accepted_cost():
     the letters after the URL belong to the next cell, not the address. Padded
     rows, which is what almost every generator emits, work.
     """
-    assert extract_urls("|repo|https://github.com/musharna/ARFDSynInt.git|") == []
+    assert extract_urls("|repo|https://github.com/someone/some-repo.git|") == []
 
 
 def test_a_brace_placeholder_is_dropped_rather_than_absorbed():
@@ -93,8 +93,8 @@ def test_an_apostrophe_ends_the_url_although_the_grammar_allows_it():
     none was URL data. Admitting it would corrupt those seven; excluding it only
     costs a URL that could have written %27.
     """
-    assert extract_urls("cloned https://github.com/musharna/figcite.git' today") == [
-        "https://github.com/musharna/figcite.git"
+    assert extract_urls("cloned https://github.com/someone/a-repo.git' today") == [
+        "https://github.com/someone/a-repo.git"
     ]
 
 

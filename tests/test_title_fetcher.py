@@ -410,7 +410,7 @@ def test_live_github_resolves_to_owner_repo(live_client):
 @pytest.mark.live
 def test_live_dead_github_repo_stays_unresolved(live_client):
     """Positive control for the negative: a live 404 must not invent a title."""
-    url = "https://github.com/musharna/definitely-not-a-real-repo-zp"
+    url = "https://github.com/someone/definitely-not-a-real-repo-zp"
     assert fetch_title(url, client=live_client) == url
 
 

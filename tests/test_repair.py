@@ -171,8 +171,8 @@ def test_the_repair_runs_against_an_index_written_by_an_older_release(tmp_path):
         ("https://cloud.r-project.org\\", "https://cloud.r-project.org"),
         # An unpadded table cell.
         (
-            "https://github.com/musharna/ARFDSynInt.git|",
-            "https://github.com/musharna/ARFDSynInt.git",
+            "https://github.com/someone/some-repo.git|",
+            "https://github.com/someone/some-repo.git",
         ),
         # An ANSI reset from a stack trace pasted into a message.
         ("https://sqlalche.me/e/20/e3q8\x1b[0m\x1b[4;94m", "https://sqlalche.me/e/20/e3q8"),
@@ -202,7 +202,7 @@ def test_a_cut_that_leaves_no_host_is_not_a_repair():
 def test_a_merge_does_not_carry_the_duplicate_s_unresolved_title_tag(tmp_path):
     """Provenance moves across a merge; the duplicate's title state does not.
 
-    Observed live: repairing "…/ARFDSynInt.git|" merged it into the clean row,
+    Observed live: repairing "…/some-repo.git|" merged it into the clean row,
     and the survivor — which had a perfectly good title — came out tagged
     title:unresolved. That sticks, because title_is_unresolved() trusts the tag
     over the title in front of it, so the item reads as junk forever.

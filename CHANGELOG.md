@@ -8,6 +8,7 @@ Read the index for *what changed*; read the entry for *why*.
 
 | version | date | headline |
 |---|---|---|
+| 0.62.3 | 2026-09-06 | The maintainer's identity was fixture data in a tree about to go public |
 | 0.62.2 | 2026-09-06 | On Python 3.10 the health check could not read a single record |
 | 0.62.1 | 2026-09-06 | CI's first run: the new dependency guard imported `tomllib`, which 3.10 does not have |
 | 0.62.0 | 2026-09-06 | Readiness for a stranger's first install |
@@ -35,7 +36,7 @@ Read the index for *what changed*; read the entry for *why*.
 | 0.42.0 | 2026-09-01 | A URL move now writes both stores, or neither |
 | 0.41.0 | 2026-08-31 | 34 rows in the live index hold a PREFIX of the address that was cited, and `snapshot` was stamping them `gone` |
 | 0.40.0 | 2026-08-31 | 53 rows recorded `blocked` against Wikimedia for a page it serves to anyone who asks politely |
-| 0.39.0 | 2026-08-30 | 219 rows asserted that the owner's own private pull requests no longer exist |
+| 0.39.0 | 2026-08-30 | 219 rows asserted that private pull requests of the maintainer no longer exist |
 | 0.38.1 | 2026-08-30 | The "who refused us" tally merged 403s with 404s, and the backfill exposed it immediately |
 | 0.38.0 | 2026-08-30 | 177 rows recorded `blocked` against doi.org, and doi.org had done nothing wrong |
 | 0.37.0 | 2026-08-30 | `snapshot_pages.py` ran for over an hour against the live index and printed nothing at all |
@@ -89,6 +90,31 @@ Read the index for *what changed*; read the entry for *why*.
 | 0.1.0 | 2026-08-20 | Initial release: capture hook, commands, end-to-end tests, README. |
 
 ---
+
+## 0.62.3 — 2026-09-06
+
+### The maintainer's identity was fixture data in a tree about to go public
+
+A release-readiness review (four independent reviewers, then a git pass they
+could not run) found no credential anywhere in the tree or its history, and
+found the maintainer in it four times: a real hostname in a name-only-host
+fixture, a real tailnet address in the private-range table, a real Zotero
+library id in the identity tests, and five private repositories named as
+examples in the visibility tests and a docstring. None is a secret. All are
+loud on a stranger's first read.
+
+- Every site now carries a synthetic value. The guard is mechanical:
+  `tests/test_no_owner_identifiers.py` walks `git ls-files` and refuses the
+  hostname, any address in the carrier-grade NAT range other than its first
+  host, the library id, and the handle anywhere but the plugin's own
+  repository URL. It was seen red on the tree before the scrub and red again
+  when one hostname was put back.
+- The README install block now includes `jq`. It was named in the prose and
+  absent from the copy-paste block, and without it the capture hooks' resolver
+  gate fails and capture drops every URL silently until the next session start.
+- CHANGELOG wording about "the owner's own" rows now says the maintainer's.
+  The history still carries the old strings, which are identifiers and not
+  secrets, and has not been rewritten.
 
 ## 0.62.2 — 2026-09-06
 
@@ -1298,7 +1324,7 @@ Read the index for *what changed*; read the entry for *why*.
   direction.** GitHub 404s a private repository on purpose, so anonymously
   "deleted" and "not yours to see" are identical. 0.39.0 discriminated the rows
   whose immediate parent is also hidden, but a repo ROOT's parent is a public
-  profile page — leaving 15 rows asserting the owner's own private repositories
+  profile page — leaving 15 rows asserting the maintainer's private repositories
   were dead links, `musharna/zotero-provenance` among them. New
   `scripts/corroborate_github.py` asks `/repos/{owner}/{repo}` for EXISTENCE
   ONLY: it never fetches, hashes or stores repository content, and the only
@@ -1470,7 +1496,7 @@ Identity belongs to the client, not to whoever remembers to send it.
 
 A 404 to an anonymous request is not proof the page is gone.
 
-- **219 rows asserted that the owner's own private pull requests no longer
+- **219 rows asserted that private pull requests of the maintainer no longer
   exist.** They exist. GitHub answers 404 rather than 403 for private
   repositories, deliberately, so it does not leak which ones are there — and
   `classify_failure` took the status at face value and wrote `gone`. Proven

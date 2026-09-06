@@ -689,7 +689,7 @@ def absence_is_corroborated(url: str, *, visible: Callable[[str], bool]) -> bool
     "there, and not visible to you" -- and hosts deliberately answer the second
     with the first. GitHub does exactly this for private repositories, so it does
     not leak which ones exist; 219 rows in the live index recorded `gone` for the
-    owner's own private pull requests, every one of which returns 200 and a real
+    maintainer's private pull requests, every one of which returns 200 and a real
     title to an authenticated request.
 
     The discriminator is CONTAINMENT, and it needs no credentials and one extra
@@ -697,11 +697,11 @@ def absence_is_corroborated(url: str, *, visible: Callable[[str], bool]) -> bool
     hidden from us and absence cannot be claimed. If the parent answers and only
     the leaf is missing, the leaf really is missing. Measured on both:
 
-        private repo   /musharna/orchid-sdxl/pull/3  404, parent /pull  404
-        public repo    /musharna/ghostcite/pull/99999 404, parent /pull 200
+        private repo   /someone/private-repo/pull/3  404, parent /pull  404
+        public repo    /someone/public-repo/pull/99999 404, parent /pull 200
 
     The IMMEDIATE parent, not the topmost reachable ancestor: in the private case
-    `/musharna` answers 200 (a user profile is public), so walking to the top
+    `/someone` answers 200 (a user profile is public), so walking to the top
     would have called it corroborated and re-made the same false claim.
 
     A URL with no parent keeps `gone`. There is nothing left to ask, and refusing

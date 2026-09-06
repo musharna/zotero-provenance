@@ -79,7 +79,7 @@ def test_a_missing_leaf_under_an_invisible_parent_is_not_proof() -> None:
 
 def test_only_the_IMMEDIATE_parent_is_consulted() -> None:
     """The subtlety, measured on the real thing before it was written. For the
-    private repo, `/musharna` answers 200 because a user profile is public, so a
+    private repo, `/someone` answers 200 because a user profile is public, so a
     rule that walked up to the topmost reachable ancestor would have called the
     absence corroborated and re-made the same false claim."""
     asked: list[str] = []
