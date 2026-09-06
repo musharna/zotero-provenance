@@ -69,6 +69,11 @@ class CaptureResult:
     # Claim links written to the LOCAL index. Never sent anywhere: see claims.py.
     claims_recorded: int = 0
     errors: list[CaptureFailure] = field(default_factory=list)
+    # URLs this run did NOT write because another claim on them is still
+    # inside its window. Not an error -- the other session may land it -- but
+    # not a clean run for that URL either: a drain that read "no errors" as
+    # "recovered" dequeued the only record that anything was owed (0.58.0).
+    urls_deferred: list[str] = field(default_factory=list)
     # Why this run wrote nothing, when the reason was a deliberate refusal
     # rather than an absence of URLs. Without it a refusal is byte-identical to
     # a healthy message that cited nothing, which is how the health check came
@@ -424,6 +429,23 @@ def capture_message(
                         # _resolve_claim settles it later by asking Zotero.
                         if not issued:
                             release_url(db_path, url, pending_key=pending_key)
+                        else:
+                            # The POST went out and was cut off. The claim
+                            # stands (Zotero may have committed it), but
+                            # nothing would ever revisit it: _resolve_claim
+                            # runs only when the URL is cited AGAIN, and two
+                            # live rows sat that way for five and six days.
+                            # Queue it, so a drain replays it through the
+                            # reservation and settles it by asking Zotero.
+                            enqueue_retry(
+                                db_path,
+                                url_canonical=url,
+                                project=project_slug,
+                                context=context,
+                                seen_date=today_iso,
+                                error="interrupted after the POST was issued",
+                                now=now.isoformat(),
+                            )
                         raise
                     if not set_zotero_key(db_path, url, key, pending_key=pending_key):
                         # set_zotero_key is a compare-and-swap and its result
@@ -469,6 +491,7 @@ def capture_message(
                 # real, so queue its provenance for whoever completes the item.
                 logger.debug("%s is claimed by another session; deferring", url)
                 queue_pending_tags(db_path, url, [seen_tag, context_tag, project_tag])
+                result.urls_deferred.append(url)
                 continue
             # Peek, write, THEN clear. take_pending_tags() commits its DELETE
             # before add_tags is even called, so a transient Zotero error used

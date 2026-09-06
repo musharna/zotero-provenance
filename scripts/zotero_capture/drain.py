@@ -103,7 +103,11 @@ def drain(
         # count as it goes, so a still-failing entry needs nothing done to it
         # here. Only a clean run earns a dequeue.
         errors = getattr(outcome, "errors", None) or []
-        if any(getattr(e, "url", None) == url for e in errors):
+        deferred = getattr(outcome, "urls_deferred", None) or []
+        if any(getattr(e, "url", None) == url for e in errors) or url in deferred:
+            # A deferral is not a failure and not a recovery: the claim is
+            # inside its window and will be settled by a later pass. Leaving
+            # the entry alone (no attempt counted) is the only honest move.
             result.still_failing += 1
             result.still_failing_urls.append(url)
             continue
