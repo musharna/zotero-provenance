@@ -649,6 +649,7 @@ NO_CONTENT = "no_content"
 # question -- what happened the last time we looked at this page.
 UNCHANGED = "unchanged"          # complete digest, identical
 PREFIX_AGREED = "prefix_agreed"  # agreed over a prefix; the tail was never compared
+INCOMPARABLE = "incomparable"    # stored whole, re-read short, digests differ: nothing compared
 CHANGED = "changed"              # differed, and said so twice
 UNSTABLE = "unstable"            # did not agree with ITSELF; says nothing about drift
 # A page whose per-request bytes move but whose document does not. Deliberately
@@ -822,6 +823,10 @@ class VerifyResult:
     # tell it was hollow.
     partial_match: int = 0
     partial_match_urls: list[str] = field(default_factory=list)
+    # Stored whole, re-read short, and the digests DIFFER. The spans do not
+    # correspond, so nothing was compared -- which is not "prefix agreed".
+    incomparable: int = 0
+    incomparable_urls: list[str] = field(default_factory=list)
     internal_errors: int = 0
     changed_urls: list[str] = field(default_factory=list)
     # url -> how much of the document a change left in place, or None when the
@@ -1425,10 +1430,13 @@ def verify(
         if not was_truncated and not read.complete:
             # Stored whole, read short. The digests differ, but they cover
             # different spans, so the difference is not evidence about the
-            # source -- see the note above.
-            result.partial_match += 1
-            result.partial_match_urls.append(url)
-            conclude(url, PREFIX_AGREED)
+            # source -- see the note above. Until 0.61.0 this was stamped
+            # `prefix_agreed`, whose report line says "only the first bytes
+            # are covered". Nothing agreed; `unreachable` meaning gone AND
+            # blocked was this same collapse of two facts into one word.
+            result.incomparable += 1
+            result.incomparable_urls.append(url)
+            conclude(url, INCOMPARABLE)
             continue
         # The verdict is unchanged: a whole-document hash differs, so something
         # about the response moved and this row still says so. What is added is
@@ -1528,6 +1536,10 @@ def format_verify_report(result: VerifyResult) -> list[str]:
         for url in result.partial_match_urls
     ]
     lines += [
+        f"  incomparable: {url}  (stored whole, re-read short; nothing compared)"
+        for url in result.incomparable_urls
+    ]
+    lines += [
         f"  DOCUMENT CHANGED: {url}  (its per-request bytes aside)"
         for url in result.stable_changed_urls
     ]
@@ -1539,6 +1551,7 @@ def format_verify_report(result: VerifyResult) -> list[str]:
     lines.append(f"examined      : {result.examined}")
     lines.append(f"unchanged     : {result.unchanged}")
     lines.append(f"prefix agreed : {result.partial_match}  (tail never compared)")
+    lines.append(f"incomparable  : {result.incomparable}  (spans differ; nothing compared)")
     lines.append(f"CHANGED       : {result.changed}")
     lines.append(f"unreachable   : {result.unreachable}")
     lines.append(
