@@ -26,8 +26,10 @@ from zotero_capture.health_ledger import (  # noqa: E402
     acknowledge,
     acknowledge_all,
     count_open,
+    mutation_id,
     open_incident,
     open_incidents,
+    roots_recorded,
 )
 from zotero_capture.opjournal import unfinished_operations  # noqa: E402
 from zotero_capture.registry import resolve_pinned  # noqa: E402
@@ -152,18 +154,28 @@ def _migrate_legacy(state: Path, ledger: Path, pinned: str | None) -> None:
     try:
         with _log_lines(state) as lines:
             found = incidents(lines, pinned_root=pinned, require_id=False)
-        # ONLY records that could not journal themselves. A record carrying an
-        # incident_id wrote its own ledger row when it ran, and re-importing it
-        # under a capture-scoped key now DUPLICATES that row: while the ledger
-        # key was the capture id the re-import hit ON CONFLICT DO NOTHING and
-        # vanished, but 0.21.0 made row ids per-mutation, so it no longer
-        # collides. That accidental dedup was the only thing keeping this
-        # honest, and 0.21.0's CHANGELOG named the gap it left.
-        found = [i for i in found if str(i["id"]).startswith("legacy:")]
+        # A record carrying an incident_id journalled its own per-mutation rows
+        # when it ran, and importing it again under a capture-scoped key would
+        # add a second incident for one write (0.21.0 made row ids
+        # per-mutation, so ON CONFLICT no longer absorbs it). Until 0.60.0
+        # that was handled by importing ONLY `legacy:` records -- which meant
+        # that if health.db was lost, every post-0.19 stale write in the log
+        # became unreportable for good. The honest discriminator is whether
+        # the WRITER's journal survived: a root with any ledger row wrote its
+        # own; a root with none is imported from the log, under the same pure
+        # key the capture would have used, so a replay lands on the same row.
+        journalled = roots_recorded(ledger)
         for item in found:
+            rid = str(item["id"])
+            if rid.startswith("legacy:"):
+                key = rid
+            elif item["root"] in journalled:
+                continue
+            else:
+                key = mutation_id(rid, None)
             open_incident(
                 ledger,
-                incident_id=item["id"],
+                incident_id=key,
                 url=item.get("url"),
                 root=item["root"],
                 pinned_root=pinned,
