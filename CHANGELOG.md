@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.58.0 — 2026-09-06
+
+- **A hook timeout left no record, and a POST it cut off was never revisited.**
+  `HookTerminated` derives from `BaseException` on purpose, so the per-URL
+  loop cannot swallow it -- and `main()` caught only `Exception`, so it
+  escaped as a raw traceback into `capture.log`. Health read those lines as
+  "the last N lines are unreadable", and the next successful capture erased
+  the finding. The live log held two of them. Worse: when the timeout landed
+  after the POST had gone out, the claim was correctly kept (Zotero may have
+  committed) but nothing would ever revisit it, because `_resolve_claim` runs
+  only when the URL is cited AGAIN. Two live rows (pending `IR5PD8S6`,
+  claimed 08-30; `8LUQ8R4J`, 09-01) sat that way for five and six days,
+  listed by `verify_index` under "claims still in flight".
+
+  Fixed at the layer that raises: `main()` records `hook-terminated` as a
+  structured event, and health counts it as a refusal (a fact about us).
+  A POST cut off after `issued = True` is queued for retry; a drain replays
+  it through the reservation, and `_resolve_claim` settles it by asking
+  Zotero for the pending key -- measured on the first test written, with no
+  second POST (the positive control against duplicates).
+
+  Found while writing that test: a drain that ran INSIDE the 60-second claim
+  window read a deferral ("held by another session") as a clean run and
+  dequeued the only record that anything was owed. `CaptureResult` now
+  carries `urls_deferred`, and a drain leaves such an entry alone without
+  counting an attempt.
+
+  `verify_index` prints each unfinished claim's age: `claimed 12s ago; in
+  flight` or `claimed 6d ago; cut off -- drain_queue settles it`.
+
+  Mutations, all caught first round: the timeout uncaught in `main`; the
+  event dropped from `REFUSAL_EVENTS`; the cut-off POST not queued; the drain
+  dequeuing a deferred entry; the age note saying "in flight" forever.
+
+  Audit finding H1 of `audit_whole_repo_2026-09-06.md`.
+
 ## 0.57.0 — 2026-09-05
 
 - **A refusal was hashed as the document, and then reported as an intact
