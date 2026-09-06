@@ -48,6 +48,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .opjournal import OperationJournal
 from .repair import repaired_url
 from .url_processing import (
     EXCLUDE_HOSTS_EXACT,
@@ -202,12 +203,32 @@ def apply_retire(
     db_path: Path,
     zotero: ZoteroClient,
     connect,
+    clock=None,
 ) -> dict[str, int]:
-    """Carry out a plan: journal the row, trash the item, then drop the row."""
+    """Carry out a plan: journal the row, trash the item, then drop the row.
+
+    Framed by an OperationJournal like every other destructive pass, so
+    `unfinished_operations` can see a retire that died halfway; the per-row
+    journal below is the RECOVERY record (the full row), and the operation
+    journal is the PROGRESS record. `clock` is read per row: one stamp per
+    run wrote the run's start into every `retired_at` (0.61.0).
+    """
     counts = {"trashed": 0, "row_only": 0, "failed": 0, "skipped": 0}
-    stamp = datetime.now(timezone.utc).isoformat()
+    clock = clock or (lambda: datetime.now(timezone.utc).isoformat())
     journal = journal_path(db_path)
+    with OperationJournal(db_path, "retire") as ops:
+        _retire_steps(steps, db_path=db_path, zotero=zotero, connect=connect,
+                      clock=clock, journal=journal, ops=ops, counts=counts)
+    return counts
+
+
+def _retire_steps(steps, *, db_path, zotero, connect, clock, journal, ops, counts) -> None:
     for step in steps:
+        seq = ops.step(
+            target=step.url,
+            action="trash" if step.zotero_key else "row_only",
+            before={"zotero_key": step.zotero_key, "reason": step.reason},
+        )
         try:
             # Journal BEFORE anything is destroyed. Zotero's trash restores the
             # item but not the sighting history, so without this the index half
@@ -227,7 +248,7 @@ def apply_retire(
                 fh.write(
                     json.dumps(
                         {
-                            "retired_at": stamp,
+                            "retired_at": clock(),
                             "reason": step.reason,
                             "tier": step.tier,
                             "row": dict(row) if row is not None else None,
@@ -240,6 +261,7 @@ def apply_retire(
                 # expect_url: the plan can be minutes old, and an item that has
                 # become something else is no longer the one that was judged.
                 if not zotero.trash_item(step.zotero_key, expect_url=step.url):
+                    ops.outcome(seq, "refused", "no longer the planned item")
                     counts["skipped"] += 1
                     continue
                 counts["trashed"] += 1
@@ -270,7 +292,8 @@ def apply_retire(
                     "new row alone",
                     step.zotero_key or "(none)",
                 )
+            ops.outcome(seq, "done" if dropped else "refused", "" if dropped else "row replaced")
         except Exception as e:  # noqa: BLE001 - one bad row must not stop the pass
             logger.error("retire failed for %s: %s", step.url, e)
+            ops.outcome(seq, "failed", str(e))
             counts["failed"] += 1
-    return counts
