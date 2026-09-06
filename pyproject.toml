@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "zotero-provenance"
-version = "0.62.0"
+version = "0.62.1"
 description = "Record the sources a Claude Code session cites into a Zotero collection"
 readme = "README.md"
 license = "MIT"
