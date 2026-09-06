@@ -87,12 +87,15 @@ def main(argv: list[str] | None = None) -> int:
     init_db(db_path)
     rows = _read_rows(db_path)
     steps = plan_retire(rows, include_policy=args.policy)
+    # Counted against the PLAN, before the slice: computed after `--limit`
+    # truncated `steps`, "N more are policy exclusions" reported the rows the
+    # limit held back as if policy had.
+    held = 0 if args.policy else len(plan_retire(rows, include_policy=True)) - len(steps)
     if args.limit is not None:
         steps = steps[: args.limit]
 
     by_reason = Counter(s.reason for s in steps)
     if not args.policy:
-        held = len(plan_retire(rows, include_policy=True)) - len(steps)
         if held:
             print(f"({held} more are policy exclusions; pass --policy to include them)")
     print(f"index rows: {len(rows)}")
