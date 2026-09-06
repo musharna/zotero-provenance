@@ -204,6 +204,7 @@ def _emit_log(
     identity: dict[str, str] | None = None,
     pinned_root: str | None = None,
     incident_id: str | None = None,
+    session: str = "",
 ) -> None:
     """Append one JSON line per capture, including WHO captured.
 
@@ -246,6 +247,9 @@ def _emit_log(
         # second, so acknowledging one silenced another that was never shown.
         # Minted before the capture ran, not here. See run_capture.
         **({"incident_id": incident_id} if incident_id else {}),
+        # The hook passed this on every fire since 0.1 and nothing read it, so
+        # no log line could be joined to the session that wrote it (0.60.0).
+        **({"session": session} if session else {}),
         # Observed BEFORE the capture, not after: reading it afterwards let a
         # registry change mid-capture record a pin the write never ran under,
         # fabricating a stale write that never happened (and, reversed, hiding a
@@ -290,8 +294,13 @@ def run_capture(
     origin: str = "assistant",
     ledger_path: Path,
     identity: dict[str, str] | None = None,
+    session: str = "",
+    message_from_stdin: bool = False,
 ) -> CaptureResult:
-    text: str = sys.stdin.read() if message is None else message
+    # The flag names the source. Before 0.60.0 stdin was read whenever
+    # `--message` was absent and the flag itself was never consulted; both
+    # hooks passed it on every fire.
+    text: str = sys.stdin.read() if (message_from_stdin or message is None) else message
     # Read the authorisation state BEFORE the work it authorises.
     pinned_root = _observed_pinned_root()
     # Created BEFORE the work it names. It used to be minted inside _emit_log,
@@ -339,6 +348,7 @@ def run_capture(
         latency_ms=latency_ms,
         pinned_root=pinned_root,
         incident_id=incident_id,
+        session=session,
     )
     return result
 
@@ -433,6 +443,8 @@ def main(argv: list[str] | None = None) -> int:
                 title_fetcher=fetch_title,
                 log_path=log_path,
                 origin=args.origin,
+                session=args.session,
+                message_from_stdin=args.message_from_stdin,
                 identity={
                     "api_origin": api_base(),
                     "library_type": config.library_type,
