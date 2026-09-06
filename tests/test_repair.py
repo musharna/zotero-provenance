@@ -320,6 +320,65 @@ def test_a_merge_is_refused_when_the_survivor_has_no_item(tmp_path):
     with connect(db) as conn:
         surviving = sorted(r[0] for r in conn.execute("SELECT url_canonical FROM url_index"))
     assert surviving == ["https://h.example/path", "https://h.example/path|"]
+    # 0.61.0: a refusal closes its journal step. It `continue`d after
+    # journal.step() with no outcome, so it read as an interrupted operation.
+    from zotero_capture.opjournal import unfinished_operations
+
+    assert unfinished_operations(db) == []
+
+
+def test_a_merge_refused_at_the_trash_leaves_the_survivor_s_tags_alone(tmp_path):
+    """add_tags(survivor) ran BEFORE the trash compare-and-swap, so a refused
+    trash left the duplicate's tags on the survivor with the duplicate still
+    live -- half a merge, journalled as nothing."""
+    import sqlite3
+
+    from zotero_capture.opjournal import unfinished_operations
+    from zotero_capture.repair import apply_repair, plan_repair
+    from zotero_capture.sqlite_cache import init_db
+
+    db = tmp_path / "index.db"
+    init_db(db)
+
+    def connect(path):
+        conn = sqlite3.connect(path, isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    with connect(db) as conn:
+        conn.execute(
+            "INSERT INTO url_index (url_canonical, zotero_key, first_seen, last_seen)"
+            " VALUES ('https://h.example/path', 'GOODITEM', '2026-01-01', '2026-01-01')"
+        )
+        conn.execute(
+            "INSERT INTO url_index (url_canonical, zotero_key, first_seen, last_seen)"
+            " VALUES ('https://h.example/path|', 'BADITEM', '2026-01-01', '2026-01-01')"
+        )
+        rows = [dict(r) for r in conn.execute("SELECT url_canonical, zotero_key FROM url_index")]
+
+    class _Zotero:
+        def __init__(self):
+            self.tagged: list = []
+
+        def item_exists(self, key):
+            return True
+
+        def get_item_tags(self, key):
+            return ["project:x"]
+
+        def add_tags(self, key, tags, **kw):
+            self.tagged.append((key, sorted(tags)))
+            return True
+
+        def trash_item(self, key, *, expect_url=None):
+            return False  # no longer the item that was planned
+
+    z = _Zotero()
+    counts = apply_repair(plan_repair(rows), db_path=db, zotero=z, connect=connect)
+
+    assert counts["merge"] == 0 and counts["skip"] == 1
+    assert z.tagged == [], "tags moved onto the survivor for a merge that did not happen"
+    assert unfinished_operations(db) == []
 
 
 def test_a_merge_still_happens_when_the_survivor_is_a_real_item(tmp_path):

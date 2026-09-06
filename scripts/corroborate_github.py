@@ -46,8 +46,11 @@ from zotero_capture.snapshot import GONE, NOT_VISIBLE  # noqa: E402
 from zotero_capture.sqlite_cache import init_db, set_fetch_outcome  # noqa: E402
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, clock=None) -> int:
     configure_cli_logging()
+    # Read per ROW inside the loop. One value taken before the loop stamped
+    # every downgrade with the run's start -- the `hashed_at` shape (0.61.0).
+    clock = clock or (lambda: datetime.now(timezone.utc).isoformat())
     p = argparse.ArgumentParser(prog="corroborate-github")
     p.add_argument("--apply", action="store_true")
     p.add_argument("--db-path", default=None)
@@ -69,7 +72,7 @@ def main(argv: list[str] | None = None) -> int:
         rows = [
             dict(r)
             for r in conn.execute(
-                "SELECT url_canonical, last_outcome FROM url_index"
+                "SELECT url_canonical, last_outcome, final_url FROM url_index"
                 " WHERE last_outcome = ?",
                 (GONE,),
             )
@@ -103,7 +106,6 @@ def main(argv: list[str] | None = None) -> int:
         print("Dry run. Nothing changed. Re-run with --apply.")
         return 0
 
-    now = datetime.now(timezone.utc).isoformat()
     done = 0
     with OperationJournal(db, "corroborate-github", args="--apply") as J:
         for r, slug in changed:
@@ -112,10 +114,13 @@ def main(argv: list[str] | None = None) -> int:
                 action="downgrade",
                 before={"url": r["url_canonical"], "outcome": r["last_outcome"]},
             )
-            # final_url is '' on purpose: it means "we never found out where the
-            # request ended", and we did not make a web request at all here.
+            # final_url is KEPT. '' means "we never found out where the request
+            # ended"; the fetch that produced this row's outcome did find out,
+            # and downgrading the outcome must not erase the host that
+            # answered. Until 0.61.0 this wrote '' over a recorded address.
             if set_fetch_outcome(
-                db, r["url_canonical"], outcome=NOT_VISIBLE, at=now, final_url=""
+                db, r["url_canonical"], outcome=NOT_VISIBLE, at=clock(),
+                final_url=r["final_url"] or "",
             ):
                 J.outcome(seq, "done")
                 done += 1

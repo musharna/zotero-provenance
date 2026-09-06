@@ -282,6 +282,7 @@ def _apply_repair(
                         step.url,
                         step.corrected,
                     )
+                    journal.outcome(seq, "refused", "survivor has no item")
                     counts["skip"] += 1
                     continue
                 # Provenance moves; state does not. "title:unresolved" describes
@@ -311,16 +312,20 @@ def _apply_repair(
                         (step.url,),
                     ).fetchone()
                 tags = sorted(set(tags) | set(queued))
-                if tags:
-                    zotero.add_tags(survivor_key, tags)
+                # Trash FIRST, then move the tags. The other order left the
+                # duplicate's tags on the survivor when the compare-and-swap
+                # refused -- half a merge, with the duplicate still live.
                 if not zotero.trash_item(step.zotero_key, expect_url=step.url):
                     logger.warning(
                         "skipping merge of %s: it is no longer the item that was "
                         "planned",
                         step.url,
                     )
+                    journal.outcome(seq, "refused", "no longer the planned item")
                     counts["skip"] += 1
                     continue
+                if tags:
+                    zotero.add_tags(survivor_key, tags)
                 with connect(db_path) as conn:
                     merged = conn.execute(
                         "DELETE FROM url_index"

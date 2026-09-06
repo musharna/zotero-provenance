@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.61.0 — 2026-09-06
+
+- **"Prefix agreed" was stamped when nothing agreed.** A row stored whole
+  and re-read short, with DIFFERENT digests, has two spans that do not
+  correspond; nothing was compared. It was recorded `prefix_agreed`, whose
+  report line says "only the first bytes are covered". New outcome word
+  `incomparable`, its own count and report line; `prefix_agreed` is kept
+  for the case where a prefix digest actually matched (the positive
+  control). 0 of 15 live `prefix_agreed` rows were of the wrong kind, so
+  the blast radius was future-only.
+
+- **A downgrade stamped the run, not the event, and erased the host that
+  answered.** `corroborate_github --apply` took one `now` before its loop
+  and wrote `final_url=""` -- which means "never found out" -- over the
+  address the original fetch had recorded. The clock is read per row and
+  the recorded host is kept. First test for that script.
+
+- **Retire was the one destructive pass not framed by the operation
+  journal.** It kept its own per-row recovery journal and nothing else, so
+  `unfinished_operations` could not see a retire that died halfway, while
+  the opjournal docstring said the gap was closed. Framed now (start,
+  step, outcome, end), and `retired_at` is read per row instead of once
+  per run -- the `hashed_at` shape, again.
+
+- **A refused merge left half a merge.** `add_tags(survivor)` ran BEFORE
+  the trash compare-and-swap, so when the trash refused, the duplicate's
+  tags sat on the survivor with the duplicate still live. Trash first, then
+  move the tags; both refusal branches now close their journal step. The
+  audit's claim that the open step "read as interrupted" was wrong --
+  `unfinished_operations` keys on the end event, which was written -- and
+  the test says so.
+
+- **Three copies of "which hosts are DOI hosts", one of them shorter.**
+  `is_excluded` knew `doi.org` and `dx.doi.org`; the title resolver and the
+  DOI gate also knew `www.doi.org`; so a malformed `www.doi.org/10.x` was
+  captured and then resolved. One `DOI_HOSTS`, every reader derives from
+  it. The shell copies of the state-dir rule stay inline by design and now
+  have a parity guard against the Python one (mutated by hand to see it
+  fail: an `s` dropped from `.local/state`).
+
+- **A hook's JSON line was not JSON if the path held a quote.**
+  `zp_tramp_log` interpolated `$ZP_MINE` and the detail with printf,
+  unescaped; the four byte-identical blocks and the `missing-dependencies`
+  line in lib.sh now escape backslash and quote first. Driven end to end
+  with a root named `v"0.9.0` (mutated to see it fail).
+
+  Audit findings M5, L1, L3, L4, L5, L6 of `audit_whole_repo_2026-09-06.md`
+  -- the last of the nineteen.
+
 ## 0.60.0 — 2026-09-06
 
 - **A test that could not fail, guarding a report the hook did not make.**

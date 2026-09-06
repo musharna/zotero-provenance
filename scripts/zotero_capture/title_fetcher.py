@@ -18,6 +18,7 @@ from bs4 import BeautifulSoup
 
 from . import USER_AGENT
 from .url_processing import (
+    DOI_HOSTS,
     IPAddress,
     document_disowns,
     document_is_a_gate,
@@ -312,9 +313,7 @@ def _github_title(client: httpx.Client, url: str) -> str | None:
 
 
 _RESOLVERS: dict[str, Callable[[httpx.Client, str], str | None]] = {
-    "doi.org": _doi_title,
-    "dx.doi.org": _doi_title,
-    "www.doi.org": _doi_title,
+    **{host: _doi_title for host in DOI_HOSTS},
     "arxiv.org": _arxiv_title,
     "www.arxiv.org": _arxiv_title,
     "pubmed.ncbi.nlm.nih.gov": _pubmed_title,

@@ -84,8 +84,10 @@ zp_check_deps() {
 		# to the very thing meant to report it. On a fresh install with missing
 		# dependencies there may be no other record at all, and health would
 		# then stay silent forever.
+		local py_json="${py//\\/\\\\}"
+		py_json="${py_json//\"/\\\"}"
 		printf '{"ts": "%s", "event": "missing-dependencies", "python": "%s", "missing": "%s"}\n' \
-			"$(date '+%Y-%m-%dT%H:%M:%S%z')" "$py" "$missing" >>"$log"
+			"$(date '+%Y-%m-%dT%H:%M:%S%z')" "$py_json" "$missing" >>"$log"
 		printf 'zotero-provenance: %s cannot import: %s\n' "$py" "$missing" >>"$log"
 		printf 'Install them for that interpreter, or set ZOTERO_PROVENANCE_PYTHON to one that has them.\n' >>"$log"
 		return 1

@@ -479,3 +479,47 @@ def test_the_held_count_is_about_the_plan_not_the_slice(tmp_path: Path, capsys, 
     assert retire_rows.main(["--db-path", str(db), "--limit", "1"]) == 0
     limited = capsys.readouterr().out
     assert "(1 more are policy exclusions" in limited, limited
+
+
+# --- 0.61.0: retire is journalled like every other destructive pass -----------
+
+
+def test_retire_is_framed_by_the_operation_journal(tmp_path: Path) -> None:
+    """repair, prune and corroborate open an OperationJournal; retire wrote its
+    own per-row journal and nothing else, so `unfinished_operations` -- the
+    tool that answers "did a destructive pass die halfway" -- could not see
+    a retire at all, while opjournal's docstring said that gap was closed."""
+    from zotero_capture.opjournal import read_events
+
+    db = tmp_path / "idx.db"
+    init_db(db)
+    _insert(db, JUNK_URL, "K1")
+    steps = plan_retire(_rows(db))
+    apply_retire(steps, db_path=db, zotero=_FakeZotero(), connect=_connect)
+
+    events = read_events(db)
+    ops = {e["op_id"] for e in events if e.get("command") == "retire"}
+    assert len(ops) == 1, [e.get("command") for e in events]
+    kinds = [e["event"] for e in events if e["op_id"] in ops]
+    assert kinds == ["start", "step", "outcome", "end"], kinds
+    step = next(e for e in events if e["op_id"] in ops and e["event"] == "step")
+    assert step["target"] == JUNK_URL and step["action"] == "trash"
+
+
+def test_each_retired_row_is_stamped_when_IT_was_retired(tmp_path: Path) -> None:
+    """One `stamp` per run went into every row's `retired_at`. Per event."""
+    import json
+
+    from zotero_capture.retire import journal_path
+
+    db = tmp_path / "idx.db"
+    init_db(db)
+    _insert(db, JUNK_URL, "K1")
+    _insert(db, "https://atted.jp/api/coex/Ath-u/{locus}/{top_n", "K2")
+    steps = plan_retire(_rows(db))
+    assert len(steps) == 2, "positive control: two rows planned"
+    ticks = iter(["T1", "T2", "T3"])
+    apply_retire(steps, db_path=db, zotero=_FakeZotero(), connect=_connect, clock=lambda: next(ticks))
+
+    stamps = [json.loads(l)["retired_at"] for l in journal_path(db).read_text().splitlines()]
+    assert sorted(stamps) == ["T1", "T2"], stamps
