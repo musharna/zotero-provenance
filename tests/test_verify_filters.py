@@ -25,6 +25,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from conftest import clean_env
 from zotero_capture.snapshot import PageRead, verify
 from zotero_capture.sqlite_cache import (
     init_db,
@@ -109,13 +110,16 @@ def test_an_unscoped_run_still_reads_everything(tmp_path) -> None:
     assert len(seen) == 2
 
 
-def test_snapshot_only_flags_are_refused_rather_than_ignored() -> None:
+def test_snapshot_only_flags_are_refused_rather_than_ignored(tmp_path) -> None:
     for flag in ("--dry-run", "--retry-failed"):
         done = subprocess.run(
             [sys.executable, str(CLI), "--verify", flag],
             capture_output=True,
             text=True,
             timeout=60,
+            # Safe today only because argparse errors before load_config runs;
+            # swap those two lines and a bare env opens the live index.
+            env=clean_env(tmp_path),
         )
         assert done.returncode != 0, f"{flag} was accepted with --verify"
         assert "cannot be combined with --verify" in done.stderr
@@ -277,8 +281,7 @@ def test_a_negative_limit_is_refused_not_unlimited(tmp_path, fn) -> None:
 def test_a_negative_limit_is_refused_at_the_cli(tmp_path) -> None:
     import os
 
-    env = {k: v for k, v in os.environ.items() if not k.startswith("ZOTERO_")}
-    env["ZOTERO_CAPTURE_STATE_DIR"] = str(tmp_path)
+    env = clean_env(tmp_path)
     for flags in (["--limit", "-1"], ["--verify", "--limit", "-1"]):
         done = subprocess.run(
             [sys.executable, str(CLI), *flags],

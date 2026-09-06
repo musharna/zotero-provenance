@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.60.0 — 2026-09-06
+
+- **A test that could not fail, guarding a report the hook did not make.**
+  `test_hook_reports_the_outage_shape` asserted that `"superseded code"` was
+  absent from the hook's stdout -- a string found nowhere in the code. Run
+  against its own fixture, a 29h-old write from a superseded root produced
+  NO report: the health CLI imported only `legacy:` records from the log,
+  on the reasoning that a record carrying an `incident_id` had journalled
+  itself. So if `health.db` was lost, every post-0.19 stale write became
+  unreportable for good while the log still said it happened. The honest
+  discriminator is whether the WRITER's journal survived: a root with any
+  ledger row wrote its own rows (not re-imported, so no double count); a
+  root with none is imported from the log under the same pure
+  `mutation_id`, so replay lands on one row. Both halves are asserted
+  against the same record; the round-7 test that asserted absence against
+  an empty ledger -- where "no double count" and "lost for good" are the
+  same observation -- now asserts both.
+
+- **Tests read this machine.** The health hook test copied `os.environ`, so
+  the hook inherited the session's live `ZOTERO_*` credentials and read the
+  developer's real plugin registry ("root must match whatever is really
+  installed, or this is a false alarm"). A `snapshot_pages --verify`
+  subprocess ran with no env at all, safe only because argparse errors
+  before `load_config`. One `clean_env` in conftest now drops every
+  `ZOTERO_*` by prefix (not a named list), sandboxes HOME inside the
+  test's own directory (a sibling was shared by every test in a run --
+  found by the first version of the guard), and points the secrets file at
+  nothing. The affected files pass identically under a moved `$HOME`.
+
+- **`drain_queue` journalled into the production ledger.** It resolved the
+  state dir from an EMPTY mapping, ignoring `ZOTERO_CAPTURE_STATE_DIR`;
+  `cli.py` used `os.environ` one import away. Sixth stale second copy. The
+  guard is an AST walk over every script for a `_state_dir` call with an
+  empty dict literal -- its first version was a text scan and matched the
+  comment explaining the defect.
+
+- **Two capture flags the hooks pass on every fire were never read.**
+  `--session` is now recorded on the capture log line, so a record can be
+  joined to the session that wrote it; `--message-from-stdin` names the
+  source when both it and `--message` are given. Found by an AST dead-flag
+  guard that now covers the capture CLI, not just `snapshot_pages`.
+
+- **Five counters nothing incremented** guarded two warnings in `evaluate`
+  that had been unreachable since 0.18.0 moved integrity into the ledger.
+  Deleted; the guard is a detector for locals assigned once to a constant
+  and never changed (with a positive control on a synthetic function, and
+  a false positive on `stats` -- filled by a callee -- corrected first).
+
+- README said 780 tests; the suite ran 1,200. Guarded to within ten percent.
+  The trampoline suite skipped wholesale without `jq`; the refusal branch a
+  jq-less machine actually takes is now tested ungated, asserting the
+  `forward-unresolved` event is written AND that health reports it. The
+  health hook's own forwarding is driven for the first time. Mutations:
+  the health hook's `exec` removed, the event line removed, and the event
+  dropped from `REFUSAL_EVENTS` -- all three caught.
+
+  Audit findings H2, M3, M4, M6, M7, L7, L8 of
+  `audit_whole_repo_2026-09-06.md`.
+
 ## 0.59.0 — 2026-09-06
 
 - **A scoped run never reached the site root.** `--only-host example.com`

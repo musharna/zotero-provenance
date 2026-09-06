@@ -19,6 +19,7 @@ POST commit?" is what answers it here too.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from datetime import date
 from pathlib import Path
@@ -57,7 +58,10 @@ def main() -> int:
 
     config = load_config()
     db_path = config.db_path
-    ledger_path = _state_dir({}) / "health.db"
+    # From the ENVIRONMENT, as cli.py does. `_state_dir({})` resolved to the
+    # production directory no matter what the caller set, so an isolated drain
+    # journalled its incidents into the live ledger (0.60.0).
+    ledger_path = _state_dir(os.environ) / "health.db"
 
     depth = retry_queue_depth(db_path)
     if not depth:

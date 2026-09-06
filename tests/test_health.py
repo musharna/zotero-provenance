@@ -228,17 +228,13 @@ import shutil  # noqa: E402
 import subprocess  # noqa: E402
 from pathlib import Path  # noqa: E402
 
-from conftest import PLUGIN_ROOT  # noqa: E402
+from conftest import PLUGIN_ROOT, clean_env  # noqa: E402
 
 HEALTH_HOOK = PLUGIN_ROOT / "hooks" / "session-health.sh"
 
 
 def _hook_env(state: Path) -> dict[str, str]:
-    env = os.environ.copy()
-    env.pop("ZOTERO_CAPTURE_DISABLE", None)
-    env.pop("ZOTERO_CAPTURE_HEALTH_DISABLE", None)
-    env["ZOTERO_CAPTURE_STATE_DIR"] = str(state)
-    return env
+    return clean_env(state)
 
 
 def _run_hook(state: Path, env: dict[str, str] | None = None):
@@ -266,10 +262,9 @@ def _recent(offset_hours: float = 0.0, **kw) -> str:
 def test_hook_is_silent_on_a_healthy_log(tmp_path: Path) -> None:
     """The whole design rests on this. Chatter here and the check gets ignored."""
     state = tmp_path / "state"
-    # root must match whatever is really installed, or this is a false alarm
-    from zotero_capture_health import _installed
-
-    pinned = _installed()[0] or PINNED
+    # HOME is sandboxed by clean_env, so the registry resolves to nothing and
+    # the record's own pinned_root is the only pin evidence -- as designed.
+    pinned = PINNED
     # Both fields must agree, or the record describes itself as stale.
     _write_log(state, [_recent(0.1, root=pinned, pinned=pinned)])
 
@@ -296,12 +291,47 @@ def test_hook_reports_the_outage_shape(tmp_path: Path) -> None:
     # acknowledged. Neither is an elapsed-time claim about absence.
     assert "refusal" in proc.stdout, proc.stdout
     assert "no successful capture in" not in proc.stdout, proc.stdout
-    # The stale-ROOT signal is deliberately absent here: against the real
-    # registry this capture predates the installed-at timestamp, so it cannot
-    # be distinguished from a capture that merely happened before an upgrade.
-    # That suppression is the fix for the every-release false alarm, and it is
-    # exercised directly, with a controlled install time, in the unit tests.
-    assert "superseded code" not in proc.stdout, proc.stdout
+    # A 29h-old write from a superseded root is an integrity incident and
+    # stands until acknowledged. Until 0.60.0 this line asserted that a string
+    # found nowhere in the code was absent from stdout -- a test that could
+    # not fail, guarding a report the hook did not make.
+    assert "open integrity incident" in proc.stdout, proc.stdout
+
+
+def test_a_stale_write_with_an_id_is_still_reported_when_the_ledger_is_gone(
+    tmp_path: Path,
+) -> None:
+    """Every post-0.19 capture record carries an incident_id, and the health
+    CLI took that as proof the ledger already held it and skipped the import.
+    Lose health.db and every such stale write vanished for good, while the
+    log still said it happened. The CONTROL is the second half: when the
+    ledger DOES hold the capture's own per-mutation rows, the import must not
+    add a second incident for the same write."""
+    from zotero_capture.health_ledger import mutation_id, open_incident
+
+    stale = "/home/u/.claude/plugins/cache/zotero-provenance/zotero-provenance/0.3.0"
+    old = (datetime.now().astimezone() - timedelta(hours=29)).isoformat()
+
+    # Ledger lost: the log is the only witness.
+    state = tmp_path / "lost"
+    _write_log(state, [_capture(old, root=stale)])
+    proc = _run_hook(state)
+    assert proc.returncode == 0, proc.stderr
+    assert "1 open integrity incident" in proc.stdout, proc.stdout
+    proc = _run_hook(state)  # replay is idempotent
+    assert "1 open integrity incident" in proc.stdout, proc.stdout
+
+    # Ledger present, with the row the capture journalled for itself.
+    state = tmp_path / "kept"
+    _write_log(state, [_capture(old, root=stale)])
+    record = json.loads(_capture(old, root=stale))
+    open_incident(
+        state / "health.db",
+        incident_id=mutation_id(record["incident_id"], "https://x.test/a"),
+        url="https://x.test/a", root=stale, pinned_root=PINNED, kind="stale", ts=old,
+    )
+    proc = _run_hook(state)
+    assert "1 open integrity incident" in proc.stdout, proc.stdout
 
 
 def test_hook_exits_zero_with_no_log_at_all(tmp_path: Path) -> None:
@@ -482,3 +512,18 @@ def _classify(lines, acknowledged=frozenset(), **_ignored):
         for i in _incidents(lines, pinned_root=PINNED)
         if i["id"] not in acknowledged
     ]
+
+
+def test_the_hook_env_reads_nothing_from_this_machine(tmp_path: Path) -> None:
+    """`_hook_env` copied os.environ, so the hook inherited the session's live
+    ZOTERO_* credentials and read the developer's real plugin registry (the
+    healthy-log test admitted it: "root must match whatever is really
+    installed, or this is a false alarm"). Its meaning varied per machine."""
+    env = _hook_env(tmp_path)
+    leaked = sorted(k for k in env if k.startswith("ZOTERO_") and k not in
+                    ("ZOTERO_CAPTURE_STATE_DIR", "ZOTERO_SECRETS_FILE"))
+    assert leaked == [], leaked
+    assert env["HOME"].startswith(str(tmp_path)), env["HOME"]
+    assert not Path(env["ZOTERO_SECRETS_FILE"]).exists()
+    # Positive control: the state dir is still the one the test asked for.
+    assert env["ZOTERO_CAPTURE_STATE_DIR"] == str(tmp_path)

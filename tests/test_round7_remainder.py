@@ -256,12 +256,19 @@ def test_migration_does_not_re_import_a_record_that_journalled_itself(
 
     A record carrying an incident_id journalled itself when it ran; migration is
     for records that could not.
+
+    0.60.0: the first version of this test asserted that against an EMPTY
+    ledger, where "did not double count" and "lost the incident for good" are
+    the same observation -- and the CLI had chosen the second. The
+    discriminator is whether the writer's journal survived: a root with rows
+    in the ledger wrote its own (no re-import); a root with none is imported
+    from the log. Both halves are asserted here, against the same record.
     """
     import sys
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
     from zotero_capture_health import _migrate_legacy
-    from zotero_capture.health_ledger import count_open
+    from zotero_capture.health_ledger import count_open, mutation_id, open_incident
 
     state = tmp_path / "state"
     state.mkdir()
@@ -271,11 +278,24 @@ def test_migration_does_not_re_import_a_record_that_journalled_itself(
     )
     ledger = state / "health.db"
 
+    # The writer's own per-mutation row is present: its journal survived.
+    open_incident(
+        ledger,
+        incident_id=mutation_id("its-own", "https://x.test/a"),
+        url="https://x.test/a", root="/c/OLD", pinned_root="/c/NEW",
+        kind="stale", ts="2026-08-25T11:40:00-0400",
+    )
     _migrate_legacy(state, ledger, "/c/NEW")
-
-    assert count_open(ledger) == 0, (
+    assert count_open(ledger) == 1, (
         "a record that already journalled itself was imported again"
     )
+
+    # The ledger is gone: the log is the only witness, and it must be heard.
+    ledger.unlink()
+    _migrate_legacy(state, ledger, "/c/NEW")
+    assert count_open(ledger) == 1, "a stale write became unreportable with its ledger"
+    _migrate_legacy(state, ledger, "/c/NEW")
+    assert count_open(ledger) == 1, "replay is not idempotent"
 
 
 def test_migration_still_imports_a_record_that_could_not_journal_itself(

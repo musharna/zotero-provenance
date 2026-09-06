@@ -140,6 +140,24 @@ def open_incidents(db_path: Path, *, limit: int | None = None) -> list[dict]:
         conn.close()
 
 
+def roots_recorded(db_path: Path) -> frozenset[str]:
+    """Every root that has ever journalled a mutation here, any status.
+
+    The question the log replay needs is not "is THIS incident here" -- a
+    capture record has no url, so it cannot name its per-mutation rows -- but
+    "did this writer's journal survive". A root with any row at all wrote its
+    own ledger entries when it ran; a root with none either predates the
+    ledger or lost it, and in both cases the log is the only witness.
+    """
+    conn = _connect(db_path, create=False)
+    if conn is None:
+        return frozenset()
+    try:
+        return frozenset(r[0] for r in conn.execute("SELECT DISTINCT root FROM incidents"))
+    finally:
+        conn.close()
+
+
 def count_open(db_path: Path) -> int:
     conn = _connect(db_path, create=False)
     if conn is None:
