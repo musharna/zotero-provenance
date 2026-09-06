@@ -207,3 +207,30 @@ def test_every_flag_is_either_honoured_by_verify_or_refused_by_it() -> None:
     # Non-vacuous in both directions: the sets must not be empty, or a module
     # with no flags at all would pass.
     assert dests and honoured & dests and refused & dests
+
+
+def test_only_host_matches_the_site_root_row(tmp_path) -> None:
+    """canonicalize strips a bare `/`, so `https://example.com` has an EMPTY
+    path and a pattern of `https://example.com/%` never matched it: a scoped
+    re-run reported complete while skipping every site root. 191 of 5,133
+    live rows were site roots when this was written. The two control rows are
+    what keep this a boundary and not a prefix."""
+    db = _seed(
+        tmp_path / "i.db",
+        [
+            "https://example.com",
+            "https://example.com?q=1",
+            "https://www.example.com",
+            "https://example.com/x",
+            "https://notexample.com",  # control: substring, not boundary
+            "https://example.com.evil.test",  # control: suffix, not boundary
+        ],
+    )
+    seen: list[str] = []
+    verify(db, hasher=_recording_hasher(seen), clock=lambda: "NOW", only_host="example.com")
+    assert sorted(seen) == [
+        "https://example.com",
+        "https://example.com/x",
+        "https://example.com?q=1",
+        "https://www.example.com",
+    ]

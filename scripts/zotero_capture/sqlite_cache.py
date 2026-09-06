@@ -787,18 +787,19 @@ def _host_boundary(only_host: str) -> tuple[str, list[str]]:
     if not host:
         raise ValueError("only_host must name a host")
     escaped = host.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    clause = (
-        " AND (url_canonical LIKE ? ESCAPE '\\'"
-        " OR url_canonical LIKE ? ESCAPE '\\'"
-        " OR url_canonical LIKE ? ESCAPE '\\'"
-        " OR url_canonical LIKE ? ESCAPE '\\')"
-    )
-    return clause, [
-        f"http://{escaped}/%",
-        f"https://{escaped}/%",
-        f"http://%.{escaped}/%",
-        f"https://%.{escaped}/%",
-    ]
+    # After the host a canonical URL may END (canonicalize strips a bare "/",
+    # so a site root has an EMPTY path), or continue with "/" or "?". A
+    # fragment never survives canonicalize. Patterns of `host/%` alone missed
+    # every site root -- 191 live rows -- while the report still called the
+    # run scoped. LIKE has no alternation, so it is one pattern per case; a
+    # bare `host%` would take example.com.evil.test, the suffix the boundary
+    # exists to refuse.
+    patterns: list[str] = []
+    for scheme in ("http", "https"):
+        for prefix in (f"{scheme}://{escaped}", f"{scheme}://%.{escaped}"):
+            patterns += [prefix, f"{prefix}/%", f"{prefix}?%"]
+    clause = " AND (" + " OR ".join(["url_canonical LIKE ? ESCAPE '\\'"] * len(patterns)) + ")"
+    return clause, patterns
 
 
 def rows_needing_hash(
