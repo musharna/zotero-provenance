@@ -16,6 +16,8 @@ import json
 import os
 import sqlite3
 import subprocess
+
+from conftest import clean_env
 import sys
 from pathlib import Path
 
@@ -93,8 +95,7 @@ def test_a_missing_ledger_is_still_silence(tmp_path: Path) -> None:
 
 
 def _run(state: Path, *args: str):
-    env = os.environ.copy()
-    env["ZOTERO_CAPTURE_STATE_DIR"] = str(state)
+    env = clean_env(state)
     return subprocess.run(
         [sys.executable, str(CHECKER), *args],
         env=env,

@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import PLUGIN_ROOT
+from conftest import PLUGIN_ROOT, clean_env
 
 STOP_HOOK = PLUGIN_ROOT / "hooks" / "capture-stop.sh"
 PROMPT_HOOK = PLUGIN_ROOT / "hooks" / "capture-prompt.sh"
@@ -26,20 +26,9 @@ requires_jq = pytest.mark.skipif(shutil.which("jq") is None, reason="jq not inst
 
 def _clean_env(tmp_path: Path) -> dict[str, str]:
     """Env with no credentials, no disable flag, and a hermetic state dir."""
-    env = os.environ.copy()
-    for var in (
-        "ZOTERO_CAPTURE_DISABLE",
-        "ZOTERO_API_KEY",
-        "ZOTERO_LIBRARY_ID",
-        "ZOTERO_LIBRARY_TYPE",
-        "ZOTERO_WEBSOURCES_COLLECTION_KEY",
-    ):
-        env.pop(var, None)
-    env["ZOTERO_CAPTURE_STATE_DIR"] = str(tmp_path / "state")
-    # Point at a secrets file that does not exist, so a real one on this machine
-    # can never leak into the test.
-    env["ZOTERO_SECRETS_FILE"] = str(tmp_path / "no-such-secrets.env")
-    return env
+    # A NAMED list of variables to pop is the hand-maintained-copy shape: it
+    # covered five and the session carries more. clean_env drops the prefix.
+    return clean_env(tmp_path / "state")
 
 
 def _transcript(tmp_path: Path, *lines: str) -> Path:

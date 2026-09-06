@@ -15,6 +15,28 @@ if str(SCRIPTS_DIR) not in sys.path:
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 
 
+def clean_env(state: Path) -> dict[str, str]:
+    """A subprocess environment that reads NOTHING from this machine.
+
+    Every ZOTERO_* variable is dropped (the session that runs the suite
+    carries live credentials; a test that copies os.environ inherits them and
+    is one reordered line away from opening the production index), the state
+    dir is the caller's, the secrets file does not exist, and HOME points
+    inside the sandbox so the plugin registry, the plugin cache and the
+    default secrets path all resolve to nothing. Packages live under conda,
+    not under HOME, which is what makes moving it safe.
+    """
+    env = {k: v for k, v in os.environ.items() if not k.startswith("ZOTERO_")}
+    # INSIDE the caller's sandbox. A sibling of `state` is shared by every
+    # test whose tmp_path has the same parent -- all of them, in one run.
+    home = state / ".home"
+    home.mkdir(parents=True, exist_ok=True)
+    env["HOME"] = str(home)
+    env["ZOTERO_CAPTURE_STATE_DIR"] = str(state)
+    env["ZOTERO_SECRETS_FILE"] = str(state.parent / "no-such-secrets.env")
+    return env
+
+
 def pytest_configure(config):
     config.addinivalue_line(
         "markers",

@@ -228,17 +228,13 @@ import shutil  # noqa: E402
 import subprocess  # noqa: E402
 from pathlib import Path  # noqa: E402
 
-from conftest import PLUGIN_ROOT  # noqa: E402
+from conftest import PLUGIN_ROOT, clean_env  # noqa: E402
 
 HEALTH_HOOK = PLUGIN_ROOT / "hooks" / "session-health.sh"
 
 
 def _hook_env(state: Path) -> dict[str, str]:
-    env = os.environ.copy()
-    env.pop("ZOTERO_CAPTURE_DISABLE", None)
-    env.pop("ZOTERO_CAPTURE_HEALTH_DISABLE", None)
-    env["ZOTERO_CAPTURE_STATE_DIR"] = str(state)
-    return env
+    return clean_env(state)
 
 
 def _run_hook(state: Path, env: dict[str, str] | None = None):
@@ -266,10 +262,9 @@ def _recent(offset_hours: float = 0.0, **kw) -> str:
 def test_hook_is_silent_on_a_healthy_log(tmp_path: Path) -> None:
     """The whole design rests on this. Chatter here and the check gets ignored."""
     state = tmp_path / "state"
-    # root must match whatever is really installed, or this is a false alarm
-    from zotero_capture_health import _installed
-
-    pinned = _installed()[0] or PINNED
+    # HOME is sandboxed by clean_env, so the registry resolves to nothing and
+    # the record's own pinned_root is the only pin evidence -- as designed.
+    pinned = PINNED
     # Both fields must agree, or the record describes itself as stale.
     _write_log(state, [_recent(0.1, root=pinned, pinned=pinned)])
 
@@ -517,3 +512,18 @@ def _classify(lines, acknowledged=frozenset(), **_ignored):
         for i in _incidents(lines, pinned_root=PINNED)
         if i["id"] not in acknowledged
     ]
+
+
+def test_the_hook_env_reads_nothing_from_this_machine(tmp_path: Path) -> None:
+    """`_hook_env` copied os.environ, so the hook inherited the session's live
+    ZOTERO_* credentials and read the developer's real plugin registry (the
+    healthy-log test admitted it: "root must match whatever is really
+    installed, or this is a false alarm"). Its meaning varied per machine."""
+    env = _hook_env(tmp_path)
+    leaked = sorted(k for k in env if k.startswith("ZOTERO_") and k not in
+                    ("ZOTERO_CAPTURE_STATE_DIR", "ZOTERO_SECRETS_FILE"))
+    assert leaked == [], leaked
+    assert env["HOME"].startswith(str(tmp_path)), env["HOME"]
+    assert not Path(env["ZOTERO_SECRETS_FILE"]).exists()
+    # Positive control: the state dir is still the one the test asked for.
+    assert env["ZOTERO_CAPTURE_STATE_DIR"] == str(tmp_path)
