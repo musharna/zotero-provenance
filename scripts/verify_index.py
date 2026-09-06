@@ -30,10 +30,12 @@ import sqlite3
 import sys
 from collections import defaultdict
 from contextlib import closing
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from zotero_capture.capture import STALE_CLAIM_S  # noqa: E402
 from zotero_capture.cli import build_client  # noqa: E402
 from zotero_capture.config import load_config  # noqa: E402
 from zotero_capture.logging_setup import configure_cli_logging  # noqa: E402
@@ -47,10 +49,33 @@ def _rows(db_path: Path) -> list[dict]:
         return [
             dict(r)
             for r in conn.execute(
-                "SELECT url_canonical, zotero_key, pending_key, first_seen"
-                " FROM url_index"
+                "SELECT url_canonical, zotero_key, pending_key, first_seen,"
+                " claimed_at FROM url_index"
             )
         ]
+
+
+def claim_age_note(row: dict, *, now: datetime) -> str:
+    """How long a claim has stood, and what that means.
+
+    "claims still in flight" covered a 12-second claim and a six-day one with
+    the same words, and two live rows sat for five and six days under that
+    heading. Past STALE_CLAIM_S the claim is not in flight: its POST was cut
+    off, and the tool that settles it is named.
+    """
+    claimed_at = row.get("claimed_at") or ""
+    if not claimed_at:
+        return "claimed before 0.10.0; no timestamp"
+    age = (now - datetime.fromisoformat(claimed_at)).total_seconds()
+    if age < STALE_CLAIM_S:
+        return f"claimed {int(age)}s ago; in flight"
+    if age < 3600:
+        span = f"{int(age // 60)}m"
+    elif age < 86400:
+        span = f"{int(age // 3600)}h"
+    else:
+        span = f"{int(age // 86400)}d"
+    return f"claimed {span} ago; cut off -- drain_queue settles it"
 
 
 def compare(rows: list[dict], items: list[dict]) -> dict[str, list]:
@@ -175,7 +200,11 @@ def main(argv: list[str] | None = None) -> int:
             "index rows whose item is trashed or deleted",
             "the index claims a source the library no longer shows",
         ),
-        ("row_no_key", "index rows with no zotero key", "claims still in flight"),
+        (
+            "row_no_key",
+            "index rows with no zotero key",
+            "in flight if seconds old; older than that, the POST was cut off",
+        ),
     ]
     disagreements = 0
     for name, heading, why in sections:
@@ -193,6 +222,9 @@ def main(argv: list[str] | None = None) -> int:
                 print(
                     f"       {h['key']}  added {h['dateAdded'][:10]}  {h['url'][:64]}"
                 )
+            elif name == "row_no_key":
+                note = claim_age_note(h, now=datetime.now(timezone.utc))
+                print(f"       {'(none)':10}  {h['url_canonical'][:64]}  {note}")
             else:
                 print(
                     f"       {h['zotero_key'] or '(none)':10}  {h['url_canonical'][:64]}"

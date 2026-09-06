@@ -545,3 +545,25 @@ def test_a_dot_git_url_without_a_ref_is_still_an_ordinary_address() -> None:
     from zotero_capture.url_processing import is_vcs_requirement
 
     assert is_vcs_requirement("https://github.com/musharna/dreamer-chassis.git") is False
+
+
+def test_verify_says_how_old_an_unfinished_claim_is() -> None:
+    """"claims still in flight" covered a 12-second claim and a six-day one
+    with the same words. Two live rows sat for five and six days under that
+    heading (2026-09-06). The age is what tells a reader which it is, and
+    past STALE_CLAIM_S the note names the tool that settles it."""
+    from datetime import datetime, timedelta, timezone
+
+    import verify_index
+
+    now = datetime(2026, 9, 6, 12, 0, tzinfo=timezone.utc)
+    young = {"claimed_at": (now - timedelta(seconds=12)).isoformat()}
+    old = {"claimed_at": (now - timedelta(days=6)).isoformat()}
+    legacy = {"claimed_at": ""}
+
+    assert verify_index.claim_age_note(young, now=now) == "claimed 12s ago; in flight"
+    assert verify_index.claim_age_note(old, now=now) == (
+        "claimed 6d ago; cut off -- drain_queue settles it"
+    )
+    # Positive control: a row that predates the protocol says so, not "0s".
+    assert verify_index.claim_age_note(legacy, now=now) == "claimed before 0.10.0; no timestamp"
