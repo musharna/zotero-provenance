@@ -1,5 +1,127 @@
 # Changelog
 
+## Release index
+
+One line per release, newest first. Each entry below is a postmortem written from
+measurements after the fact: what was found, how it was proved, what was refuted.
+Read the index for *what changed*; read the entry for *why*.
+
+| version | date | headline |
+|---|---|---|
+| 0.61.0 | 2026-09-06 | "Prefix agreed" was stamped when nothing agreed |
+| 0.60.0 | 2026-09-06 | A test that could not fail, guarding a report the hook did not make |
+| 0.59.0 | 2026-09-06 | A scoped run never reached the site root |
+| 0.58.0 | 2026-09-06 | A hook timeout left no record, and a POST it cut off was never revisited |
+| 0.57.0 | 2026-09-05 | A refusal was hashed as the document, and then reported as an intact source |
+| 0.56.0 | 2026-09-05 | A `changed` verdict could not tell a view counter from a rewrite |
+| 0.55.0 | 2026-09-04 | The stable digest was reporting our own sampling as drift |
+| 0.54.0 | 2026-09-03 | A login page was becoming the name of a cited work |
+| 0.53.1 | 2026-09-03 | The guard added in 0.53.0 could not see a single one of the 1,217 rows it existed for |
+| 0.53.0 | 2026-09-03 | The unit of comparison was the line, and a line's length belongs to the source's formatter |
+| 0.52.0 | 2026-09-02 | 54 items in the library are titled "Checking your browser - reCAPTCHA" |
+| 0.51.0 | 2026-09-02 | A page can answer 200 and not be the page |
+| 0.50.1 | 2026-09-02 | `--only-host` and `--only-outcome` were silently ignored on `--verify` |
+| 0.50.0 | 2026-09-02 | A nonce no longer reads as provenance drift |
+| 0.49.0 | 2026-09-02 | "Installed" now means the root the plugin manager pins, not the marketplace clone that root was built from |
+| 0.48.0 | 2026-09-02 | A 429 now widens that host's interval instead of being recorded and ignored |
+| 0.47.0 | 2026-09-01 | A refusal now records what CLASS it was, so the health line stops rendering three different incidents as… |
+| 0.46.0 | 2026-09-01 | A verify pass now remembers which rows it has read, so a sweep can be run in pieces |
+| 0.45.0 | 2026-09-01 | A hash now states what it covers, so the biggest sources stop being blank |
+| 0.44.0 | 2026-09-01 | A verify pass now corroborates a change before reporting one |
+| 0.43.0 | 2026-09-01 | A GitHub 404 can now be settled with your own credentials, and only in one direction |
+| 0.42.0 | 2026-09-01 | A URL move now writes both stores, or neither |
+| 0.41.0 | 2026-08-31 | 34 rows in the live index hold a PREFIX of the address that was cited, and `snapshot` was stamping them `gone` |
+| 0.40.0 | 2026-08-31 | 53 rows recorded `blocked` against Wikimedia for a page it serves to anyone who asks politely |
+| 0.39.0 | 2026-08-30 | 219 rows asserted that the owner's own private pull requests no longer exist |
+| 0.38.1 | 2026-08-30 | The "who refused us" tally merged 403s with 404s, and the backfill exposed it immediately |
+| 0.38.0 | 2026-08-30 | 177 rows recorded `blocked` against doi.org, and doi.org had done nothing wrong |
+| 0.37.0 | 2026-08-30 | `snapshot_pages.py` ran for over an hour against the live index and printed nothing at all |
+| 0.36.0 | 2026-08-29 | A 404 is a fact about the source; a 403 is a fact about us |
+| 0.35.0 | 2026-08-29 | The flag was parsed and never passed |
+| 0.34.0 | 2026-08-27 | Found by looking at the live index during the first real hashing pass |
+| 0.33.0 | 2026-08-27 | A rule capture enforced could be invisible to every tool that cleans up |
+| 0.32.0 | 2026-08-27 | The library could say a source was consulted, never what for |
+| 0.31.0 | 2026-08-27 | Four doi.org URLs in the library were not DOIs at all |
+| 0.30.0 | 2026-08-27 | `repair` overwrote a URL with no record of what it was |
+| 0.29.0 | 2026-08-27 | What the page said when it was read is now recorded |
+| 0.28.0 | 2026-08-27 | A source cited once, which failed once, used to be gone |
+| 0.27.0 | 2026-08-27 | Prune said it trashed items it had refused to trash |
+| 0.26.0 | 2026-08-27 | A documented limitation was false |
+| 0.25.0 | 2026-08-27 | The `health-migrated` marker is gone, not guarded |
+| 0.24.0 | 2026-08-27 | `dev/probe_root.sh` runs a command against a deployed root with every side-effect channel closed, and… |
+| 0.23.0 | 2026-08-26 | The pin is read before every write, not once per message |
+| 0.22.0 | 2026-08-26 | `--limit 0` applied the entire plan |
+| 0.21.0 | 2026-08-26 | Each mutation now has its own ledger row |
+| 0.20.2 | 2026-08-25 | The 0.20.1 fix caused a worse problem than the one it fixed, and the live ledger is what showed it |
+| 0.20.1 | 2026-08-25 | A write is now refused when its incident cannot be recorded |
+| 0.20.0 | 2026-08-25 | The plugin could mutate the library and then have no record that it did |
+| 0.19.0 | 2026-08-25 | Incidents are identified by their writer |
+| 0.18.0 | 2026-08-25 | cross-record inference |
+| 0.17.0 | 2026-08-25 | The acknowledgement cursor is gone |
+| 0.16.0 | 2026-08-25 | The capture path — two real bypasses |
+| 0.15.0 | 2026-08-25 | A later good capture erased the evidence of a stale one |
+| 0.14.1 | 2026-08-25 | The health check cried wolf on its own release, and that was caught by running it against the live log… |
+| 0.14.0 | 2026-08-25 | A `SessionStart` health check |
+| 0.13.0 | 2026-08-25 | A trampoline at the top of `capture-stop.sh` and `capture-prompt.sh` |
+| 0.12.0 | 2026-08-25 | The plugin had not captured anything for 29 hours, and said nothing |
+| 0.11.7 | 2026-08-24 | A stale plugin root refuses to write to the library |
+| 0.11.6 | 2026-08-24 | Where a bare URL ends is now linkify-it-py's judgement, not ours |
+| 0.11.5 | 2026-08-23 | A title behind a large inline script is no longer missed |
+| 0.11.4 | 2026-08-23 | A host with no dot is never a public document |
+| 0.11.3 | 2026-08-23 | Repair now recovers a URL from an illegal tail |
+| 0.11.2 | 2026-08-23 | A URL cut short by a template is dropped, not stored as its prefix |
+| 0.11.1 | 2026-08-23 | The URL tokenizer asks the grammar instead of a list of exclusions |
+| 0.11.0 | 2026-08-22 | A parser now decides where a URL ends |
+| 0.10.0 | 2026-08-22 | The Stop hook never read "the last message." |
+| 0.9.1 | 2026-08-22 | Decoding the full HTML entity table rewrote the URL's structure |
+| 0.9.0 | 2026-08-22 | A URL that is shown is no longer captured as one that is cited |
+| 0.8.1 | 2026-08-21 | Repairing a URL no longer strands the item |
+| 0.8.0 | 2026-08-21 | A host that is not a hostname is no longer captured |
+| 0.7.0 | 2026-08-21 | Preprint DOIs were being built wrong |
+| 0.6.0 | 2026-08-21 | `backfill_titles.py --prune` |
+| 0.5.0 | 2026-08-21 | Give the version one source of truth |
+| 0.4.0 | 2026-08-21 | Stop capturing page assets and infrastructure as sources |
+| 0.3.0 | 2026-08-21 | Resolve DOIs by content negotiation instead of scraping |
+| 0.2.0 | 2026-08-21 | Re-enrich unresolved titles instead of latching them forever. |
+| 0.1.0 | 2026-08-20 | Initial release: capture hook, commands, end-to-end tests, README. |
+
+---
+
+## 0.62.0 — 2026-09-06
+
+- **Readiness for a stranger's first install.** A ship-readiness survey and
+  a live competitor scan (every other Claude-to-Zotero integration is an MCP
+  server or Zotero plugin that acts *when asked*; none captures what the
+  model cited unbidden) found the engineering complete and the packaging
+  not. What changed, ranked by what blocked an install:
+  - `idna` was imported on the hot path and undeclared in `pyproject.toml`
+    for 61 releases while the README's manual pip line named it. Declared,
+    and a guard now DERIVES the declared set from every third-party import
+    under `scripts/` (positive control: it must see `httpx`).
+  - `pyproject.toml` gained a build system, license, readme, urls and
+    package discovery for the `scripts/` layout. `pip install -e .` proved
+    in a fresh venv: imports `zotero_capture` 0.62.0 from the checkout.
+  - The README now opens with install, a platform-support table (native
+    Windows is **not supported** and says so; the hooks are bash and need
+    `jq`), and a paragraph on how this differs from a Zotero MCP server,
+    naming them. The old install section is kept as "Install details".
+  - CI: GitHub Actions runs ruff and the network-free suite on Linux and
+    macOS, Python 3.10 and 3.13. `[tool.ruff]` added; the ten findings it
+    raised locally are fixed (unused imports, two ambiguous `l`, one
+    unused local).
+  - `SECURITY.md` (what the plugin touches, how to report privately) and
+    `CONTRIBUTING.md` (setup, the working rules this repository actually
+    follows, layout).
+  - The CHANGELOG opens with a one-line-per-release index, generated from
+    the entries; the entries stay as they are.
+  - A session plan file under `docs/` is removed from the tree (it is in
+    git history and the project memory). `dev/` stays: the plugin manager
+    copies the whole source directory and no exclusion mechanism is
+    documented; CONTRIBUTING says what it is.
+  - `.ruff_cache/` ignored.
+
+  No behaviour change to capture, verify, or any maintenance path.
+
 ## 0.61.0 — 2026-09-06
 
 - **"Prefix agreed" was stamped when nothing agreed.** A row stored whole

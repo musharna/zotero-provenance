@@ -223,7 +223,6 @@ def test_several_problems_are_all_reported() -> None:
 # decides whether anything reaches the user at all, and it is where "silent
 # because healthy" and "silent because broken" look identical from outside.
 
-import os  # noqa: E402
 import shutil  # noqa: E402
 import subprocess  # noqa: E402
 from pathlib import Path  # noqa: E402

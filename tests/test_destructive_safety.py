@@ -521,5 +521,5 @@ def test_each_retired_row_is_stamped_when_IT_was_retired(tmp_path: Path) -> None
     ticks = iter(["T1", "T2", "T3"])
     apply_retire(steps, db_path=db, zotero=_FakeZotero(), connect=_connect, clock=lambda: next(ticks))
 
-    stamps = [json.loads(l)["retired_at"] for l in journal_path(db).read_text().splitlines()]
+    stamps = [json.loads(line)["retired_at"] for line in journal_path(db).read_text().splitlines()]
     assert sorted(stamps) == ["T1", "T2"], stamps

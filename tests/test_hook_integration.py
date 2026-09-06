@@ -8,7 +8,6 @@ argument threading, and the never-block guarantee can show up.
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 from pathlib import Path
