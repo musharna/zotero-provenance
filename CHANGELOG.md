@@ -8,6 +8,7 @@ Read the index for *what changed*; read the entry for *why*.
 
 | version | date | headline |
 |---|---|---|
+| 0.62.4 | 2026-09-06 | The README is a front door, not a design journal |
 | 0.62.3 | 2026-09-06 | The maintainer's identity was fixture data in a tree about to go public |
 | 0.62.2 | 2026-09-06 | On Python 3.10 the health check could not read a single record |
 | 0.62.1 | 2026-09-06 | CI's first run: the new dependency guard imported `tomllib`, which 3.10 does not have |
@@ -90,6 +91,17 @@ Read the index for *what changed*; read the entry for *why*.
 | 0.1.0 | 2026-08-20 | Initial release: capture hook, commands, end-to-end tests, README. |
 
 ---
+
+## 0.62.4 — 2026-09-06
+
+### The README is a front door, not a design journal
+
+At 453 lines and 3,500 words the README explained every rule's history before a
+reader had installed anything. It now opens with what the plugin does, the
+three install commands, and a platform table, and stays under 170 lines.
+Every section it used to carry moved intact to `docs/design.md`, linked from
+the short version, so nothing was cut, only moved. Badges for CI, release, and
+license at the top; the test-count sentence the guard reads is kept.
 
 ## 0.62.3 — 2026-09-06
 

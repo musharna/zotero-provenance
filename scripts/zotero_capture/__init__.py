@@ -3,7 +3,7 @@
 # Single source of truth for the version. plugin.json is what the installer keys
 # on, so these two must agree — tests/test_version.py fails the build if they
 # drift. Bump both together when releasing.
-__version__ = "0.62.3"
+__version__ = "0.62.4"
 
 # One User-Agent for every outbound request. Wikimedia's policy rejects a UA that
 # carries no way to reach the operator, so the project URL is the contact point —

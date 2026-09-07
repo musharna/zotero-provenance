@@ -1,0 +1,318 @@
+# Design notes
+
+The reasoning behind the rules in the [README](../README.md). Each section here
+is linked from the short version there. Nothing in this file is needed to
+install or use the plugin.
+
+## Identifiers are resolved, not scraped
+
+Some links aren't really web pages — they're identifiers that happen to have a URL. For
+these the authoritative metadata API is asked directly, which is faster than following
+the link and far more reliable, because the pages behind them are among the most
+aggressively bot-walled the plugin meets (`pubmed` and `arxiv` refuse a plain fetch
+outright, and most captured arXiv links are PDFs that have no title to scrape at all).
+
+| host                         | resolved via                       |
+| ---------------------------- | ---------------------------------- |
+| `doi.org`                    | DOI content negotiation (CSL JSON) |
+| `arxiv.org`                  | arXiv export API                   |
+| `pubmed.ncbi.nlm.nih.gov`    | NCBI E-utilities                   |
+| `biorxiv.org`, `medrxiv.org` | the DOI embedded in the URL path   |
+| `github.com`                 | GitHub repo API                    |
+
+Resolution is an optimisation, never a new point of failure: if any of it fails, the
+ordinary scrape still runs as a fallback. Dead or private GitHub repos 404 and stay
+unresolved rather than being given an invented title. Set `GITHUB_TOKEN` to lift
+GitHub's anonymous 60-requests/hour limit if you capture a lot of repos.
+
+## When the title can't be fetched
+
+Plenty of pages refuse a plain HTTP fetch — bot walls, JS-rendered markup, PDFs, dead
+links. When the title fetch fails, the item is stored with its URL as the title **and
+tagged `title:unresolved`**, so a failure stays recognisable instead of passing for real
+metadata. You can list the backlog by searching that tag in Zotero.
+
+The next time you cite the same URL, the title is fetched again and the item is corrected
+in place — the tag is dropped and the real title replaces the URL. This rides the Zotero
+read the recurrence path already performs, so it costs no extra API call. A transient
+failure therefore heals itself; only genuinely unfetchable pages keep the tag.
+
+At most three re-fetches are attempted per capture run, so a message citing many
+unfetchable URLs cannot blow the Stop hook's time budget. The rest are retried on
+later runs.
+
+## Proving a page still says what it said
+
+A captured item is a URL and a title. If the page is edited, paywalled or taken down,
+nothing in the library shows what was actually consulted — which is the one job a
+provenance record has.
+
+```
+python3 scripts/snapshot_pages.py --dry-run   # how many items lack a hash
+python3 scripts/snapshot_pages.py             # hash them
+python3 scripts/snapshot_pages.py --verify    # what has changed since
+```
+
+The hash is stored in the index and stamped onto the Zotero item's `extra` field as
+`Content-SHA256: …` — `extra` because the live API says `webpage` has no `archive` or
+`archiveLocation` field. Other `extra` lines are preserved.
+
+Two things worth knowing. **The hash covers the complete document or it is not
+recorded**: a page over 5 MB is reported and skipped rather than hashed to its first few
+megabytes, because a prefix hash compares equal for two long documents that differ after
+the cap — a false negative in exactly the case the hash exists to catch. And **a verify
+pass never rewrites a stored hash**: that hash is the evidence of what was consulted, and
+replacing it with what the page says today would destroy the finding at the moment it was
+made.
+
+This runs unattended, never from the Stop hook. Hashing means reading the whole document,
+and the hook's budget is why the title fetch stops at `</title>` after one second.
+
+## What a source was cited for
+
+The library records that a source was consulted. It cannot say what _for_ — which is
+what anyone auditing their own bibliography actually wants to know, six months on.
+Capture stores the sentence each URL appeared in.
+
+```
+python3 scripts/show_claims.py                      # coverage
+python3 scripts/show_claims.py --url <canonical>    # one source's claims
+python3 scripts/show_claims.py --search retraction  # search across all of them
+```
+
+**This stays on your machine.** The Zotero library syncs, and a claim is a fragment of
+a conversation, so it is stored in the local sqlite index and nowhere else: not as a
+child note, not in `extra`, not as a tag, and not in the capture log, which records only
+how many were written. That is also the reversible choice — a local row can be promoted
+to a Zotero note later, but a note that has already synced cannot be recalled. The
+property is enforced by a test that runs a real capture and inspects every outbound
+payload, not by convention.
+
+The extraction is deliberately dumb: the sentence as written, never a summary. A stored
+sentence is something you can read and judge; a paraphrase is one more thing that can be
+wrong about a source, filed under provenance. A URL alone on a line records nothing,
+because the bare URL is not a claim about anything.
+
+Claims are recorded going forward only. The sentence around a URL cited before this
+existed cannot be recovered — the conversation is not kept.
+
+## The source delta
+
+Sources get bucketed by their `seen:` history:
+
+- **New** — first surfaced in this run.
+- **Persisting** — surfaced once before, and again now.
+- **Recurring (untriaged)** — surfaced in two or more prior runs and again now. These are
+  the ones that deserve a decision. `/triage` them once you've made it.
+- **Recurring (triaged)** — same, already acknowledged.
+- **Dropped** — seen before, absent now.
+
+## The health check
+
+Every serious failure this plugin has had was silent. Two things now watch for
+that, and they are deliberately different in kind.
+
+**Integrity incidents are journalled before the write they describe.** If a
+capture is about to touch Zotero from a plugin root that is not the installed
+one — or one it cannot verify — the incident is written to a small SQLite ledger
+_first_. It used to be recorded afterwards, which meant a hook timeout at the
+wrong moment could leave a row in your library with nothing anywhere saying so.
+An intent for a write that never happens is a false positive you can close in
+one command; a write with no intent is corruption nobody can find.
+
+    python3 scripts/zotero_capture_health.py --list-incidents
+    python3 scripts/zotero_capture_health.py --ack <id> [<id> ...]
+    python3 scripts/zotero_capture_health.py --ack-all
+
+An unknown id exits non-zero and changes nothing. A healthy install never opens
+an incident, so its ledger stays empty.
+
+**Operational faults decay.** Refusals, configuration errors and capture errors
+are read from the log inside a recency window (24 h,
+`ZOTERO_CAPTURE_HEALTH_WINDOW_HOURS`). Timing a _presence_ is sound; timing an
+_absence_ is not, and nothing here does it. Records dated in the future are
+reported as a clock problem rather than treated as perpetually recent.
+
+Keeping these apart is what makes the check bounded: open incidents are a small
+queryable set that shrinks when you resolve one, while operational faults expire
+on their own and never need suppressing.
+
+On a healthy session it prints nothing. If the check cannot run — no `jq`, no
+`lib.sh`, no interpreter, an unreadable log, or an internal crash — it says so
+and writes detail to `health-errors.log`. A log that is readable but unparseable,
+or whose tail has stopped being parseable, also says so: unassessable is not
+healthy.
+
+## What is not captured
+
+`localhost`, tailnet (`*.ts.net`), and private-range IPs are dropped, so internal
+dashboards and local dev servers never reach your library. Tracking parameters
+(`utm_*`, `fbclid`, `gclid`, …) are stripped before storing.
+
+Page machinery is dropped too: font CDNs, DNS-over-HTTPS endpoints, analytics
+beacons, and URLs whose path ends in an asset extension (`.css`, `.js`, `.png`,
+`.svg`, …). These are things a page loaded, not sources anyone cited, and they can
+never resolve to a title. Paths that are genuine pages despite the extension — a
+GitHub `/blob/` view, a Wikimedia `/wiki/File:` page — are kept.
+
+Names the standards reserve are dropped: `example.com`, `example.net`,
+`example.org`, and anything under `.test`, `.example`, `.invalid`, `.localhost`,
+`.local`, `.onion`, `.alt`, `.arpa` or `.internal`. None of them can resolve to a
+real document, and they are what test fixtures use — without this rule another
+project's fixture URLs become citations the moment its test output is echoed
+into a session. Matching is on label boundaries, so ordinary hosts that merely
+contain a reserved name (`myexample.com`, `example.com.evil.co`) are kept.
+
+A host that is not a hostname is dropped too — a display ellipsis captured as
+`https://…` can never resolve. The test is IDNA encoding, the same one the HTTP
+client applies, so internationalised domains (`münchen.de`) are kept.
+
+### Shown, not cited
+
+A URL inside a fenced code block or inline backticks is treated as a literal
+being displayed, not a source being cited, and is not captured. Prose and
+markdown links still are.
+
+This matters because the hook reads Claude's own output. Without the rule, asking
+Claude to audit your library re-captured the very URLs the audit printed — and
+because printing re-escapes them (`&quot;` becomes `&amp;quot;`), each pass
+created a _new_ item rather than matching the old one. The loop had no ceiling.
+
+The cost is real but small: measured across 324 sessions' messages, 95.6% of
+captured URLs are unaffected, and what drops out is mostly internal
+infrastructure (`prometheus`, VPN and API endpoints). A source you only ever
+mention in backticks will be missed — write it as prose or a link to capture it.
+
+Separately, `&amp;` in a URL is decoded before storing, so a link copied out of
+rendered markup (`?a=1&amp;b=2`) lands on the same item as the plain form
+instead of duplicating it. Only that one entity: the full HTML entity table
+contains the URL's own delimiters (`&sol;` is `/`, `&num;` is `#`), and decoding
+those would silently store a different resource than the one cited.
+
+This plugin's own reports — `/source-delta` in particular — show URLs in
+backticks and carry a marker that suppresses capture for the whole message.
+Without that, displaying a report re-tagged every source it listed, including
+the ones it was reporting as dropped.
+
+### Where fetching is allowed to go
+
+Title fetching runs through a transport that resolves each host and refuses
+anything that is not publicly routable — loopback, private, link-local (which
+carries the cloud metadata endpoint), reserved. Every redirect hop is checked,
+not just the URL captured, since a public link can redirect anywhere. Numeric
+host spellings (`2130706433`, `0x7f000001`, `127.1`) resolve like any other and
+are refused the same way.
+
+The check happens at resolution time, so a DNS record that changes between the
+lookup and the connection — a rebinding attack — is not covered.
+
+## Known limitations
+
+- **Cloud sessions capture nothing**, because [Claude Code on the
+  web](https://code.claude.com/docs/en/claude-code-on-the-web) does not read your local
+  `~/.claude/settings.json` — a user-scope plugin is not installed there at all. Hooks in
+  a cloud session come from the repo and from server-managed settings.
+
+  Sessions bridged with `/remote-control` **do** capture, contrary to what this list said
+  from its first commit. Remote Control bridges a session that goes on running locally,
+  and hooks "run wherever Claude Code runs". Every capture now records which surface it
+  came from (`local`, `bridged`, `remote`), so this is a query rather than a belief.
+
+- A failed Zotero write is **queued**, not dropped. Capture's own recovery paths both
+  need the URL to be cited again, so a source cited once that failed once used to be lost
+  outright. Work the queue with:
+
+  ```
+  python3 scripts/drain_queue.py --dry-run   # what is queued
+  python3 scripts/drain_queue.py             # retry it
+  ```
+
+  The drain issues no write of its own: it replays each URL through the same capture path
+  the hook uses, under its **original sighting date**, so the reservation and claim
+  resolution that answer "did that POST commit?" answer it here too, and a recovered
+  source is filed under the day it was cited. The queue is bounded at 500 entries and
+  gives up on an entry after 5 attempts — a queue nothing drains cannot be allowed to grow
+  forever, which is why there was none before this. The session health check names the
+  depth so it cannot be forgotten.
+
+- Title lookup has a one-second budget; on timeout the item is stored with the URL as its
+  title rather than delaying your session.
+
+- **At least five citations from before 2026-08-21 were MERGED and cannot be recovered.**
+  Until `1d46bd5` the URL tokenizer was a character blacklist that stopped at `)`, so an
+  address containing one was stored truncated. On a keyed store truncation is not
+  shortening but DELETION: two different Cell papers, `S0092-8674(26)00697-5` and
+  `S0092-8674(26)00174-1`, both truncate to `.../S0092-8674(26`, which is the index
+  primary key. Two cited sources became one row and one library item.
+
+  No URL repair recovers the second, because it was never stored. The damaged rows have
+  since been repaired from the item of record where the library still held the full
+  address, but a _merge_ leaves nothing to repair from. Treat pre-2026-08-21 provenance as
+  possibly under-counting distinct sources on hosts that put parentheses in their
+  identifiers — chiefly Cell Press and older DOIs.
+
+- **A GitHub 404 does not mean a repository is gone**, and the tool will not say it does.
+  GitHub 404s a private repository on purpose, so anonymously "deleted" and "not yours to
+  see" are the same response. Rows whose immediate parent is also hidden are recorded
+  `not_visible`; repo roots cannot be discriminated that way, because their parent is a
+  public profile page. To settle those, corroborate with your own credentials:
+
+  ```
+  python3 scripts/corroborate_github.py           # what it would change
+  python3 scripts/corroborate_github.py --apply
+  ```
+
+  It asks `/repos/{owner}/{repo}` for existence only — it never fetches, hashes, or stores
+  repository content, and the only thing it changes is an outcome label on a URL your
+  library already holds. It can only **downgrade** `gone` to `not_visible`: a 404 with a
+  token still means _this credential cannot see it either_, which proves nothing about the
+  resource. Capture and snapshot never use a credential.
+
+## Development
+
+### Probing a deployed root
+
+Never hand-roll the environment for this. A hook has two channels to the outside
+— the Zotero API and the state directory — and closing only the first is how a
+probe of the trampoline's refusal branch wrote a real fault record into the
+production log, where it was then reported as a capture failure for 24 hours.
+
+```bash
+dev/probe_root.sh --control                    # prove the guard can fail
+dev/probe_root.sh 0.20.2 -- hooks/run-python.sh scripts/foo.py
+```
+
+Both channels are closed, and a seam check evaluates the root's _own_
+expressions first, refusing to run if either resolves outside the sandbox. The
+production state directory is fingerprinted before and after, so a leak is a
+loud failure rather than a clean-looking run.
+
+`dev/backport_trampoline.sh` installs the current launcher into cache roots that
+predate it — a release cannot fix a root that already exists — and `--verify`
+proves forwarding by behaviour rather than by grep.
+
+### Tests
+
+The default suite needs no network. The 10 live ones are opted _into_
+with `-m live` rather than out of — `addopts = -m "not live"` is set, because
+they used to run on a bare `pytest -q` and reach the internet despite the README
+promising otherwise. The hook tests execute the real shell scripts as
+subprocesses; the end-to-end tests run the real hook and CLI against a local HTTP
+server standing in for the Zotero API, so only the remote service is stubbed.
+
+To run every live test, including the two that write to Zotero:
+
+```bash
+set -a; . ~/.config/zotero-provenance/secrets.env; set +a
+RUN_LIVE_ZOTERO=1 \
+ZOTERO_WEBSOURCES_COLLECTION_KEY_TEST=<a throwaway collection key> \
+  python3 -m pytest -m live -q
+```
+
+Both write into that **separate** collection and delete after themselves, so
+they never touch `web-sources`. Two variables gate them rather than one, and
+without the collection key they SKIP — which is how one of them sat broken and
+unnoticed: its URL had been switched to the non-resolving fixture host during a
+cleanup while its assertion still expected the real page's title. A skipped test
+reports the same green as a passing one. Run these after any change to title
+fetching or the Zotero client.
