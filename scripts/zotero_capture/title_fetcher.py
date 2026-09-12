@@ -11,7 +11,7 @@ import socket
 import time
 from collections.abc import Callable, Sequence
 from urllib.parse import urlsplit
-from xml.etree import ElementTree
+from defusedxml import ElementTree  # arXiv Atom is remote input
 
 import httpx
 from bs4 import BeautifulSoup

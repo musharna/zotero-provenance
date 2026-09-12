@@ -146,7 +146,7 @@ TRACKING_PARAMS = frozenset(
     }
 )
 
-EXCLUDE_HOSTS_EXACT = frozenset({"localhost", "127.0.0.1", "0.0.0.0"})
+EXCLUDE_HOSTS_EXACT = frozenset({"localhost", "127.0.0.1", "0.0.0.0"})  # nosec B104 - deny-list, not a bind
 TS_NET_SUFFIX = ".ts.net"
 
 # Names the standards guarantee will never resolve to anything real, from the

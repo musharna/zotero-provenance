@@ -33,6 +33,8 @@ dependencies = [
     # prose; three hand-rolled attempts at that boundary each shipped a
     # silent corruption.
     "linkify-it-py>=2.0",
+    # arXiv Atom feeds are parsed from the network; stdlib ElementTree expands entities.
+    "defusedxml>=0.7",
 ]
 
 [project.optional-dependencies]
