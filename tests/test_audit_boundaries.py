@@ -51,17 +51,13 @@ def test_a_template_is_dropped_however_many_braces_it_has(text):
 
 
 def test_a_curly_quote_is_not_url_data():
-    assert extract_urls("See “https://example.org/path” next") == [
-        "https://example.org/path"
-    ]
+    assert extract_urls("See “https://example.org/path” next") == ["https://example.org/path"]
 
 
 def test_a_non_breaking_space_ends_the_url():
     """The IRI range began AT U+00A0, so a match could cross a visible word
     boundary and swallow the next word."""
-    assert extract_urls("See https://example.org/a next") == [
-        "https://example.org/a"
-    ]
+    assert extract_urls("See https://example.org/a next") == ["https://example.org/a"]
 
 
 def test_an_ansi_sequence_inside_a_url_is_removed_not_cut_at():

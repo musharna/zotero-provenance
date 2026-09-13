@@ -56,15 +56,11 @@ def test_query_by_tag_returns_items():
     sample = [
         {
             "key": "A",
-            "data": {
-                "tags": [{"tag": "context:lit-review"}, {"tag": "seen:2026-05-05"}]
-            },
+            "data": {"tags": [{"tag": "context:lit-review"}, {"tag": "seen:2026-05-05"}]},
         },
         {
             "key": "B",
-            "data": {
-                "tags": [{"tag": "context:lit-review"}, {"tag": "seen:2026-04-29"}]
-            },
+            "data": {"tags": [{"tag": "context:lit-review"}, {"tag": "seen:2026-04-29"}]},
         },
     ]
 
@@ -345,9 +341,7 @@ def test_add_tags_does_not_refetch_an_already_resolved_title():
         return "Should Not Be Used"
 
     client.add_tags("ITEM1", ["seen:2026-05-05"], title_resolver=resolver)
-    assert calls == [], (
-        "must not spend an HTTP fetch on an item that already has a title"
-    )
+    assert calls == [], "must not spend an HTTP fetch on an item that already has a title"
     assert state["title"] == "Real Title"
 
 
@@ -430,9 +424,7 @@ def test_live_unresolved_title_is_reenriched(live_zotero_creds: dict[str, str]):
 
         stored = next(i for i in client.query_by_tag(probe_tag) if i["key"] == key)
         assert stored["data"]["title"] == "Example Domain"
-        assert UNRESOLVED_TITLE_TAG not in {
-            t["tag"] for t in stored["data"].get("tags", [])
-        }
+        assert UNRESOLVED_TITLE_TAG not in {t["tag"] for t in stored["data"].get("tags", [])}
     finally:
         client.delete_item(key)
 

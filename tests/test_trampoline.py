@@ -52,9 +52,7 @@ def _fake_python(tmp_path: Path) -> Path:
 
 def _marker_hook(path: Path, marker: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        f'#!/usr/bin/env bash\ncat >/dev/null\necho forwarded > "{marker}"\nexit 0\n'
-    )
+    path.write_text(f'#!/usr/bin/env bash\ncat >/dev/null\necho forwarded > "{marker}"\nexit 0\n')
     path.chmod(0o755)
 
 
@@ -224,9 +222,7 @@ def test_forwarding_does_not_recurse(tmp_path: Path, hook: str) -> None:
 
 @requires_jq
 @pytest.mark.parametrize("hook", HOOKS)
-def test_unresolvable_target_exits_zero_without_capturing(
-    tmp_path: Path, hook: str
-) -> None:
+def test_unresolvable_target_exits_zero_without_capturing(tmp_path: Path, hook: str) -> None:
     """No registry to read: refuse quietly rather than write from a stale root."""
     setup = _install(tmp_path, mine="0.9.0", pinned="1.0.0", hook=hook)
     (setup["home"] / ".claude" / "plugins" / "installed_plugins.json").unlink()
@@ -278,9 +274,7 @@ def test_another_marketplace_listed_first_is_not_executed(tmp_path: Path, hook: 
 
 @requires_jq
 @pytest.mark.parametrize("hook", HOOKS)
-def test_a_trailing_slash_does_not_make_a_root_forward_to_itself(
-    tmp_path: Path, hook: str
-) -> None:
+def test_a_trailing_slash_does_not_make_a_root_forward_to_itself(tmp_path: Path, hook: str) -> None:
     """Otherwise every fire self-forwards, hits the recursion guard, and is lost.
 
     Not one capture — all of them, silently, for the life of the session. That is
@@ -306,9 +300,7 @@ def test_a_trailing_slash_does_not_make_a_root_forward_to_itself(
 
 @requires_jq
 @pytest.mark.parametrize("hook", HOOKS)
-def test_two_scopes_disagreeing_refuses_instead_of_guessing(
-    tmp_path: Path, hook: str
-) -> None:
+def test_two_scopes_disagreeing_refuses_instead_of_guessing(tmp_path: Path, hook: str) -> None:
     setup = _install(tmp_path, mine="0.9.0", pinned="1.0.0", hook=hook)
     home = setup["home"]
     argv_out = _fake_python(tmp_path)
@@ -473,5 +465,7 @@ def test_an_unresolvable_forward_is_reported_not_silent(tmp_path: Path, hook: st
     assert any('"forward-unresolved"' in line for line in lines), lines
     from datetime import datetime, timedelta
 
-    warnings = evaluate(lines, pinned_root=None, now=datetime.now().astimezone(), window=timedelta(hours=24))
+    warnings = evaluate(
+        lines, pinned_root=None, now=datetime.now().astimezone(), window=timedelta(hours=24)
+    )
     assert any("forward-unresolved" in w for w in warnings), warnings

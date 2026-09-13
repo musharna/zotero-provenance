@@ -116,15 +116,11 @@ def test_no_module_carries_its_own_user_agent_string():
             # A literal written straight into the header dict.
             if isinstance(node, ast.Dict):
                 for key, value in zip(node.keys, node.values):
-                    if not (
-                        isinstance(key, ast.Constant) and key.value == "User-Agent"
-                    ):
+                    if not (isinstance(key, ast.Constant) and key.value == "User-Agent"):
                         continue
                     checked += 1
                     if isinstance(value, ast.Constant):
-                        offenders.append(
-                            f"{path.name}:{value.lineno} header = {value.value!r}"
-                        )
+                        offenders.append(f"{path.name}:{value.lineno} header = {value.value!r}")
                 continue
             # A literal hidden one hop away, behind a module constant. This is
             # the form the real defect took -- `_USER_AGENT = "zotero-provenance"`
@@ -141,15 +137,15 @@ def test_no_module_carries_its_own_user_agent_string():
                     # __init__.py is the source of truth and is allowed to be a
                     # literal; it is the only file that may say what we are called.
                     if path.name != "__init__.py":
-                        offenders.append(
-                            f"{path.name}:{node.lineno} {name} = {node.value.value!r}"
-                        )
+                        offenders.append(f"{path.name}:{node.lineno} {name} = {node.value.value!r}")
 
     # Positive control: a sweep that found nothing would report a clean pass
     # while checking nothing at all, which is how a vacuous check reads as
     # evidence. Assert the discovery worked before trusting what it did not find.
     assert checked >= 2, f"discovery found no User-Agent headers at all ({checked})"
-    assert not offenders, "User-Agent set from a literal instead of the shared constant: " + "; ".join(offenders)
+    assert not offenders, (
+        "User-Agent set from a literal instead of the shared constant: " + "; ".join(offenders)
+    )
 
 
 def test_every_outbound_client_is_identified_at_construction():
@@ -171,14 +167,14 @@ def test_every_outbound_client_is_identified_at_construction():
             headers = next((kw for kw in node.keywords if kw.arg == "headers"), None)
             keys = []
             if headers is not None and isinstance(headers.value, ast.Dict):
-                keys = [
-                    k.value for k in headers.value.keys if isinstance(k, ast.Constant)
-                ]
+                keys = [k.value for k in headers.value.keys if isinstance(k, ast.Constant)]
             if "User-Agent" not in keys:
                 unidentified.append(f"{path.name}:{node.lineno}")
 
     assert clients >= 2, f"discovery found no httpx clients at all ({clients})"
-    assert not unidentified, "httpx client built without a User-Agent default: " + "; ".join(unidentified)
+    assert not unidentified, "httpx client built without a User-Agent default: " + "; ".join(
+        unidentified
+    )
 
 
 def test_the_outbound_client_actually_carries_the_shared_user_agent():
@@ -249,12 +245,17 @@ def test_the_readme_test_count_is_within_ten_percent_of_reality() -> None:
     stated = int(m.group(1).replace(",", ""))
     out = subprocess.run(
         [sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider"],
-        capture_output=True, text=True, cwd=root, timeout=180,
+        capture_output=True,
+        text=True,
+        cwd=root,
+        timeout=180,
     ).stdout
     m2 = re.search(r"(\d+) tests? collected", out) or re.search(r"(\d+)/(\d+) tests collected", out)
     assert m2, out[-400:]
     collected = int(m2.group(1))
-    assert abs(stated - collected) <= collected * 0.1, f"README says {stated}, collected {collected}"
+    assert abs(stated - collected) <= collected * 0.1, (
+        f"README says {stated}, collected {collected}"
+    )
 
 
 def test_the_changelog_index_and_entries_cover_the_current_version() -> None:

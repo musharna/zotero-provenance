@@ -183,9 +183,7 @@ def test_at_the_cap_an_existing_claim_still_updates(db: Path) -> None:
     for i in range(CLAIMS_PER_URL):
         _record(db, f"Distinct claim number {i}.", now="2026-08-01T00:00:00")
     assert _record(db, "Distinct claim number 0.", now="2026-08-27T00:00:00") is True
-    rows = [
-        r for r in claims_for_url(db, URL) if r["claim"] == "Distinct claim number 0."
-    ]
+    rows = [r for r in claims_for_url(db, URL) if r["claim"] == "Distinct claim number 0."]
     assert rows[0]["times_seen"] == 2
     assert rows[0]["last_seen"].startswith("2026-08-27")
 

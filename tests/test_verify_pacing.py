@@ -84,9 +84,7 @@ def test_the_derivation_finds_more_than_one_fetching_pass() -> None:
     original guard read as green."""
     found = _functions_that_fetch()
     assert "snapshot" in found
-    assert "verify" in found, (
-        "the derivation missed a fetching pass; the guard would be vacuous"
-    )
+    assert "verify" in found, "the derivation missed a fetching pass; the guard would be vacuous"
 
 
 @pytest.mark.parametrize("name", _functions_that_fetch())
@@ -111,9 +109,7 @@ def test_every_cli_call_site_passes_pacing(name: str) -> None:
     calls = [
         n
         for n in ast.walk(tree)
-        if isinstance(n, ast.Call)
-        and isinstance(n.func, ast.Name)
-        and n.func.id == name
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == name
     ]
     assert calls, f"positive control: no call to {name}() found in the CLI"
     for call in calls:
@@ -151,9 +147,14 @@ def _seed(db, rows):
     for i, url in enumerate(rows):
         insert_url(db, url, f"K{i}", datetime.date(2026, 5, 5))
         set_content_hash(
-            db, url, content_hash="OLD", hashed_at="THEN",
-            covers_bytes=64, complete=True,
-            sketch="", sketch_algo="",
+            db,
+            url,
+            content_hash="OLD",
+            hashed_at="THEN",
+            covers_bytes=64,
+            complete=True,
+            sketch="",
+            sketch_algo="",
         )
     return db
 
@@ -161,9 +162,14 @@ def _seed(db, rows):
 def test_verify_spaces_requests_to_the_same_host(tmp_db) -> None:
     from zotero_capture.snapshot import PageRead, verify
 
-    db = _seed(tmp_db, [
-        "https://a.test/1", "https://a.test/2", "https://a.test/3",
-    ])
+    db = _seed(
+        tmp_db,
+        [
+            "https://a.test/1",
+            "https://a.test/2",
+            "https://a.test/3",
+        ],
+    )
     slept: list[float] = []
     clock = [0.0]
 
@@ -174,9 +180,14 @@ def test_verify_spaces_requests_to_the_same_host(tmp_db) -> None:
         slept.append(s)
         clock[0] += s
 
-    verify(db, clock=lambda: "NOW", hasher=lambda u, n: PageRead(
-               digest="OLD", final_url=u, covers_bytes=64, complete=True),
-           sleep_s=2.0, sleeper=sleeper, monotonic=monotonic)
+    verify(
+        db,
+        clock=lambda: "NOW",
+        hasher=lambda u, n: PageRead(digest="OLD", final_url=u, covers_bytes=64, complete=True),
+        sleep_s=2.0,
+        sleeper=sleeper,
+        monotonic=monotonic,
+    )
 
     assert slept == [2.0, 2.0], "same-host requests were not spaced"
 
@@ -188,14 +199,24 @@ def test_verify_does_not_space_requests_to_DIFFERENT_hosts(tmp_db) -> None:
     pass take hours longer for no politeness gain."""
     from zotero_capture.snapshot import PageRead, verify
 
-    db = _seed(tmp_db, [
-        "https://a.test/1", "https://b.test/1", "https://c.test/1",
-    ])
+    db = _seed(
+        tmp_db,
+        [
+            "https://a.test/1",
+            "https://b.test/1",
+            "https://c.test/1",
+        ],
+    )
     slept: list[float] = []
 
-    verify(db, clock=lambda: "NOW", hasher=lambda u, n: PageRead(
-               digest="OLD", final_url=u, covers_bytes=64, complete=True),
-           sleep_s=2.0, sleeper=lambda s: slept.append(s), monotonic=lambda: 0.0)
+    verify(
+        db,
+        clock=lambda: "NOW",
+        hasher=lambda u, n: PageRead(digest="OLD", final_url=u, covers_bytes=64, complete=True),
+        sleep_s=2.0,
+        sleeper=lambda s: slept.append(s),
+        monotonic=lambda: 0.0,
+    )
 
     assert slept == [], "delayed between different hosts for no reason"
 
@@ -231,8 +252,8 @@ def test_a_changed_page_keeps_its_original_hash(tmp_db) -> None:
     db = _seed(tmp_db, ["https://a.test/1"])
     result = verify(
         db,
-        clock=lambda: "NOW", hasher=lambda u, n: PageRead(
-            digest="NEW", final_url=u, covers_bytes=64, complete=True),
+        clock=lambda: "NOW",
+        hasher=lambda u, n: PageRead(digest="NEW", final_url=u, covers_bytes=64, complete=True),
     )
 
     assert result.changed == 1
@@ -259,8 +280,10 @@ def test_a_page_that_differs_from_ITSELF_is_not_reported_as_changed(tmp_db) -> N
 
     result = verify(
         db,
-        clock=lambda: "NOW", hasher=lambda u, n: PageRead(
-            digest=next(reads), final_url=u, covers_bytes=64, complete=True),
+        clock=lambda: "NOW",
+        hasher=lambda u, n: PageRead(
+            digest=next(reads), final_url=u, covers_bytes=64, complete=True
+        ),
     )
 
     assert result.changed == 0, "an unstable page was reported as changed"
@@ -276,8 +299,8 @@ def test_a_stable_page_that_really_moved_is_still_reported(tmp_db) -> None:
     db = _seed(tmp_db, ["https://a.test/1"])
     result = verify(
         db,
-        clock=lambda: "NOW", hasher=lambda u, n: PageRead(
-            digest="NEW", final_url=u, covers_bytes=64, complete=True),
+        clock=lambda: "NOW",
+        hasher=lambda u, n: PageRead(digest="NEW", final_url=u, covers_bytes=64, complete=True),
     )
 
     assert result.changed == 1
@@ -310,8 +333,15 @@ def test_the_corroborating_read_is_paced_too(tmp_db) -> None:
     reads = iter(["NEW1", "NEW2"])
     slept: list[float] = []
 
-    verify(db, clock=lambda: "NOW", hasher=lambda u, n: PageRead(
-               digest=next(reads), final_url=u, covers_bytes=64, complete=True),
-           sleep_s=2.0, sleeper=lambda s: slept.append(s), monotonic=lambda: 0.0)
+    verify(
+        db,
+        clock=lambda: "NOW",
+        hasher=lambda u, n: PageRead(
+            digest=next(reads), final_url=u, covers_bytes=64, complete=True
+        ),
+        sleep_s=2.0,
+        sleeper=lambda s: slept.append(s),
+        monotonic=lambda: 0.0,
+    )
 
     assert slept == [2.0], "the corroborating re-read skipped the host delay"

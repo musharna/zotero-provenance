@@ -29,12 +29,25 @@ WINDOW = timedelta(hours=24)
 PINNED = "/c/0.19.0"
 
 
-def _cap(ts: str, *, root: str, pinned: str | None = PINNED, incident_id: str | None = "i1",
-         urls_new: int = 1, recurring: int = 0, pin_observation: str | None = None) -> str:
+def _cap(
+    ts: str,
+    *,
+    root: str,
+    pinned: str | None = PINNED,
+    incident_id: str | None = "i1",
+    urls_new: int = 1,
+    recurring: int = 0,
+    pin_observation: str | None = None,
+) -> str:
     obj = {
-        "ts": ts, "version": "x", "root": root, "project": "p",
-        "urls_seen": urls_new + recurring, "urls_new": urls_new,
-        "urls_recurring": recurring, "errors": [],
+        "ts": ts,
+        "version": "x",
+        "root": root,
+        "project": "p",
+        "urls_seen": urls_new + recurring,
+        "urls_new": urls_new,
+        "urls_recurring": recurring,
+        "errors": [],
     }
     if pinned is not None:
         obj["pinned_root"] = pinned
@@ -47,15 +60,15 @@ def _cap(ts: str, *, root: str, pinned: str | None = PINNED, incident_id: str | 
 
 
 def _check(lines, acknowledged=frozenset()):
-    return evaluate(lines, pinned_root=PINNED, now=NOW, window=WINDOW,
-                    acknowledged=acknowledged)
+    return evaluate(lines, pinned_root=PINNED, now=NOW, window=WINDOW, acknowledged=acknowledged)
 
 
 def test_two_incidents_in_one_second_are_two_incidents() -> None:
     """The aliasing defect: same root, same second, different faults."""
     stale = _cap("2026-08-25T11:00:00-04:00", root="/c/OLD", incident_id="a")
-    unver = _cap("2026-08-25T11:00:00-04:00", root="/c/OLD", incident_id="b",
-                 pin_observation="unknown")
+    unver = _cap(
+        "2026-08-25T11:00:00-04:00", root="/c/OLD", incident_id="b", pin_observation="unknown"
+    )
 
     found = incidents([stale, unver], pinned_root=PINNED)
 
@@ -64,8 +77,9 @@ def test_two_incidents_in_one_second_are_two_incidents() -> None:
 
 def test_acknowledging_one_does_not_silence_the_other() -> None:
     stale = _cap("2026-08-25T11:00:00-04:00", root="/c/OLD", incident_id="a")
-    unver = _cap("2026-08-25T11:00:00-04:00", root="/c/OLD", incident_id="b",
-                 pin_observation="unknown")
+    unver = _cap(
+        "2026-08-25T11:00:00-04:00", root="/c/OLD", incident_id="b", pin_observation="unknown"
+    )
 
     warnings = _classify([stale, unver], acknowledged=frozenset({"a"}))
 
@@ -83,8 +97,13 @@ def test_a_record_without_an_id_is_not_classified() -> None:
 
 def test_a_capture_that_wrote_nothing_is_not_an_integrity_incident() -> None:
     """Nothing was written, so there is no row to check and nothing to nag about."""
-    nothing = _cap("2026-08-25T11:00:00-04:00", root="/c/OLD", urls_new=0,
-                   recurring=0, pin_observation="unknown")
+    nothing = _cap(
+        "2026-08-25T11:00:00-04:00",
+        root="/c/OLD",
+        urls_new=0,
+        recurring=0,
+        pin_observation="unknown",
+    )
 
     assert _check([nothing]) == [], "a zero-write record became a permanent incident"
 
@@ -121,12 +140,23 @@ def test_the_warning_names_a_command_that_actually_works(tmp_path) -> None:
     from zotero_capture.health_ledger import open_incident
 
     ledger = tmp_path / "health.db"
-    open_incident(ledger, incident_id="abc123", url="u", root="/c/OLD",
-                  pinned_root=PINNED, kind="stale", ts="2026-08-25T11:00:00-04:00")
+    open_incident(
+        ledger,
+        incident_id="abc123",
+        url="u",
+        root="/c/OLD",
+        pinned_root=PINNED,
+        kind="stale",
+        ts="2026-08-25T11:00:00-04:00",
+    )
 
-    warnings = evaluate([], pinned_root=PINNED,
-                        now=datetime(2026, 8, 25, 12, 0, tzinfo=timezone(timedelta(hours=-4))),
-                        window=timedelta(hours=24), ledger_path=ledger)
+    warnings = evaluate(
+        [],
+        pinned_root=PINNED,
+        now=datetime(2026, 8, 25, 12, 0, tzinfo=timezone(timedelta(hours=-4))),
+        window=timedelta(hours=24),
+        ledger_path=ledger,
+    )
 
     assert warnings
     text = " ".join(warnings)

@@ -66,11 +66,7 @@ NONCE = "<meta name=session content={}>"
 # of the document, which no real page looks like: the GitHub page this was
 # measured on is 399 KB with ONE volatile line. A fixture with the wrong shape
 # would have driven the coverage floor to a number the corpus never justified.
-BODY = (
-    ["<html>"]
-    + [f"<p>paragraph {i} of the cited work</p>" for i in range(20)]
-    + ["</html>"]
-)
+BODY = ["<html>"] + [f"<p>paragraph {i} of the cited work</p>" for i in range(20)] + ["</html>"]
 EDITED = (
     ["<html>"]
     + [f"<p>paragraph {i} of the cited work</p>" for i in range(19)]
@@ -79,10 +75,7 @@ EDITED = (
 
 
 def _units(text_lines):
-    return tuple(
-        snap.UnitRead(hashlib.sha256(x.encode()).hexdigest(), len(x))
-        for x in text_lines
-    )
+    return tuple(snap.UnitRead(hashlib.sha256(x.encode()).hexdigest(), len(x)) for x in text_lines)
 
 
 def _read(text_lines, *, digest="D", complete=True) -> PageRead:
@@ -120,9 +113,7 @@ def _edited(n: int):
 # to detect. The tweak it can no longer see has its own test below, stating the
 # cost instead of hiding it.
 REPLACED = (
-    ["<html>"]
-    + [f"<p>an entirely different sentence {i}</p>" for i in range(20)]
-    + ["</html>"]
+    ["<html>"] + [f"<p>an entirely different sentence {i}</p>" for i in range(20)] + ["</html>"]
 )
 
 
@@ -247,11 +238,17 @@ def test_a_recorded_baseline_is_never_overwritten(tmp_path) -> None:
     """
     db = _seed(tmp_path / "i.db", "https://example.org/p")
     assert set_stable_digest(
-        db, "https://example.org/p", digest="FIRST", covers_bytes=10,
+        db,
+        "https://example.org/p",
+        digest="FIRST",
+        covers_bytes=10,
         algo=snap.STABLE_ALGO,
     )
     assert not set_stable_digest(
-        db, "https://example.org/p", digest="SECOND", covers_bytes=20,
+        db,
+        "https://example.org/p",
+        digest="SECOND",
+        covers_bytes=20,
         algo=snap.STABLE_ALGO,
     )
     row = row_for_url(db, "https://example.org/p")
@@ -274,7 +271,10 @@ def test_a_digest_from_another_method_is_replaced_rather_than_compared(
         db, "https://example.org/p", digest="OLDWAY", covers_bytes=10, algo="lines/0"
     )
     assert set_stable_digest(
-        db, "https://example.org/p", digest="NEWWAY", covers_bytes=20,
+        db,
+        "https://example.org/p",
+        digest="NEWWAY",
+        covers_bytes=20,
         algo=snap.STABLE_ALGO,
     )
     row = row_for_url(db, "https://example.org/p")
@@ -282,7 +282,10 @@ def test_a_digest_from_another_method_is_replaced_rather_than_compared(
     assert row["stable_algo"] == snap.STABLE_ALGO
 
     assert not set_stable_digest(
-        db, "https://example.org/p", digest="AGAIN", covers_bytes=30,
+        db,
+        "https://example.org/p",
+        digest="AGAIN",
+        covers_bytes=30,
         algo=snap.STABLE_ALGO,
     )
     assert row_for_url(db, "https://example.org/p")["stable_digest"] == "NEWWAY"
@@ -307,7 +310,8 @@ def _seed(db, url, *, stored_hash="OLD"):
         hashed_at="T1",
         covers_bytes=64,
         complete=True,
-        sketch="", sketch_algo="",
+        sketch="",
+        sketch_algo="",
     )
     return db
 
@@ -492,9 +496,7 @@ def test_a_page_that_agrees_with_itself_never_reaches_this_path(tmp_path) -> Non
 def _docstring_nodes(tree):
     out = set()
     for node in ast.walk(tree):
-        if isinstance(
-            node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
-        ):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
             body = getattr(node, "body", None)
             if (
                 body
@@ -533,9 +535,7 @@ def test_the_fix_is_not_a_list_of_volatile_field_names() -> None:
         and id(node) not in skip
         and any(n in node.value.lower() for n in named)
     ]
-    assert offenders == [], (
-        f"volatility is being named rather than derived: {offenders}"
-    )
+    assert offenders == [], f"volatility is being named rather than derived: {offenders}"
     # Non-vacuous: the thing that replaces the list has to exist.
     assert callable(stable_digest)
 
@@ -545,11 +545,7 @@ def test_the_fix_is_not_a_list_of_volatile_field_names() -> None:
 # A page wide enough that one moved element is a realistic fraction of it. The
 # fixtures above are 22 lines, so a single moved unit would be 4% of the
 # document -- the live case is 46 chunks of 3,475, which is 1.3%.
-WIDE = (
-    ["<html>"]
-    + [f"<p>paragraph {i} of the cited work</p>" for i in range(200)]
-    + ["</html>"]
-)
+WIDE = ["<html>"] + [f"<p>paragraph {i} of the cited work</p>" for i in range(200)] + ["</html>"]
 # Volatile, but SLOWER than the pair. springer stamps one of these into every
 # reference anchor; it is fixed within a render and different across renders, so
 # two reads seconds apart routinely agree on it and it is admitted as content.
@@ -597,9 +593,7 @@ def test_a_document_that_really_changed_is_still_called_changed(tmp_path) -> Non
     _run(db, _volatile_hasher([_render(1, "a"), _render(2, "a")]))
 
     rewritten = (
-        ["<html>"]
-        + [f"<p>ENTIRELY DIFFERENT TEXT {i}</p>" for i in range(200)]
-        + ["</html>"]
+        ["<html>"] + [f"<p>ENTIRELY DIFFERENT TEXT {i}</p>" for i in range(200)] + ["</html>"]
     )
 
     def _other(nonce: int, render: str):

@@ -32,9 +32,7 @@ def _flags_and_reads(path: Path) -> tuple[set[str], set[str]]:
     reads = {
         n.attr
         for n in ast.walk(tree)
-        if isinstance(n, ast.Attribute)
-        and isinstance(n.value, ast.Name)
-        and n.value.id == "args"
+        if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name) and n.value.id == "args"
     }
     return flags, reads
 

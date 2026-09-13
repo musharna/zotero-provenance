@@ -164,8 +164,11 @@ def test_code_and_fallback_text_are_not_prose() -> None:
     a shell over the threshold.
     """
     shell = (
-        b"<html><body><noscript>" + b"You need to enable JavaScript. " * 40
-        + b"</noscript><script>" + b"x=1;" * 5000 + b"</script><p>hi</p></body></html>"
+        b"<html><body><noscript>"
+        + b"You need to enable JavaScript. " * 40
+        + b"</noscript><script>"
+        + b"x=1;" * 5000
+        + b"</script><p>hi</p></body></html>"
     )
     assert visible_text_chars(shell) < 20
     assert document_is_a_gate(shell)

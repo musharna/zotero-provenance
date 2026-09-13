@@ -84,8 +84,7 @@ def move_url(
     # a different item.
     with connect(db_path) as conn:
         moved = conn.execute(
-            "UPDATE url_index SET url_canonical = ?"
-            " WHERE url_canonical = ? AND zotero_key = ?",
+            "UPDATE url_index SET url_canonical = ? WHERE url_canonical = ? AND zotero_key = ?",
             (new, old, zotero_key),
         ).rowcount
     if not moved:

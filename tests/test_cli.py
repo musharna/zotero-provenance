@@ -58,9 +58,7 @@ def test_run_triage_when_url_unknown_returns_two(tmp_db: Path):
 
 def test_run_triage_adds_tag_when_url_known(tmp_db: Path):
     init_db(tmp_db)
-    insert_url(
-        tmp_db, "https://fixturehost.org/foo", "EXISTKEY", first_seen=date(2026, 5, 1)
-    )
+    insert_url(tmp_db, "https://fixturehost.org/foo", "EXISTKEY", first_seen=date(2026, 5, 1))
     fake_zotero = MagicMock()
     fake_zotero.add_tags.return_value = True
     rc = run_triage(
@@ -75,9 +73,7 @@ def test_run_triage_adds_tag_when_url_known(tmp_db: Path):
 def test_run_triage_matches_a_non_canonical_url(tmp_db: Path):
     """The user pastes the URL they saw, which may carry tracking params."""
     init_db(tmp_db)
-    insert_url(
-        tmp_db, "https://fixturehost.org/foo", "EXISTKEY", first_seen=date(2026, 5, 1)
-    )
+    insert_url(tmp_db, "https://fixturehost.org/foo", "EXISTKEY", first_seen=date(2026, 5, 1))
     fake_zotero = MagicMock()
     rc = run_triage(
         url="https://Fixturehost.org/foo/?utm_source=newsletter#section",

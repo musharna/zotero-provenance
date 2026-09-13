@@ -40,8 +40,15 @@ def _db(tmp_path: Path) -> Path:
 
 def test_an_incident_exists_before_the_write_it_describes(tmp_path: Path) -> None:
     db = _db(tmp_path)
-    open_incident(db, incident_id="a1", url="https://x.test/1", root="/c/OLD",
-                  pinned_root="/c/NEW", kind="stale", ts="2026-08-25T11:00:00-04:00")
+    open_incident(
+        db,
+        incident_id="a1",
+        url="https://x.test/1",
+        root="/c/OLD",
+        pinned_root="/c/NEW",
+        kind="stale",
+        ts="2026-08-25T11:00:00-04:00",
+    )
 
     found = open_incidents(db)
 
@@ -54,8 +61,15 @@ def test_recording_the_same_incident_twice_is_idempotent(tmp_path: Path) -> None
     """The same write may be retried; it is still one incident."""
     db = _db(tmp_path)
     for _ in range(3):
-        open_incident(db, incident_id="a1", url="u", root="/c/OLD",
-                      pinned_root="/c/NEW", kind="stale", ts="2026-08-25T11:00:00-04:00")
+        open_incident(
+            db,
+            incident_id="a1",
+            url="u",
+            root="/c/OLD",
+            pinned_root="/c/NEW",
+            kind="stale",
+            ts="2026-08-25T11:00:00-04:00",
+        )
 
     assert count_open(db) == 1
 
@@ -63,8 +77,15 @@ def test_recording_the_same_incident_twice_is_idempotent(tmp_path: Path) -> None
 def test_acknowledging_resolves_exactly_one_incident(tmp_path: Path) -> None:
     db = _db(tmp_path)
     for i in ("a1", "a2"):
-        open_incident(db, incident_id=i, url="u", root="/c/OLD",
-                      pinned_root="/c/NEW", kind="stale", ts="2026-08-25T11:00:00-04:00")
+        open_incident(
+            db,
+            incident_id=i,
+            url="u",
+            root="/c/OLD",
+            pinned_root="/c/NEW",
+            kind="stale",
+            ts="2026-08-25T11:00:00-04:00",
+        )
 
     assert acknowledge(db, ["a1"]) == ["a1"]
     assert [i["incident_id"] for i in open_incidents(db)] == ["a2"]
@@ -73,8 +94,15 @@ def test_acknowledging_resolves_exactly_one_incident(tmp_path: Path) -> None:
 def test_acknowledging_an_unknown_id_changes_nothing(tmp_path: Path) -> None:
     """It used to exit 0, print "acknowledged 1 incident(s)", and store the typo."""
     db = _db(tmp_path)
-    open_incident(db, incident_id="a1", url="u", root="/c/OLD",
-                  pinned_root="/c/NEW", kind="stale", ts="2026-08-25T11:00:00-04:00")
+    open_incident(
+        db,
+        incident_id="a1",
+        url="u",
+        root="/c/OLD",
+        pinned_root="/c/NEW",
+        kind="stale",
+        ts="2026-08-25T11:00:00-04:00",
+    )
 
     assert acknowledge(db, ["nope"]) == []
     assert count_open(db) == 1, "an unknown id disturbed the ledger"
@@ -82,8 +110,15 @@ def test_acknowledging_an_unknown_id_changes_nothing(tmp_path: Path) -> None:
 
 def test_acknowledging_a_mixed_batch_reports_only_what_it_resolved(tmp_path: Path) -> None:
     db = _db(tmp_path)
-    open_incident(db, incident_id="a1", url="u", root="/c/OLD",
-                  pinned_root="/c/NEW", kind="stale", ts="2026-08-25T11:00:00-04:00")
+    open_incident(
+        db,
+        incident_id="a1",
+        url="u",
+        root="/c/OLD",
+        pinned_root="/c/NEW",
+        kind="stale",
+        ts="2026-08-25T11:00:00-04:00",
+    )
 
     assert acknowledge(db, ["a1", "nope"]) == ["a1"]
     assert count_open(db) == 0
@@ -92,8 +127,15 @@ def test_acknowledging_a_mixed_batch_reports_only_what_it_resolved(tmp_path: Pat
 def test_ack_all_resolves_every_open_incident(tmp_path: Path) -> None:
     db = _db(tmp_path)
     for i in ("a1", "a2", "a3"):
-        open_incident(db, incident_id=i, url="u", root="/c/OLD",
-                      pinned_root="/c/NEW", kind="stale", ts="2026-08-25T11:00:00-04:00")
+        open_incident(
+            db,
+            incident_id=i,
+            url="u",
+            root="/c/OLD",
+            pinned_root="/c/NEW",
+            kind="stale",
+            ts="2026-08-25T11:00:00-04:00",
+        )
 
     assert acknowledge_all(db) == 3
     assert count_open(db) == 0
@@ -102,12 +144,26 @@ def test_ack_all_resolves_every_open_incident(tmp_path: Path) -> None:
 def test_an_acknowledged_incident_does_not_reopen(tmp_path: Path) -> None:
     """The write is still in the log; re-ingesting it must not undo the ack."""
     db = _db(tmp_path)
-    open_incident(db, incident_id="a1", url="u", root="/c/OLD",
-                  pinned_root="/c/NEW", kind="stale", ts="2026-08-25T11:00:00-04:00")
+    open_incident(
+        db,
+        incident_id="a1",
+        url="u",
+        root="/c/OLD",
+        pinned_root="/c/NEW",
+        kind="stale",
+        ts="2026-08-25T11:00:00-04:00",
+    )
     acknowledge(db, ["a1"])
 
-    open_incident(db, incident_id="a1", url="u", root="/c/OLD",
-                  pinned_root="/c/NEW", kind="stale", ts="2026-08-25T11:00:00-04:00")
+    open_incident(
+        db,
+        incident_id="a1",
+        url="u",
+        root="/c/OLD",
+        pinned_root="/c/NEW",
+        kind="stale",
+        ts="2026-08-25T11:00:00-04:00",
+    )
 
     assert count_open(db) == 0, "an acknowledged incident came back"
 
@@ -116,8 +172,15 @@ def test_listing_is_bounded_and_reports_what_it_did_not_show(tmp_path: Path) -> 
     """A silent cap recreates hidden incidents; an explicit remainder does not."""
     db = _db(tmp_path)
     for n in range(10):
-        open_incident(db, incident_id=f"a{n}", url="u", root="/c/OLD",
-                      pinned_root="/c/NEW", kind="stale", ts="2026-08-25T11:00:00-04:00")
+        open_incident(
+            db,
+            incident_id=f"a{n}",
+            url="u",
+            root="/c/OLD",
+            pinned_root="/c/NEW",
+            kind="stale",
+            ts="2026-08-25T11:00:00-04:00",
+        )
 
     shown = open_incidents(db, limit=3)
 

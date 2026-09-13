@@ -109,9 +109,7 @@ def emit_markdown(
     since_days: int,
 ) -> str:
     buckets = bucket_items(items, run_started=run_started)
-    prior_runs = sorted(
-        {d for item in items for d in seen_dates(item) if d < run_started}
-    )
+    prior_runs = sorted({d for item in items for d in seen_dates(item) if d < run_started})
 
     lines = [
         NO_CAPTURE_MARKER,
@@ -160,8 +158,7 @@ def emit_markdown(
         "Dropped since last run",
         "dropped",
         lambda i: (
-            f"{_md_link(i)} — last seen {seen_dates(i)[-1].isoformat()}, "
-            "not surfaced this run"
+            f"{_md_link(i)} — last seen {seen_dates(i)[-1].isoformat()}, not surfaced this run"
         ),
     )
 

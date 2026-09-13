@@ -87,9 +87,7 @@ class ZoteroClient:
         if resp.status_code == 404:
             return False
         if resp.status_code >= 400:
-            raise ZoteroError(
-                f"GET /items/{item_key} failed: {resp.status_code} {resp.text}"
-            )
+            raise ZoteroError(f"GET /items/{item_key} failed: {resp.status_code} {resp.text}")
         return not (resp.json().get("data", {}).get("deleted"))
 
     def get_item_tags(self, item_key: str) -> list[str]:
@@ -102,9 +100,7 @@ class ZoteroClient:
         if resp.status_code == 404:
             return []
         if resp.status_code >= 400:
-            raise ZoteroError(
-                f"GET /items/{item_key} failed: {resp.status_code} {resp.text}"
-            )
+            raise ZoteroError(f"GET /items/{item_key} failed: {resp.status_code} {resp.text}")
         return [t["tag"] for t in resp.json().get("data", {}).get("tags", [])]
 
     def post_webpage_item(
@@ -186,9 +182,7 @@ class ZoteroClient:
                     if retry_sleep_s:
                         time.sleep(retry_sleep_s * attempt)
             if resp.status_code >= 400:
-                raise ZoteroError(
-                    f"GET collection items failed: {resp.status_code} {resp.text}"
-                )
+                raise ZoteroError(f"GET collection items failed: {resp.status_code} {resp.text}")
             page = resp.json()
             yield from page
             if len(page) < limit:
@@ -315,20 +309,13 @@ class ZoteroClient:
         if resp.status_code == 404:
             raise ItemGone(f"item {item_key} no longer exists")
         if resp.status_code >= 400:
-            raise ZoteroError(
-                f"GET /items/{item_key} failed: {resp.status_code} {resp.text}"
-            )
+            raise ZoteroError(f"GET /items/{item_key} failed: {resp.status_code} {resp.text}")
         body = resp.json()
         data = body.get("data", {})
         if data.get("deleted") and not allow_trashed:
             raise ItemGone(f"item {item_key} is in the trash")
-        version = resp.headers.get("Last-Modified-Version") or str(
-            body.get("version", 0)
-        )
-        if (
-            expect_url is not None
-            and (data.get("url") or "").strip() != expect_url.strip()
-        ):
+        version = resp.headers.get("Last-Modified-Version") or str(body.get("version", 0))
+        if expect_url is not None and (data.get("url") or "").strip() != expect_url.strip():
             logger.warning(
                 "refusing to write to %s: selected as %r but it is now %r",
                 item_key,
@@ -383,14 +370,10 @@ class ZoteroClient:
         if resp.status_code == 412:
             return None  # someone else wrote; caller refetches and reapplies
         if resp.status_code not in (200, 204):
-            raise ZoteroError(
-                f"PATCH /items/{item_key} failed: {resp.status_code} {resp.text}"
-            )
+            raise ZoteroError(f"PATCH /items/{item_key} failed: {resp.status_code} {resp.text}")
         return True
 
-    def _patch_item_url(
-        self, item_key: str, url: str, *, expect_url: str | None = None
-    ) -> bool:
+    def _patch_item_url(self, item_key: str, url: str, *, expect_url: str | None = None) -> bool:
         """Write an item's URL. PRIVATE -- callers want `url_move.move_url`.
 
         Needed because a URL truncated at capture time cannot be repaired by any
@@ -487,8 +470,7 @@ class ZoteroClient:
             return False
         if resp.status_code != 204:
             raise ZoteroError(
-                f"PATCH /items/{item_key} (extra) failed: "
-                f"{resp.status_code} {resp.text}"
+                f"PATCH /items/{item_key} (extra) failed: {resp.status_code} {resp.text}"
             )
         return True
 
@@ -513,9 +495,7 @@ class ZoteroClient:
         # allow_trashed: this IS the removal. Refusing because the item is
         # already in the trash would report a failure for work already done.
         try:
-            opened = self._open_for_write(
-                item_key, expect_url=expect_url, allow_trashed=True
-            )
+            opened = self._open_for_write(item_key, expect_url=expect_url, allow_trashed=True)
         except ItemGone:
             # NOT success. Returning None here read as "done" to repair, which
             # then rewrote its SQLite row and counted a rewrite for an item that
@@ -534,8 +514,7 @@ class ZoteroClient:
             return False
         if resp.status_code not in (204, 404):
             raise ZoteroError(
-                f"PATCH /items/{item_key} (trash) failed: "
-                f"{resp.status_code} {resp.text}"
+                f"PATCH /items/{item_key} (trash) failed: {resp.status_code} {resp.text}"
             )
         return True
 
@@ -569,9 +548,7 @@ class ZoteroClient:
         if resp.status_code == 404:
             return False
         if resp.status_code not in (204, 404):
-            raise ZoteroError(
-                f"DELETE /items/{item_key} failed: {resp.status_code} {resp.text}"
-            )
+            raise ZoteroError(f"DELETE /items/{item_key} failed: {resp.status_code} {resp.text}")
         return True
 
 

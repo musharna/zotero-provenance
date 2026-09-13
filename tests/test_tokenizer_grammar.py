@@ -69,9 +69,7 @@ def test_a_raw_ansi_escape_terminates_the_url():
 
 
 def test_a_backslash_is_not_url_data():
-    assert extract_urls(r"https://cloud.r-project.org\ mirror") == [
-        "https://cloud.r-project.org"
-    ]
+    assert extract_urls(r"https://cloud.r-project.org\ mirror") == ["https://cloud.r-project.org"]
 
 
 # --- positive controls: everything the grammar DOES permit must survive ---
@@ -114,10 +112,8 @@ def test_an_unencoded_non_ascii_path_survives():
 
 
 def test_a_bracketed_ipv6_url_still_matches_through_its_own_branch():
-    """"[" and "]" stay out of the general branch; the host branch owns them."""
-    assert extract_urls("try https://[2001:db8::1]:8443/x now") == [
-        "https://[2001:db8::1]:8443/x"
-    ]
+    """ "[" and "]" stay out of the general branch; the host branch owns them."""
+    assert extract_urls("try https://[2001:db8::1]:8443/x now") == ["https://[2001:db8::1]:8443/x"]
 
 
 def test_a_balanced_paren_is_still_the_balance_rule_to_judge():
@@ -163,13 +159,11 @@ def test_a_two_placeholder_path_is_dropped():
 
 def test_a_quoted_url_is_still_a_citation():
     """The terminator is illegal but nothing URL-like follows it: the URL ended."""
-    assert extract_urls('he cited "https://example.org/a/b" earlier') == [
-        "https://example.org/a/b"
-    ]
+    assert extract_urls('he cited "https://example.org/a/b" earlier') == ["https://example.org/a/b"]
 
 
 def test_a_trailing_pipe_still_yields_the_url_not_a_drop():
-    """"|" then a space: the pipe is punctuation, not the middle of a template."""
+    """ "|" then a space: the pipe is punctuation, not the middle of a template."""
     assert extract_urls("see https://example.org/a| next") == ["https://example.org/a"]
 
 

@@ -52,9 +52,7 @@ def _one_enormous_line(nonce: bytes) -> bytes:
     dataset page is a single 630 KB line and springer's volatile bytes sit
     inside a 105 KB one.
     """
-    filler = b"".join(
-        b"<p>paragraph %d of the cited work</p>" % i for i in range(4000)
-    )
+    filler = b"".join(b"<p>paragraph %d of the cited work</p>" % i for i in range(4000))
     half = len(filler) // 2
     return filler[:half] + TOKEN % nonce + filler[half:]
 
@@ -146,7 +144,7 @@ def test_no_source_formatting_can_make_a_unit_arbitrarily_large() -> None:
     assert sum(u.nbytes for u in units) == len(body), "the document must survive intact"
 
 
-def test_fixed_size_blocks_are_the_control_that_earns_content_defined_ones()  -> None:
+def test_fixed_size_blocks_are_the_control_that_earns_content_defined_ones() -> None:
     """Smaller units are NOT the fix; re-synchronising boundaries are.
 
     Fixed blocks here are the SAME 64-byte average as the real unit. An edit
@@ -191,6 +189,4 @@ def test_the_same_bytes_are_always_cut_the_same_way() -> None:
     """
     body = _one_enormous_line(b"stable")
     assert _units(body) == _units(body)
-    assert snap._GEAR[0] == int.from_bytes(
-        hashlib.sha256(bytes([0])).digest()[:8], "big"
-    )
+    assert snap._GEAR[0] == int.from_bytes(hashlib.sha256(bytes([0])).digest()[:8], "big")

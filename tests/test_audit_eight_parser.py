@@ -44,9 +44,7 @@ def test_a_url_with_an_impossible_port_is_refused_not_raised():
     """
     assert is_storable_url("https://example.com:99999/path") is False
     # And the good neighbour in the same message survives.
-    urls = extract_urls(
-        "[bad](https://example.com:99999/path) and [good](https://good.com/paper)"
-    )
+    urls = extract_urls("[bad](https://example.com:99999/path) and [good](https://good.com/paper)")
     assert urls == ["https://good.com/paper"]
 
 
@@ -85,6 +83,4 @@ def test_a_balanced_paren_url_is_untouched():
 
 def test_a_trailing_paren_in_prose_is_still_not_part_of_the_url():
     """And the prose case linkify's balancer exists for keeps working."""
-    assert bare_urls("see (https://example.org/foo) for more") == [
-        "https://example.org/foo"
-    ]
+    assert bare_urls("see (https://example.org/foo) for more") == ["https://example.org/foo"]

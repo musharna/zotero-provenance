@@ -105,9 +105,7 @@ class OperationJournal:
 
     def outcome(self, seq: int, state: str, detail: str = "") -> None:
         """Close one step: done, refused, or failed."""
-        self._write(
-            {"event": "outcome", "seq": seq, "state": state, "detail": detail[:500]}
-        )
+        self._write({"event": "outcome", "seq": seq, "state": state, "detail": detail[:500]})
 
 
 def read_events(db_path: Path) -> list[dict]:

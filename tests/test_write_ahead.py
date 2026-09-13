@@ -56,8 +56,7 @@ def test_a_write_from_a_stale_root_is_recorded_before_it_happens(
     tmp_path: Path, monkeypatch
 ) -> None:
     ledger = tmp_path / "health.db"
-    zotero = _run(tmp_path / "i.db", ledger, monkeypatch,
-                  pinned="/c/NEW", root="/c/OLD")
+    zotero = _run(tmp_path / "i.db", ledger, monkeypatch, pinned="/c/NEW", root="/c/OLD")
 
     assert zotero.posted, "positive control: the write should have been attempted"
     found = open_incidents(ledger)
@@ -66,9 +65,7 @@ def test_a_write_from_a_stale_root_is_recorded_before_it_happens(
     assert found[0]["url"] == "https://fixturehost.org/one"
 
 
-def test_a_write_with_an_unverifiable_pin_is_recorded_too(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_a_write_with_an_unverifiable_pin_is_recorded_too(tmp_path: Path, monkeypatch) -> None:
     ledger = tmp_path / "health.db"
     _run(tmp_path / "i.db", ledger, monkeypatch, pinned=None, root="/c/OLD")
 

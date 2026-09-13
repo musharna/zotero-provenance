@@ -123,8 +123,7 @@ def repo_visibility(slug: tuple[str, str], *, client: Any, token: str) -> str:
     if resp.status_code in (401, 403):
         # A bad or rate-limited token says nothing about the repository.
         logger.warning(
-            "GitHub refused the corroboration request for %s/%s (%s); "
-            "treating as unknown",
+            "GitHub refused the corroboration request for %s/%s (%s); treating as unknown",
             owner,
             repo,
             resp.status_code,

@@ -83,8 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--origin",
         choices=("assistant", "user"),
         default="assistant",
-        help="who wrote the message; only assistant output may carry the "
-        "generated-report marker",
+        help="who wrote the message; only assistant output may carry the generated-report marker",
     )
     p.add_argument(
         "--triage",
@@ -256,11 +255,7 @@ def _emit_log(
         # real one). When it cannot be resolved, say so explicitly — silently
         # omitting the field downgraded a fresh record to the legacy timestamp
         # comparison it was meant to replace.
-        **(
-            {"pinned_root": pinned_root}
-            if pinned_root
-            else {"pin_observation": "unknown"}
-        ),
+        **({"pinned_root": pinned_root} if pinned_root else {"pin_observation": "unknown"}),
         # Only present when the run refused; absent on ordinary captures so the
         # healthy line keeps its existing shape.
         **({"refused": result.refused} if result.refused else {}),
@@ -273,9 +268,7 @@ def _emit_log(
         "latency_ms": latency_ms,
         "library": (identity or {}).get("library_id", ""),
         "collection": (identity or {}).get("collection_key", ""),
-        "errors": [
-            {"url": e.url, "code": e.code, "message": e.message} for e in result.errors
-        ],
+        "errors": [{"url": e.url, "code": e.code, "message": e.message} for e in result.errors],
     }
     with log_path.open("a") as fh:
         fh.write(json.dumps(obj) + "\n")

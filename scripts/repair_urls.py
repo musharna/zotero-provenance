@@ -40,10 +40,7 @@ def _connect(db_path: Path) -> sqlite3.Connection:
 
 def _read_rows(db_path: Path) -> list[dict]:
     with closing(_connect(db_path)) as conn:
-        return [
-            dict(r)
-            for r in conn.execute("SELECT url_canonical, zotero_key FROM url_index")
-        ]
+        return [dict(r) for r in conn.execute("SELECT url_canonical, zotero_key FROM url_index")]
 
 
 def main(argv: list[str] | None = None) -> int:

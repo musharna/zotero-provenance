@@ -75,9 +75,7 @@ def backfill(
                 # Not closed over the snapshot url: add_tags passes the
                 # item's CURRENT url, so a title can never land on an item that
                 # has become a different source since the walk.
-                patched = zotero.add_tags(
-                    item["key"], [], title_resolver=title_fetcher
-                )
+                patched = zotero.add_tags(item["key"], [], title_resolver=title_fetcher)
                 if patched:
                     result.fixed += 1
                 else:

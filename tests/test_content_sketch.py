@@ -104,9 +104,7 @@ def test_a_view_counter_is_reported_as_a_change_of_measurable_size(tmp_path) -> 
     """
     db = _seed(tmp_path / "i.db", _with_counter(308))
 
-    result = verify(
-        db, hasher=_steady_hasher(_with_counter(310)), clock=lambda: "NOW"
-    )
+    result = verify(db, hasher=_steady_hasher(_with_counter(310)), clock=lambda: "NOW")
 
     assert result.changed == 1
     assert result.changed_similarity[URL] is not None
@@ -120,7 +118,11 @@ def test_a_rewritten_document_scores_far_below_a_moved_counter(tmp_path) -> None
     function returning 1.0 would satisfy all of them. Here the document really
     is replaced, and the same number has to collapse."""
     db = _seed(tmp_path / "i.db", _with_counter(308))
-    other = ["<html>"] + [f"<p>an entirely different sentence {i}</p>" for i in range(200)] + ["</html>"]
+    other = (
+        ["<html>"]
+        + [f"<p>an entirely different sentence {i}</p>" for i in range(200)]
+        + ["</html>"]
+    )
 
     result = verify(db, hasher=_steady_hasher(other), clock=lambda: "NOW")
 

@@ -86,11 +86,7 @@ def prune(
         # human can get them back, but "which of these did that run put here"
         # was unanswerable — and that is the question you have when a pass
         # surprises you.
-        seq = (
-            journal.step(target=key, action="trash", before={"url": url})
-            if journal
-            else 0
-        )
+        seq = journal.step(target=key, action="trash", before={"url": url}) if journal else 0
         try:
             # The snapshot url is the evidence this item was chosen on. The walk
             # completes before any write, so minutes can pass in between.
@@ -129,10 +125,7 @@ def format_prune_report(result: PruneResult, *, dry_run: bool) -> list[str]:
         lines += [f"  would trash: {url}" for url in result.selected]
     else:
         lines += [f"  trashed: {url}" for url in result.trashed_urls]
-        lines += [
-            f"  refused: {url}  (moved since it was selected)"
-            for url in result.skipped_urls
-        ]
+        lines += [f"  refused: {url}  (moved since it was selected)" for url in result.skipped_urls]
         lines += [f"  error:   {url}" for url in result.error_urls]
 
     verb = "would trash" if dry_run else "trashed"
@@ -144,7 +137,5 @@ def format_prune_report(result: PruneResult, *, dry_run: bool) -> list[str]:
     lines.append(f"errors    : {result.errors}")
     if not dry_run and count:
         lines.append("")
-        lines.append(
-            "These are in the Zotero trash, not deleted. Restore from any client."
-        )
+        lines.append("These are in the Zotero trash, not deleted. Restore from any client.")
     return lines

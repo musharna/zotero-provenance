@@ -117,6 +117,7 @@ def test_a_chunk_boundary_does_not_move_the_cut() -> None:
     """The cut must land at the cap, not at the end of whichever chunk crossed
     it. Chunk sizes are the transport's business and vary between runs, so a
     digest that depended on them would differ for a document that had not."""
+
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=BIG)
 
@@ -166,8 +167,14 @@ def test_a_page_read_cannot_be_built_without_its_coverage() -> None:
 def test_the_stored_hash_carries_its_coverage(db: Path) -> None:
     insert_url(db, URL, "K1", datetime.date(2026, 9, 1))
     set_content_hash(
-        db, URL, content_hash="abc", hashed_at="T", covers_bytes=1024, complete=False,
-        sketch="", sketch_algo="",
+        db,
+        URL,
+        content_hash="abc",
+        hashed_at="T",
+        covers_bytes=1024,
+        complete=False,
+        sketch="",
+        sketch_algo="",
     )
     row = row_for_url(db, URL)
     assert row["hash_bytes"] == 1024
@@ -192,8 +199,7 @@ def test_rows_hashed_before_this_existed_read_as_COMPLETE(db: Path) -> None:
     insert_url(db, URL, "K1", datetime.date(2026, 9, 1))
     with __import__("sqlite3").connect(db) as conn:
         conn.execute(
-            "UPDATE url_index SET content_hash = 'legacy', hashed_at = 'T'"
-            " WHERE url_canonical = ?",
+            "UPDATE url_index SET content_hash = 'legacy', hashed_at = 'T' WHERE url_canonical = ?",
             (URL,),
         )
     row = row_for_url(db, URL)
@@ -234,9 +240,14 @@ def test_an_oversized_page_is_now_recorded_by_the_snapshot_pass(db: Path) -> Non
 def _seed(db, url, *, digest, covers, complete):
     insert_url(db, url, "K1", datetime.date(2026, 9, 1))
     set_content_hash(
-        db, url, content_hash=digest, hashed_at="THEN",
-        covers_bytes=covers, complete=complete,
-        sketch="", sketch_algo="",
+        db,
+        url,
+        content_hash=digest,
+        hashed_at="THEN",
+        covers_bytes=covers,
+        complete=complete,
+        sketch="",
+        sketch_algo="",
     )
     return db
 
@@ -250,9 +261,9 @@ def test_a_matching_PREFIX_is_not_reported_as_unchanged(db: Path) -> None:
     _seed(db, URL, digest="P", covers=1024, complete=False)
 
     result = verify(
-        db, clock=lambda: "NOW", hasher=lambda u, n: PageRead(
-            digest="P", final_url=u, covers_bytes=n, complete=False
-        ),
+        db,
+        clock=lambda: "NOW",
+        hasher=lambda u, n: PageRead(digest="P", final_url=u, covers_bytes=n, complete=False),
     )
 
     assert result.unchanged == 0, "a prefix match was reported as the whole document"
@@ -265,9 +276,9 @@ def test_a_matching_COMPLETE_hash_is_still_reported_unchanged(db: Path) -> None:
     _seed(db, URL, digest="C", covers=500, complete=True)
 
     result = verify(
-        db, clock=lambda: "NOW", hasher=lambda u, n: PageRead(
-            digest="C", final_url=u, covers_bytes=500, complete=True
-        ),
+        db,
+        clock=lambda: "NOW",
+        hasher=lambda u, n: PageRead(digest="C", final_url=u, covers_bytes=500, complete=True),
     )
 
     assert result.unchanged == 1
@@ -282,7 +293,9 @@ def test_a_DIFFERING_prefix_is_still_a_change(db: Path) -> None:
     reads = iter(["Q", "Q"])  # agrees with itself, so the change is corroborated
 
     result = verify(
-        db, clock=lambda: "NOW", hasher=lambda u, n: PageRead(
+        db,
+        clock=lambda: "NOW",
+        hasher=lambda u, n: PageRead(
             digest=next(reads), final_url=u, covers_bytes=n, complete=False
         ),
     )
@@ -314,15 +327,14 @@ def test_a_complete_row_that_no_longer_fits_is_NOT_called_changed(db: Path) -> N
     insert_url(db, URL, "K1", datetime.date(2026, 9, 1))
     with __import__("sqlite3").connect(db) as conn:
         conn.execute(
-            "UPDATE url_index SET content_hash = 'legacy', hashed_at = 'T'"
-            " WHERE url_canonical = ?",
+            "UPDATE url_index SET content_hash = 'legacy', hashed_at = 'T' WHERE url_canonical = ?",
             (URL,),
         )
 
     result = verify(
-        db, clock=lambda: "NOW", hasher=lambda u, n: PageRead(
-            digest="other", final_url=u, covers_bytes=n, complete=False
-        ),
+        db,
+        clock=lambda: "NOW",
+        hasher=lambda u, n: PageRead(digest="other", final_url=u, covers_bytes=n, complete=False),
     )
 
     assert result.changed == 0, "a cap change was reported as the source changing"
@@ -358,9 +370,7 @@ def test_the_cap_flag_is_parsed_and_actually_delivered() -> None:
     used = {
         n.attr
         for n in ast.walk(tree)
-        if isinstance(n, ast.Attribute)
-        and isinstance(n.value, ast.Name)
-        and n.value.id == "args"
+        if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name) and n.value.id == "args"
     }
     assert "max_bytes" in used, "--max-bytes is parsed and then never read"
 
@@ -500,15 +510,20 @@ def test_a_short_re_read_that_DIFFERS_is_incomparable_not_agreed(db: Path) -> No
 
     _seed(db, URL, digest="OLDWHOLE", covers=64, complete=True)
     result = verify(
-        db, clock=lambda: "NOW",
-        hasher=lambda u, n: PageRead(digest="NEWPREFIX", final_url=u, covers_bytes=n, complete=False),
+        db,
+        clock=lambda: "NOW",
+        hasher=lambda u, n: PageRead(
+            digest="NEWPREFIX", final_url=u, covers_bytes=n, complete=False
+        ),
     )
     assert result.incomparable == 1 and result.incomparable_urls == [URL]
     assert result.partial_match == 0
     assert result.changed == 0
-    stored = sqlite3.connect(db).execute(
-        "SELECT verify_outcome FROM url_index WHERE url_canonical = ?", (URL,)
-    ).fetchone()[0]
+    stored = (
+        sqlite3.connect(db)
+        .execute("SELECT verify_outcome FROM url_index WHERE url_canonical = ?", (URL,))
+        .fetchone()[0]
+    )
     assert stored == INCOMPARABLE
 
 
@@ -516,7 +531,8 @@ def test_a_short_re_read_that_MATCHES_is_still_prefix_agreed(db: Path) -> None:
     """Positive control: the word survives where it is true."""
     _seed(db, URL, digest="P", covers=777, complete=False)
     result = verify(
-        db, clock=lambda: "NOW",
+        db,
+        clock=lambda: "NOW",
         hasher=lambda u, n: PageRead(digest="P", final_url=u, covers_bytes=n, complete=False),
     )
     assert result.partial_match == 1

@@ -84,18 +84,22 @@ class _Stamper:
     def record_content_hash(self, item_key, digest, *, expect_url=None):
         return True
 
+
 ARTICLE = "https://publisher.invalid/articles/PMC1"
 CHALLENGE_BASE = "https://www.google.com/recaptcha/challengepage/"
 
 # The shape a real interstitial has: a short document whose `<base>` points at
 # somebody else entirely. Byte-for-byte structure taken from the live probe.
 WALL = (
-    b"<html><head><base href=\"" + CHALLENGE_BASE.encode() + b"\">"
+    b'<html><head><base href="' + CHALLENGE_BASE.encode() + b'">'
     b"<title>Checking your browser - reCAPTCHA</title></head>"
     b"<body>nonce=abc123</body></html>"
 )
-REAL = b"<html><head><base href=\"/\"><title>An article</title></head><body>" \
-       + b"x" * 4000 + b"</body></html>"
+REAL = (
+    b'<html><head><base href="/"><title>An article</title></head><body>'
+    + b"x" * 4000
+    + b"</body></html>"
+)
 
 
 def _serving(body: bytes, *, nonce: bool = False) -> httpx.Client:
@@ -122,9 +126,7 @@ def _serving(body: bytes, *, nonce: bool = False) -> httpx.Client:
             200, content=out, headers={"content-type": "text/html; charset=utf-8"}
         )
 
-    return httpx.Client(
-        transport=httpx.MockTransport(handler), follow_redirects=True
-    )
+    return httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True)
 
 
 # --- the document's own declaration ------------------------------------------
@@ -148,7 +150,7 @@ def test_a_page_that_declares_its_own_site_is_hashed_normally() -> None:
 def test_a_protocol_relative_base_on_the_same_site_is_hashed() -> None:
     """`//www.bioconductor.org` answered by bioconductor.org is one site. Seen
     in the live sample, so it is a real shape and not an invented one."""
-    body = b"<html><head><base href=\"//www.publisher.invalid/\"></head>ok</html>"
+    body = b'<html><head><base href="//www.publisher.invalid/"></head>ok</html>'
     with _serving(body) as http:
         assert hash_page(ARTICLE, client=http).digest
 
@@ -231,16 +233,13 @@ def test_every_fetch_site_recognises_the_same_faults() -> None:
         if not isinstance(node, ast.Try):
             continue
         fetches = any(
-            isinstance(c, ast.Call)
-            and isinstance(c.func, ast.Name)
-            and c.func.id == "_paced_fetch"
+            isinstance(c, ast.Call) and isinstance(c.func, ast.Name) and c.func.id == "_paced_fetch"
             for c in ast.walk(node)
         )
         if not fetches:
             continue
         fetch_sites += 1
-        names = {n.id for h in node.handlers for n in ast.walk(h)
-                 if isinstance(n, ast.Name)}
+        names = {n.id for h in node.handlers for n in ast.walk(h) if isinstance(n, ast.Name)}
         assert "FETCH_FAULTS" in names, (
             "a fetch site whose handler does not use the shared fault tuple"
         )
@@ -259,7 +258,8 @@ def _hashed(tmp_path: Path) -> Path:
         hashed_at="THEN",
         covers_bytes=len(REAL),
         complete=True,
-        sketch="", sketch_algo="",
+        sketch="",
+        sketch_algo="",
     )
     return db
 
@@ -324,6 +324,7 @@ def test_a_steady_challenge_is_not_reported_as_the_source_changing(
 
 # --- the capture path: a challenge title is a false statement about the source -
 
+
 def test_a_challenge_title_is_not_stored_as_the_citation_title() -> None:
     """MEASURED HARM, and larger than the verify path's.
 
@@ -362,8 +363,5 @@ def test_the_rule_has_exactly_one_definition() -> None:
     scanning every module rather than by naming the two that have it now.
     """
     pkg = Path("scripts/zotero_capture")
-    holders = [
-        p.name for p in sorted(pkg.glob("*.py"))
-        if "<base" in p.read_text()
-    ]
+    holders = [p.name for p in sorted(pkg.glob("*.py")) if "<base" in p.read_text()]
     assert holders == ["url_processing.py"], holders

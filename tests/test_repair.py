@@ -148,8 +148,7 @@ def test_the_repair_runs_against_an_index_written_by_an_older_release(tmp_path):
         " NOT NULL, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL)"
     )
     legacy.execute(
-        "INSERT INTO url_index VALUES ('https://h.example/p', 'K1', '2026-01-01',"
-        " '2026-01-01')"
+        "INSERT INTO url_index VALUES ('https://h.example/p', 'K1', '2026-01-01', '2026-01-01')"
     )
     legacy.commit()
     legacy.close()
@@ -244,10 +243,9 @@ def test_a_merge_does_not_carry_the_duplicate_s_unresolved_title_tag(tmp_path):
         def trash_item(self, key, *, expect_url=None):
             self.trashed.append(key)
             return True
+
     z = _Zotero()
-    step = RepairStep(
-        "https://h.example/repo|", "DUPLICATE", "merge", "https://h.example/repo"
-    )
+    step = RepairStep("https://h.example/repo|", "DUPLICATE", "merge", "https://h.example/repo")
     counts = apply_repair([step], db_path=db, zotero=z, connect=connect)
 
     assert counts["merge"] == 1
@@ -312,6 +310,7 @@ def test_a_merge_is_refused_when_the_survivor_has_no_item(tmp_path):
         def trash_item(self, key, *, expect_url=None):
             self.trashed.append(key)
             return True
+
     z = _Zotero()
     counts = apply_repair(plan_repair(rows), db_path=db, zotero=z, connect=connect)
 
@@ -425,6 +424,7 @@ def test_a_merge_still_happens_when_the_survivor_is_a_real_item(tmp_path):
         def trash_item(self, key, *, expect_url=None):
             self.trashed.append(key)
             return True
+
     z = _Zotero()
     counts = apply_repair(plan_repair(rows), db_path=db, zotero=z, connect=connect)
     assert counts["merge"] == 1

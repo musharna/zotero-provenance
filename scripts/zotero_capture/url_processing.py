@@ -53,9 +53,7 @@ _URL_CHAR_RE = re.compile(f"[{_URL_CHARS}]")
 # linkify cannot see a bracketed IPv6 literal at all — it returns no match for
 # "https://[2001:db8::1]:8443/x" — so that form keeps its own pattern and is
 # taken out of the text before linkify runs.
-IPV6_URL_RE = re.compile(
-    rf"https?://\[[0-9A-Fa-f:.]+\](?::\d+)?[{_URL_CHARS}]*", re.IGNORECASE
-)
+IPV6_URL_RE = re.compile(rf"https?://\[[0-9A-Fa-f:.]+\](?::\d+)?[{_URL_CHARS}]*", re.IGNORECASE)
 
 # Kept for callers and tests that still ask "what shape is a URL": it is no
 # longer the tokenizer.
@@ -261,9 +259,7 @@ def canonicalize(raw: str) -> str:
         path = path.rstrip("/")
     elif path == "/":
         path = ""
-    return urlunsplit(
-        (parts.scheme.lower(), netloc, path, _drop_tracking_params(parts.query), "")
-    )
+    return urlunsplit((parts.scheme.lower(), netloc, path, _drop_tracking_params(parts.query), ""))
 
 
 def _drop_tracking_params(query: str) -> str:

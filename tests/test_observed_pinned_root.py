@@ -60,7 +60,6 @@ def test_the_log_line_carries_the_pinned_root(tmp_path: Path) -> None:
     assert record.get("pinned_root") == "/c/0.15.0", record
 
 
-
 def test_a_write_that_was_current_at_the_time_stays_quiet() -> None:
     """The legitimate case: it agreed with the registry when it ran."""
     fine = _line("2026-08-24T10:00:00-04:00", "/c/0.13.0", "/c/0.13.0")
@@ -71,7 +70,6 @@ def test_a_write_that_was_current_at_the_time_stays_quiet() -> None:
     )
 
     assert warnings == [], warnings
-
 
 
 def test_the_pin_is_observed_before_the_capture_not_after(tmp_path: Path) -> None:
@@ -103,7 +101,7 @@ def test_the_pin_is_observed_before_the_capture_not_after(tmp_path: Path) -> Non
     cli._observed_pinned_root = _moving_target  # type: ignore[assignment]
     try:
         log = tmp_path / "capture.log"
-        pin = cli._observed_pinned_root()          # what the capture would see
+        pin = cli._observed_pinned_root()  # what the capture would see
         _emit_log(
             log,
             project="demo",
@@ -159,7 +157,8 @@ def test_a_record_that_disclaims_the_pin_is_not_called_stale() -> None:
         }
     )
 
-    warnings = _classify([line],
+    warnings = _classify(
+        [line],
         pinned_root="/c/0.16.0",
         installed_at=datetime(2026, 8, 25, 11, 30, tzinfo=TZ),
     )
@@ -186,7 +185,8 @@ def test_a_resolved_pin_still_decides_normally() -> None:
         }
     )
 
-    warnings = _classify([line],
+    warnings = _classify(
+        [line],
         pinned_root="/c/0.16.0",
         installed_at=datetime(2026, 8, 25, 11, 30, tzinfo=TZ),
     )

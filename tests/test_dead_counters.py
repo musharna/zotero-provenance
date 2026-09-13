@@ -42,9 +42,18 @@ def _constant_locals(fn: ast.FunctionDef) -> list[str]:
             return False
         if isinstance(v, ast.Constant):
             return True
-        if isinstance(v, (ast.List, ast.Set, ast.Dict, ast.Tuple)) and not getattr(v, "elts", None) and not getattr(v, "keys", None):
+        if (
+            isinstance(v, (ast.List, ast.Set, ast.Dict, ast.Tuple))
+            and not getattr(v, "elts", None)
+            and not getattr(v, "keys", None)
+        ):
             return True
-        if isinstance(v, ast.Call) and isinstance(v.func, ast.Name) and v.func.id in ("set", "list", "dict") and not v.args:
+        if (
+            isinstance(v, ast.Call)
+            and isinstance(v.func, ast.Name)
+            and v.func.id in ("set", "list", "dict")
+            and not v.args
+        ):
             return True
         return False
 

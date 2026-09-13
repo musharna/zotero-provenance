@@ -89,9 +89,7 @@ def compare(rows: list[dict], items: list[dict]) -> dict[str, list]:
     for r in rows:
         by_key[r["zotero_key"]].append(r)
     indexed_urls = {r["url_canonical"] for r in rows}
-    pending = {
-        r["pending_key"] for r in rows if not r["zotero_key"] and r["pending_key"]
-    }
+    pending = {r["pending_key"] for r in rows if not r["zotero_key"] and r["pending_key"]}
     item_keys = {i["key"] for i in items}
 
     out: dict[str, list] = {
@@ -147,9 +145,7 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="verify-index")
     p.add_argument("--db-path", default=None)
     p.add_argument("--show", type=int, default=8, help="examples per section")
-    p.add_argument(
-        "--strict", action="store_true", help="exit 1 if the stores disagree"
-    )
+    p.add_argument("--strict", action="store_true", help="exit 1 if the stores disagree")
     args = p.parse_args(argv)
 
     config = load_config()
@@ -187,8 +183,7 @@ def main(argv: list[str] | None = None) -> int:
         (
             "orphan_stranded",
             "items nothing indexes",
-            "invisible to every index-driven tool; citing the url again "
-            "creates a duplicate",
+            "invisible to every index-driven tool; citing the url again creates a duplicate",
         ),
         (
             "orphan_pending_claim",
@@ -219,16 +214,12 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"       {it['key']}  index: {r['url_canonical'][:72]}")
                 print(f"       {'':8}  item : {it['url'][:72]}")
             elif name.startswith("orphan"):
-                print(
-                    f"       {h['key']}  added {h['dateAdded'][:10]}  {h['url'][:64]}"
-                )
+                print(f"       {h['key']}  added {h['dateAdded'][:10]}  {h['url'][:64]}")
             elif name == "row_no_key":
                 note = claim_age_note(h, now=datetime.now(timezone.utc))
                 print(f"       {'(none)':10}  {h['url_canonical'][:64]}  {note}")
             else:
-                print(
-                    f"       {h['zotero_key'] or '(none)':10}  {h['url_canonical'][:64]}"
-                )
+                print(f"       {h['zotero_key'] or '(none)':10}  {h['url_canonical'][:64]}")
         if len(hits) > args.show:
             print(f"       ... and {len(hits) - args.show} more")
 

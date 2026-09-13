@@ -69,10 +69,7 @@ def test_canonicalize_no_longer_rewrites_an_escaped_ampersand():
 
 def test_canonicalize_leaves_an_ordinary_ampersand_alone():
     """Negative control: an already-correct separator must not be touched."""
-    assert (
-        canonicalize("https://fixturehost.org/s?a=1&b=2")
-        == "https://fixturehost.org/s?a=1&b=2"
-    )
+    assert canonicalize("https://fixturehost.org/s?a=1&b=2") == "https://fixturehost.org/s?a=1&b=2"
 
 
 def test_a_stored_url_redisplayed_lands_back_on_itself():
@@ -114,10 +111,7 @@ def test_canonicalize_keeps_a_literal_ampersand_in_a_value():
 
 def test_canonicalize_does_not_let_an_entity_forge_a_path_separator():
     """&sol; is "/" — decoding it silently points at a different resource."""
-    assert (
-        canonicalize("https://fixturehost.org/x&sol;y")
-        == "https://fixturehost.org/x&sol;y"
-    )
+    assert canonicalize("https://fixturehost.org/x&sol;y") == "https://fixturehost.org/x&sol;y"
 
 
 def test_canonicalize_does_not_let_an_entity_forge_a_fragment():
@@ -135,8 +129,7 @@ def test_canonicalize_does_not_let_an_entity_forge_a_fragment():
 def test_canonicalize_does_not_let_an_entity_forge_a_query_start():
     """&quest; is "?" — decoding it moves data from the path into the query."""
     assert (
-        canonicalize("https://fixturehost.org/p&quest;def")
-        == "https://fixturehost.org/p&quest;def"
+        canonicalize("https://fixturehost.org/p&quest;def") == "https://fixturehost.org/p&quest;def"
     )
 
 
@@ -152,10 +145,7 @@ def test_canonicalize_does_not_let_an_entity_forge_a_query_start():
 
 
 def test_canonicalize_does_not_invent_a_value_for_a_bare_field():
-    assert (
-        canonicalize("https://fixturehost.org/x?sig=a&b")
-        == "https://fixturehost.org/x?sig=a&b"
-    )
+    assert canonicalize("https://fixturehost.org/x?sig=a&b") == "https://fixturehost.org/x?sig=a&b"
 
 
 def test_canonicalize_preserves_percent_encoding_in_a_signed_query():
@@ -168,10 +158,7 @@ def test_canonicalize_preserves_percent_encoding_in_a_signed_query():
 
 def test_canonicalize_does_not_reinterpret_a_plus():
     """ "+" means "+" to some servers and " " to others; guessing corrupts one."""
-    assert (
-        canonicalize("https://fixturehost.org/p?q=a+b")
-        == "https://fixturehost.org/p?q=a+b"
-    )
+    assert canonicalize("https://fixturehost.org/p?q=a+b") == "https://fixturehost.org/p?q=a+b"
 
 
 def test_canonicalize_keeps_a_repeated_field_and_its_order():
@@ -190,9 +177,7 @@ def test_canonicalize_drops_trackers_without_touching_the_survivors():
 
 
 def test_canonicalize_matches_a_tracker_case_insensitively():
-    assert canonicalize("https://fixturehost.org/x?UTM_Source=n") == (
-        "https://fixturehost.org/x"
-    )
+    assert canonicalize("https://fixturehost.org/x?UTM_Source=n") == ("https://fixturehost.org/x")
 
 
 # --- extract_urls ---
@@ -309,9 +294,7 @@ def test_extract_strips_a_paren_that_wraps_the_url():
 def test_extract_strips_only_the_wrapping_paren_from_a_parenthesised_url():
     """Both rules at once: the URL owns one paren, the prose owns the other."""
     text = "(https://en.wikipedia.org/wiki/Volcano_plot_(statistics))"
-    assert extract_urls(text) == [
-        "https://en.wikipedia.org/wiki/Volcano_plot_(statistics)"
-    ]
+    assert extract_urls(text) == ["https://en.wikipedia.org/wiki/Volcano_plot_(statistics)"]
 
 
 def test_extract_strips_sentence_punctuation_after_a_balanced_paren():
@@ -492,10 +475,7 @@ def test_extract_keeps_a_bracketed_ipv6_url_whole():
 
 
 def test_canonicalize_keeps_the_ipv6_brackets():
-    assert (
-        canonicalize("https://[2606:4700:4700::1111]/x")
-        == "https://[2606:4700:4700::1111]/x"
-    )
+    assert canonicalize("https://[2606:4700:4700::1111]/x") == "https://[2606:4700:4700::1111]/x"
 
 
 def test_ipv6_loopback_is_excluded_through_the_pipeline():

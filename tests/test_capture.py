@@ -83,9 +83,7 @@ def test_capture_known_url_same_day_same_context_is_noop(
     assert result.urls_recurring == 1
 
 
-def test_capture_known_url_new_context_adds_tag(
-    empty_cache, fake_zotero, fake_title_fetcher
-):
+def test_capture_known_url_new_context_adds_tag(empty_cache, fake_zotero, fake_title_fetcher):
     insert_url(
         empty_cache,
         "https://fixturehost.org/foo",
@@ -122,9 +120,7 @@ def test_capture_excludes_localhost(empty_cache, fake_zotero, fake_title_fetcher
     assert result.urls_new == 1
 
 
-def test_capture_returns_zero_on_empty_message(
-    empty_cache, fake_zotero, fake_title_fetcher
-):
+def test_capture_returns_zero_on_empty_message(empty_cache, fake_zotero, fake_title_fetcher):
     result = capture_message(
         message="nothing here",
         project_slug="home",
@@ -141,9 +137,7 @@ def test_capture_returns_zero_on_empty_message(
     )
 
 
-def test_capture_dedups_canonical_collisions(
-    empty_cache, fake_zotero, fake_title_fetcher
-):
+def test_capture_dedups_canonical_collisions(empty_cache, fake_zotero, fake_title_fetcher):
     """Two raw URLs that canonicalize to the same string → one POST, urls_seen==1."""
     result = capture_message(
         message="See https://fixturehost.org/ and https://fixturehost.org for details",
@@ -251,9 +245,7 @@ def test_new_url_with_real_title_is_not_tagged_unresolved(
     assert "title:unresolved" not in tags
 
 
-def test_recurring_url_is_offered_a_title_resolver(
-    empty_cache, fake_zotero, fake_title_fetcher
-):
+def test_recurring_url_is_offered_a_title_resolver(empty_cache, fake_zotero, fake_title_fetcher):
     """Recurrence is the retry opportunity: the client must be handed a way to resolve."""
     insert_url(
         empty_cache,
@@ -443,9 +435,7 @@ def test_a_failure_before_the_request_releases_the_reservation(
         zotero=fake_zotero,
         title_fetcher=_boom,
     )
-    assert fake_zotero.post_webpage_item.call_count == 0, (
-        "nothing should have been sent"
-    )
+    assert fake_zotero.post_webpage_item.call_count == 0, "nothing should have been sent"
     assert lookup_url(empty_cache, "https://fixturehost.org/doomed") is None
 
     # Positive control: the retry actually succeeds once the fetcher recovers.
@@ -459,10 +449,7 @@ def test_a_failure_before_the_request_releases_the_reservation(
         title_fetcher=fake_title_fetcher,
     )
     assert result.urls_new == 1
-    assert (
-        lookup_url(empty_cache, "https://fixturehost.org/doomed")["zotero_key"]
-        == "NEWKEY"
-    )
+    assert lookup_url(empty_cache, "https://fixturehost.org/doomed")["zotero_key"] == "NEWKEY"
 
 
 def test_a_failed_post_keeps_the_reservation_for_recovery(

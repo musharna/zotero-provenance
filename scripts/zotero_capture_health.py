@@ -64,9 +64,7 @@ def _window() -> timedelta:
 def _acknowledged(state: Path) -> frozenset[str]:
     try:
         return frozenset(
-            line.strip()
-            for line in (state / ACK_FILE).read_text().splitlines()
-            if line.strip()
+            line.strip() for line in (state / ACK_FILE).read_text().splitlines() if line.strip()
         )
     except FileNotFoundError:
         return frozenset()

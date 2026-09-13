@@ -29,14 +29,20 @@ WINDOW = timedelta(hours=24)
 
 
 def _check(lines, ledger=None):
-    return evaluate(lines, pinned_root="/c/NEW", now=NOW, window=WINDOW,
-                    ledger_path=ledger)
+    return evaluate(lines, pinned_root="/c/NEW", now=NOW, window=WINDOW, ledger_path=ledger)
 
 
 def test_an_open_incident_is_reported_from_the_ledger(tmp_path: Path) -> None:
     ledger = tmp_path / "health.db"
-    open_incident(ledger, incident_id="a1", url="https://x.test/1", root="/c/OLD",
-                  pinned_root="/c/NEW", kind="stale", ts="2026-08-25T11:00:00-04:00")
+    open_incident(
+        ledger,
+        incident_id="a1",
+        url="https://x.test/1",
+        root="/c/OLD",
+        pinned_root="/c/NEW",
+        kind="stale",
+        ts="2026-08-25T11:00:00-04:00",
+    )
 
     warnings = _check([], ledger)
 
@@ -47,8 +53,15 @@ def test_an_open_incident_is_reported_from_the_ledger(tmp_path: Path) -> None:
 def test_a_future_dated_record_does_not_suppress_its_own_incident(tmp_path: Path) -> None:
     """Integrity does not depend on recency, so a bad clock must not hide it."""
     ledger = tmp_path / "health.db"
-    open_incident(ledger, incident_id="f1", url="u", root="/c/OLD",
-                  pinned_root="/c/NEW", kind="stale", ts="2099-01-01T00:00:00-04:00")
+    open_incident(
+        ledger,
+        incident_id="f1",
+        url="u",
+        root="/c/OLD",
+        pinned_root="/c/NEW",
+        kind="stale",
+        ts="2099-01-01T00:00:00-04:00",
+    )
     future = json.dumps({"ts": "2099-01-01T00:00:00-0400", "event": "forward-unresolved"})
 
     warnings = _check([future], ledger)
@@ -61,9 +74,16 @@ def test_a_broken_tail_is_reported_even_with_older_valid_records(tmp_path: Path)
     """One historical record used to bless everything appended after it."""
     good = json.dumps(
         {
-            "ts": "2026-08-20T09:00:00-0400", "version": "x", "root": "/c/NEW",
-            "pinned_root": "/c/NEW", "project": "p", "urls_seen": 1,
-            "urls_new": 1, "urls_recurring": 0, "errors": [], "incident_id": "ok",
+            "ts": "2026-08-20T09:00:00-0400",
+            "version": "x",
+            "root": "/c/NEW",
+            "pinned_root": "/c/NEW",
+            "project": "p",
+            "urls_seen": 1,
+            "urls_new": 1,
+            "urls_recurring": 0,
+            "errors": [],
+            "incident_id": "ok",
         }
     )
     lines = [good, "Traceback (most recent call last):", "fatal", "fatal"]
@@ -78,9 +98,16 @@ def test_a_healthy_log_with_no_ledger_is_still_silent(tmp_path: Path) -> None:
     """Positive control: the new signals must not fire on a working install."""
     good = json.dumps(
         {
-            "ts": "2026-08-25T11:00:00-0400", "version": "x", "root": "/c/NEW",
-            "pinned_root": "/c/NEW", "project": "p", "urls_seen": 1,
-            "urls_new": 1, "urls_recurring": 0, "errors": [], "incident_id": "ok",
+            "ts": "2026-08-25T11:00:00-0400",
+            "version": "x",
+            "root": "/c/NEW",
+            "pinned_root": "/c/NEW",
+            "project": "p",
+            "urls_seen": 1,
+            "urls_new": 1,
+            "urls_recurring": 0,
+            "errors": [],
+            "incident_id": "ok",
         }
     )
 

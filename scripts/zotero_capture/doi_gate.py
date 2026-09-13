@@ -65,9 +65,7 @@ class GateResult:
     unavailable: str = ""
 
 
-def run_ghostcite(
-    dois: list[str], *, runner=subprocess.run, max_rps: float = 2.0
-) -> GateResult:
+def run_ghostcite(dois: list[str], *, runner=subprocess.run, max_rps: float = 2.0) -> GateResult:
     """Feed DOIs to ghostcite and return its findings.
 
     `runner` is injected so the tests never touch the network. An empty findings

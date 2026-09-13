@@ -59,9 +59,18 @@ def test_entry_exits_zero_when_disabled(tmp_path: Path) -> None:
     env = _clean_env(tmp_path)
     env["ZOTERO_CAPTURE_DISABLE"] = "1"
     proc = subprocess.run(
-        ["python3", str(ENTRY), "--message", "see https://fixturehost.org/foo",
-         "--db-path", str(db)],
-        env=env, capture_output=True, text=True, timeout=15,
+        [
+            "python3",
+            str(ENTRY),
+            "--message",
+            "see https://fixturehost.org/foo",
+            "--db-path",
+            str(db),
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout == ""
@@ -71,9 +80,18 @@ def test_entry_exits_zero_when_disabled(tmp_path: Path) -> None:
 def test_entry_exits_zero_without_credentials(tmp_path: Path) -> None:
     """A misconfigured plugin must not break the user's session."""
     proc = subprocess.run(
-        ["python3", str(ENTRY), "--message", "see https://fixturehost.org/foo",
-         "--db-path", str(tmp_path / "capture.db")],
-        env=_clean_env(tmp_path), capture_output=True, text=True, timeout=20,
+        [
+            "python3",
+            str(ENTRY),
+            "--message",
+            "see https://fixturehost.org/foo",
+            "--db-path",
+            str(tmp_path / "capture.db"),
+        ],
+        env=_clean_env(tmp_path),
+        capture_output=True,
+        text=True,
+        timeout=20,
     )
     assert proc.returncode == 0, (
         f"never-block guarantee violated: exit {proc.returncode}\n{proc.stderr}"
@@ -83,9 +101,18 @@ def test_entry_exits_zero_without_credentials(tmp_path: Path) -> None:
 def test_missing_credentials_are_reported_not_swallowed(tmp_path: Path) -> None:
     """Exiting 0 must not mean staying silent — the reason belongs on stderr."""
     proc = subprocess.run(
-        ["python3", str(ENTRY), "--message", "see https://fixturehost.org/foo",
-         "--db-path", str(tmp_path / "capture.db")],
-        env=_clean_env(tmp_path), capture_output=True, text=True, timeout=20,
+        [
+            "python3",
+            str(ENTRY),
+            "--message",
+            "see https://fixturehost.org/foo",
+            "--db-path",
+            str(tmp_path / "capture.db"),
+        ],
+        env=_clean_env(tmp_path),
+        capture_output=True,
+        text=True,
+        timeout=20,
     )
     assert "ZOTERO_API_KEY" in proc.stderr, (
         f"a silent failure is a debugging dead end; stderr was: {proc.stderr!r}"
@@ -105,10 +132,12 @@ def test_stop_hook_passes_cwd_through_to_python(tmp_path: Path) -> None:
     proc = subprocess.run(
         ["bash", str(STOP_HOOK)],
         input=json.dumps(
-            {"transcript_path": str(transcript), "session_id": "s1",
-             "cwd": "/home/someone/agrigen"}
+            {"transcript_path": str(transcript), "session_id": "s1", "cwd": "/home/someone/agrigen"}
         ),
-        env=env, capture_output=True, text=True, timeout=20,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
     )
     assert proc.returncode == 0, proc.stderr
     assert argv_out.exists(), f"python was never invoked; stderr: {proc.stderr!r}"
@@ -133,15 +162,14 @@ def test_stop_hook_survives_a_malformed_transcript_line(tmp_path: Path) -> None:
 
     proc = subprocess.run(
         ["bash", str(STOP_HOOK)],
-        input=json.dumps(
-            {"transcript_path": str(transcript), "session_id": "s1", "cwd": "/tmp/x"}
-        ),
-        env=env, capture_output=True, text=True, timeout=20,
+        input=json.dumps({"transcript_path": str(transcript), "session_id": "s1", "cwd": "/tmp/x"}),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
     )
     assert proc.returncode == 0, proc.stderr
-    assert argv_out.exists(), (
-        "the malformed line aborted extraction, stranding every later URL"
-    )
+    assert argv_out.exists(), "the malformed line aborted extraction, stranding every later URL"
 
 
 @requires_jq
@@ -156,10 +184,11 @@ def test_stop_hook_reads_the_context_marker(tmp_path: Path) -> None:
 
     subprocess.run(
         ["bash", str(STOP_HOOK)],
-        input=json.dumps(
-            {"transcript_path": str(transcript), "session_id": "s1", "cwd": "/tmp/x"}
-        ),
-        env=env, capture_output=True, text=True, timeout=20,
+        input=json.dumps({"transcript_path": str(transcript), "session_id": "s1", "cwd": "/tmp/x"}),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
     )
     assert "--context lit-review" in argv_out.read_text()
 
@@ -175,10 +204,11 @@ def test_stop_hook_skips_a_message_with_no_urls(tmp_path: Path) -> None:
 
     proc = subprocess.run(
         ["bash", str(STOP_HOOK)],
-        input=json.dumps(
-            {"transcript_path": str(transcript), "session_id": "s1", "cwd": "/tmp/x"}
-        ),
-        env=env, capture_output=True, text=True, timeout=20,
+        input=json.dumps({"transcript_path": str(transcript), "session_id": "s1", "cwd": "/tmp/x"}),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
     )
     assert proc.returncode == 0
     assert not argv_out.exists(), "python should not be invoked for a URL-free message"
@@ -197,12 +227,16 @@ def test_prompt_hook_never_writes_to_stdout(tmp_path: Path) -> None:
     proc = subprocess.run(
         ["bash", str(PROMPT_HOOK)],
         input=json.dumps(
-            {"prompt": "look at https://fixturehost.org/foo", "session_id": "s1",
-             "cwd": "/home/someone/agrigen"}
+            {
+                "prompt": "look at https://fixturehost.org/foo",
+                "session_id": "s1",
+                "cwd": "/home/someone/agrigen",
+            }
         ),
-        env=env, capture_output=True, text=True, timeout=20,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
     )
     assert proc.returncode == 0
-    assert proc.stdout == "", (
-        f"stdout would be injected into the prompt; got {proc.stdout!r}"
-    )
+    assert proc.stdout == "", f"stdout would be injected into the prompt; got {proc.stdout!r}"

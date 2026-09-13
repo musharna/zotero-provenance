@@ -86,9 +86,7 @@ def _capture(message: str, *, origin: str, zotero, db_path) -> CaptureResult:
 def test_a_report_from_the_assistant_is_still_skipped(tmp_path, fake_zotero):
     """Positive control: the marker must keep doing its actual job."""
     msg = f"{NO_CAPTURE_MARKER}\n\nSee https://fixturehost.org/a\n"
-    result = _capture(
-        msg, origin="assistant", zotero=fake_zotero, db_path=tmp_path / "d"
-    )
+    result = _capture(msg, origin="assistant", zotero=fake_zotero, db_path=tmp_path / "d")
     assert result.urls_seen == 0
 
 
@@ -99,12 +97,8 @@ def test_a_user_prompt_quoting_the_marker_is_still_captured(tmp_path, fake_zoter
     assert result.urls_seen == 1
 
 
-def test_an_assistant_message_merely_quoting_the_marker_is_still_captured(
-    tmp_path, fake_zotero
-):
+def test_an_assistant_message_merely_quoting_the_marker_is_still_captured(tmp_path, fake_zotero):
     """Only a report LEADS with the marker; discussing it must not silence a turn."""
     msg = f"The marker is {NO_CAPTURE_MARKER}, and I cited https://fixturehost.org/a\n"
-    result = _capture(
-        msg, origin="assistant", zotero=fake_zotero, db_path=tmp_path / "d"
-    )
+    result = _capture(msg, origin="assistant", zotero=fake_zotero, db_path=tmp_path / "d")
     assert result.urls_seen == 1

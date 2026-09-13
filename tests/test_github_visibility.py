@@ -68,9 +68,7 @@ def _client(status: int, seen: list | None = None) -> httpx.Client:
 def test_a_private_repo_that_exists_is_visible() -> None:
     """The finding: 17 rows call these dead links."""
     with _client(200) as c:
-        assert (
-            repo_visibility(("someone", "private-repo"), client=c, token="t") == VISIBLE
-        )
+        assert repo_visibility(("someone", "private-repo"), client=c, token="t") == VISIBLE
 
 
 def test_a_404_with_a_token_is_still_unknown_not_gone() -> None:

@@ -163,9 +163,7 @@ def count_open(db_path: Path) -> int:
     if conn is None:
         return 0
     try:
-        row = conn.execute(
-            "SELECT COUNT(*) AS n FROM incidents WHERE status = 'open'"
-        ).fetchone()
+        row = conn.execute("SELECT COUNT(*) AS n FROM incidents WHERE status = 'open'").fetchone()
         return int(row["n"]) if row else 0
     finally:
         conn.close()
@@ -205,8 +203,7 @@ def acknowledge_all(db_path: Path, *, now: str = "") -> int:
     try:
         with conn:
             cur = conn.execute(
-                "UPDATE incidents SET status = 'acknowledged', closed_at = ?"
-                " WHERE status = 'open'",
+                "UPDATE incidents SET status = 'acknowledged', closed_at = ? WHERE status = 'open'",
                 (now,),
             )
             return int(cur.rowcount or 0)

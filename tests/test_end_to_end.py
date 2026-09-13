@@ -98,9 +98,7 @@ def fake_zotero():
     server.server_close()
 
 
-def _run_hook(
-    tmp_path: Path, port: int, text: str, cwd: str
-) -> subprocess.CompletedProcess:
+def _run_hook(tmp_path: Path, port: int, text: str, cwd: str) -> subprocess.CompletedProcess:
     transcript = tmp_path / "transcript.jsonl"
     transcript.write_text(
         json.dumps(
@@ -132,9 +130,7 @@ def _run_hook(
     )
     return subprocess.run(
         ["bash", str(STOP_HOOK)],
-        input=json.dumps(
-            {"transcript_path": str(transcript), "session_id": "s1", "cwd": cwd}
-        ),
+        input=json.dumps({"transcript_path": str(transcript), "session_id": "s1", "cwd": cwd}),
         env=env,
         capture_output=True,
         text=True,
@@ -147,9 +143,7 @@ def test_cited_url_becomes_a_tagged_zotero_item(tmp_path: Path, fake_zotero):
     server, handler = fake_zotero
     port = server.server_address[1]
 
-    proc = _run_hook(
-        tmp_path, port, f"I found {CAPTURED_URL} useful", "/home/someone/my-thesis"
-    )
+    proc = _run_hook(tmp_path, port, f"I found {CAPTURED_URL} useful", "/home/someone/my-thesis")
     assert proc.returncode == 0, proc.stderr
 
     posts = [r for r in handler.requests if r[0] == "POST"]
@@ -175,15 +169,11 @@ def test_same_url_cited_twice_is_retagged_not_duplicated(tmp_path: Path, fake_zo
     first = _run_hook(tmp_path, port, f"see {CAPTURED_URL}", "/home/someone/my-thesis")
     assert first.returncode == 0, first.stderr
     # A different spelling of the same URL, in a later session.
-    second = _run_hook(
-        tmp_path, port, f"see {CANONICAL_URL}/", "/home/someone/my-thesis"
-    )
+    second = _run_hook(tmp_path, port, f"see {CANONICAL_URL}/", "/home/someone/my-thesis")
     assert second.returncode == 0, second.stderr
 
     posts = [r for r in handler.requests if r[0] == "POST"]
-    assert len(posts) == 1, (
-        f"the second citation created a duplicate item; POSTs: {len(posts)}"
-    )
+    assert len(posts) == 1, f"the second citation created a duplicate item; POSTs: {len(posts)}"
     # The second run reached Zotero and read the item back...
     assert any(r[0] == "GET" for r in handler.requests), (
         "the second citation never reached the API at all"
@@ -209,9 +199,7 @@ def test_recite_under_a_new_context_adds_that_tag(tmp_path: Path, fake_zotero):
     )
     assert second.returncode == 0, second.stderr
 
-    assert len([r for r in handler.requests if r[0] == "POST"]) == 1, (
-        "no duplicate item"
-    )
+    assert len([r for r in handler.requests if r[0] == "POST"]) == 1, "no duplicate item"
     patches = [r for r in handler.requests if r[0] == "PATCH"]
     assert patches, "a new context tag should have been PATCHed onto the existing item"
     patched_tags = {t["tag"] for t in patches[-1][2]["tags"]}
@@ -326,9 +314,7 @@ def test_only_the_last_turn_is_captured_from_a_transcript(tmp_path: Path, fake_z
 
 
 @requires_jq
-def test_last_assistant_message_is_preferred_over_the_transcript(
-    tmp_path: Path, fake_zotero
-):
+def test_last_assistant_message_is_preferred_over_the_transcript(tmp_path: Path, fake_zotero):
     """The field Claude Code supplies wins; the transcript is only a fallback."""
     server, handler = fake_zotero
     port = server.server_address[1]

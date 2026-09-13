@@ -37,9 +37,7 @@ class _JournalRefuses:
         raise AssertionError("unexpected")
 
 
-def test_a_url_is_not_stranded_when_its_journal_fails(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_a_url_is_not_stranded_when_its_journal_fails(tmp_path: Path, monkeypatch) -> None:
     """`issued = True` was set BEFORE _record_intent.
 
     So when journalling refused -- a read-only state dir, a full disk -- the
@@ -72,9 +70,7 @@ def test_a_url_is_not_stranded_when_its_journal_fails(
     )
 
     assert zotero.posted == [], "positive control: the write must not have happened"
-    assert lookup_url(db, URL) is None, (
-        "the URL is still reserved for a write that never went out"
-    )
+    assert lookup_url(db, URL) is None, "the URL is still reserved for a write that never went out"
 
 
 def test_run_capture_will_not_invent_a_ledger_path(tmp_path: Path) -> None:
@@ -202,11 +198,20 @@ def test_a_pin_that_stays_put_records_nothing(tmp_path: Path) -> None:
 def _legacy_record(ts: str, root: str, urls_new: int = 1, **extra) -> str:
     import json
 
-    return json.dumps({
-        "ts": ts, "version": "0.15.0", "root": root, "pinned_root": "/c/NEW",
-        "project": "p", "urls_seen": 1, "urls_new": urls_new,
-        "urls_recurring": 0, "errors": [], **extra,
-    })
+    return json.dumps(
+        {
+            "ts": ts,
+            "version": "0.15.0",
+            "root": root,
+            "pinned_root": "/c/NEW",
+            "project": "p",
+            "urls_seen": 1,
+            "urls_new": urls_new,
+            "urls_recurring": 0,
+            "errors": [],
+            **extra,
+        }
+    )
 
 
 def test_two_legacy_incidents_in_one_second_get_distinct_ids() -> None:
@@ -228,8 +233,7 @@ def test_two_legacy_incidents_in_one_second_get_distinct_ids() -> None:
 
     assert len(found) == 2, f"positive control: both are incidents: {found}"
     assert len({i["id"] for i in found}) == 2, (
-        f"two distinct incidents share one acknowledgement id: "
-        f"{[i['id'] for i in found]}"
+        f"two distinct incidents share one acknowledgement id: {[i['id'] for i in found]}"
     )
 
 
@@ -273,8 +277,7 @@ def test_migration_does_not_re_import_a_record_that_journalled_itself(
     state = tmp_path / "state"
     state.mkdir()
     (state / "capture.log").write_text(
-        _legacy_record("2026-08-25T11:40:00-0400", "/c/OLD", incident_id="its-own")
-        + "\n"
+        _legacy_record("2026-08-25T11:40:00-0400", "/c/OLD", incident_id="its-own") + "\n"
     )
     ledger = state / "health.db"
 
@@ -282,13 +285,14 @@ def test_migration_does_not_re_import_a_record_that_journalled_itself(
     open_incident(
         ledger,
         incident_id=mutation_id("its-own", "https://x.test/a"),
-        url="https://x.test/a", root="/c/OLD", pinned_root="/c/NEW",
-        kind="stale", ts="2026-08-25T11:40:00-0400",
+        url="https://x.test/a",
+        root="/c/OLD",
+        pinned_root="/c/NEW",
+        kind="stale",
+        ts="2026-08-25T11:40:00-0400",
     )
     _migrate_legacy(state, ledger, "/c/NEW")
-    assert count_open(ledger) == 1, (
-        "a record that already journalled itself was imported again"
-    )
+    assert count_open(ledger) == 1, "a record that already journalled itself was imported again"
 
     # The ledger is gone: the log is the only witness, and it must be heard.
     ledger.unlink()
@@ -311,9 +315,7 @@ def test_migration_still_imports_a_record_that_could_not_journal_itself(
 
     state = tmp_path / "state"
     state.mkdir()
-    (state / "capture.log").write_text(
-        _legacy_record("2026-08-25T11:40:00-0400", "/c/OLD") + "\n"
-    )
+    (state / "capture.log").write_text(_legacy_record("2026-08-25T11:40:00-0400", "/c/OLD") + "\n")
     ledger = state / "health.db"
 
     _migrate_legacy(state, ledger, "/c/NEW")
@@ -327,11 +329,20 @@ def test_migration_still_imports_a_record_that_could_not_journal_itself(
 def _good_record() -> str:
     import json
 
-    return json.dumps({
-        "ts": "2026-08-25T11:00:00-0400", "version": "x", "root": "/c/NEW",
-        "pinned_root": "/c/NEW", "project": "p", "urls_seen": 1,
-        "urls_new": 1, "urls_recurring": 0, "errors": [], "incident_id": "ok",
-    })
+    return json.dumps(
+        {
+            "ts": "2026-08-25T11:00:00-0400",
+            "version": "x",
+            "root": "/c/NEW",
+            "pinned_root": "/c/NEW",
+            "project": "p",
+            "urls_seen": 1,
+            "urls_new": 1,
+            "urls_recurring": 0,
+            "errors": [],
+            "incident_id": "ok",
+        }
+    )
 
 
 def _check(lines):
@@ -341,9 +352,11 @@ def _check(lines):
 
     tz = timezone(timedelta(hours=-4))
     return evaluate(
-        lines, pinned_root="/c/NEW",
+        lines,
+        pinned_root="/c/NEW",
         now=datetime(2026, 8, 25, 12, 0, tzinfo=tz),
-        window=timedelta(hours=24), ledger_path=None,
+        window=timedelta(hours=24),
+        ledger_path=None,
     )
 
 
@@ -373,9 +386,14 @@ def test_a_torn_final_append_is_not_reported() -> None:
 
 def test_a_run_of_junk_is_still_reported_even_if_the_last_is_torn() -> None:
     """Positive control: exempting the final line must not exempt the run."""
-    warnings = _check([
-        _good_record() + "\n", "fatal\n", "fatal\n", '{"ts": "2026-08-2',
-    ])
+    warnings = _check(
+        [
+            _good_record() + "\n",
+            "fatal\n",
+            "fatal\n",
+            '{"ts": "2026-08-2',
+        ]
+    )
 
     assert any("unreadable" in w or "readable" in w for w in warnings), warnings
 
@@ -436,8 +454,7 @@ def test_triage_still_runs_from_the_installed_root(tmp_path: Path, monkeypatch) 
         def add_tags(self, key, tags, **kw):
             self.tagged.append((key, tags))
 
-    monkeypatch.setattr(cli, "installed_version", lambda: cli.__version__,
-                        raising=False)
+    monkeypatch.setattr(cli, "installed_version", lambda: cli.__version__, raising=False)
     zotero = _Zotero()
 
     # No row for the URL, so it stops at the lookup -- past the staleness guard,

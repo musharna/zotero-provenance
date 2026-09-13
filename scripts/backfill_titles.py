@@ -56,9 +56,7 @@ def main() -> int:
         help="fetch titles and report what would be fixed, without writing",
     )
     p.add_argument("--limit", type=int, default=None, help="stop after N items")
-    p.add_argument(
-        "--sleep", type=float, default=0.4, help="seconds between items (be polite)"
-    )
+    p.add_argument("--sleep", type=float, default=0.4, help="seconds between items (be polite)")
     p.add_argument(
         "--prune",
         action="store_true",
@@ -79,9 +77,7 @@ def main() -> int:
     started = time.monotonic()
 
     if args.prune:
-        return _run_prune(
-            config, dry_run=args.dry_run, limit=args.limit, sleep_s=args.sleep
-        )
+        return _run_prune(config, dry_run=args.dry_run, limit=args.limit, sleep_s=args.sleep)
 
     def report(r) -> None:
         if r.examined % 25:
@@ -130,9 +126,7 @@ def _run_prune(config, *, dry_run: bool, limit: int | None, sleep_s: float) -> i
         else:
             # Journalled only when it writes. A dry run destroys nothing, and a
             # journal of runs that changed nothing buries the ones that did.
-            with OperationJournal(
-                config.db_path, "prune", args=f"limit={limit}"
-            ) as journal:
+            with OperationJournal(config.db_path, "prune", args=f"limit={limit}") as journal:
                 result = prune(zotero, limit=limit, sleep_s=sleep_s, journal=journal)
 
     for line in format_prune_report(result, dry_run=dry_run):

@@ -76,9 +76,7 @@ def test_limit_zero_retires_nothing(tmp_path: Path, capsys, _creds) -> None:
     assert _planned(capsys) == 0
 
 
-def test_a_negative_limit_is_refused_rather_than_reversed(
-    tmp_path: Path, _creds
-) -> None:
+def test_a_negative_limit_is_refused_rather_than_reversed(tmp_path: Path, _creds) -> None:
     """`steps[:-1]` is every step but the last -- a cap that removes one item."""
     db = _index(tmp_path)
     with pytest.raises(SystemExit):
@@ -145,8 +143,7 @@ class _FakeZotero:
 JUNK_URL = "https://files.rcsb.org/download/{ID}.pdb"
 
 
-def _insert(db: Path, url: str, key: str, *, pending_key: str = "",
-            claimed_at: str = "") -> None:
+def _insert(db: Path, url: str, key: str, *, pending_key: str = "", claimed_at: str = "") -> None:
     with closing(_connect(db)) as conn:
         conn.execute(
             "INSERT INTO url_index"
@@ -278,12 +275,11 @@ def test_capture_reports_an_item_whose_index_row_vanished(tmp_path: Path) -> Non
         def __init__(self) -> None:
             self.posted: list[str] = []
 
-        def post_webpage_item(self, *, url_canonical, title, access_date, tags,
-                              item_key=None, **kw):
+        def post_webpage_item(
+            self, *, url_canonical, title, access_date, tags, item_key=None, **kw
+        ):
             with closing(_connect(db)) as conn:
-                conn.execute(
-                    "DELETE FROM url_index WHERE url_canonical = ?", (url_canonical,)
-                )
+                conn.execute("DELETE FROM url_index WHERE url_canonical = ?", (url_canonical,))
             self.posted.append(url_canonical)
             return item_key or "KEY"
 
@@ -449,9 +445,7 @@ def test_apply_is_not_blocked_when_the_index_matches(
     assert "refusing to apply" not in capsys.readouterr().err
 
 
-def test_a_dry_run_still_works_on_an_unverifiable_index(
-    tmp_path: Path, capsys, _creds
-) -> None:
+def test_a_dry_run_still_works_on_an_unverifiable_index(tmp_path: Path, capsys, _creds) -> None:
     """Showing a plan destroys nothing, and is what a person needs to diagnose."""
     db = _index(tmp_path)
 
@@ -519,7 +513,9 @@ def test_each_retired_row_is_stamped_when_IT_was_retired(tmp_path: Path) -> None
     steps = plan_retire(_rows(db))
     assert len(steps) == 2, "positive control: two rows planned"
     ticks = iter(["T1", "T2", "T3"])
-    apply_retire(steps, db_path=db, zotero=_FakeZotero(), connect=_connect, clock=lambda: next(ticks))
+    apply_retire(
+        steps, db_path=db, zotero=_FakeZotero(), connect=_connect, clock=lambda: next(ticks)
+    )
 
     stamps = [json.loads(line)["retired_at"] for line in journal_path(db).read_text().splitlines()]
     assert sorted(stamps) == ["T1", "T2"], stamps

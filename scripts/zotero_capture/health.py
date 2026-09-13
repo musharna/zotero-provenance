@@ -157,7 +157,7 @@ def _version_of(root: str) -> str:
 def _integrity_kind(
     record: dict, pinned_root: str | None, *, require_id: bool = True
 ) -> str | None:
-    """"stale", "unverified", or None — decided by THIS record alone.
+    """ "stale", "unverified", or None — decided by THIS record alone.
 
     Requires an `incident_id`. Without one the incident cannot be acknowledged
     individually, and an unclearable nag is worse than silence — the same
@@ -300,11 +300,7 @@ def evaluate(
                     # distinct refusals were reported as three copies of one
                     # fragment, because the differing bytes were past the cut.
                     refusal_kinds.add(
-                        str(
-                            record.get("event")
-                            or record.get("refused_kind")
-                            or UNLABELLED
-                        )
+                        str(record.get("event") or record.get("refused_kind") or UNLABELLED)
                     )
             continue
         if not _is_capture(record):
@@ -372,9 +368,7 @@ def evaluate(
     if error_n and error_newest is not None:
         first = error_newest[1]
         detail = f"{first.get('code')} ({first.get('message')}) for {first.get('url')}"
-        warnings.append(
-            f"{error_n} capture error(s) in the last {_hours(window)}: {detail}"
-        )
+        warnings.append(f"{error_n} capture error(s) in the last {_hours(window)}: {detail}")
 
     return warnings
 

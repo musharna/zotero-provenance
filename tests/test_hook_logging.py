@@ -48,9 +48,7 @@ def _restore_package_logger():
 
 def _package_logger_without_handlers() -> logging.Logger:
     logger = logging.getLogger(PACKAGE_LOGGER)
-    logger.handlers[:] = [
-        h for h in logger.handlers if isinstance(h, logging.NullHandler)
-    ]
+    logger.handlers[:] = [h for h in logger.handlers if isinstance(h, logging.NullHandler)]
     logger.setLevel(logging.NOTSET)
     return logger
 
@@ -114,9 +112,7 @@ def test_an_unconfigured_import_prints_nothing() -> None:
         timeout=60,
     )
     assert proc.returncode == 0, proc.stderr
-    assert proc.stderr == "", (
-        f"the package logged without being configured: {proc.stderr!r}"
-    )
+    assert proc.stderr == "", f"the package logged without being configured: {proc.stderr!r}"
 
 
 def test_the_subprocess_control_can_actually_see_a_message() -> None:
@@ -157,21 +153,17 @@ def test_the_cli_entry_point_configures_before_it_can_log() -> None:
     only the earliest lines, which is exactly the kind of thing a happy-path
     test never sees."""
     tree = ast.parse(Path(cli.__file__).read_text())
-    fn = next(
-        n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "main"
-    )
+    fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "main")
     calls = [
-        n.func.id
-        for n in ast.walk(fn)
-        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+        n.func.id for n in ast.walk(fn) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
     ]
     assert "configure_hook_logging" in calls, (
         "cli.main must configure the hook's logging; without it the package's "
         "NullHandler makes capture.log silent"
     )
-    assert calls.index("configure_hook_logging") < calls.index(
-        "install_termination_handler"
-    ), "configuration must come before anything that can log"
+    assert calls.index("configure_hook_logging") < calls.index("install_termination_handler"), (
+        "configuration must come before anything that can log"
+    )
 
 
 def test_cli_logging_still_names_the_level() -> None:
@@ -197,7 +189,5 @@ def test_the_two_configurations_do_not_fight() -> None:
     configure_hook_logging(stream=buf)
     logging.getLogger("zotero_capture.capture").warning("once")
     assert buf.getvalue() == "once\n"
-    names = [
-        getattr(h, "name", None) for h in logging.getLogger(PACKAGE_LOGGER).handlers
-    ]
+    names = [getattr(h, "name", None) for h in logging.getLogger(PACKAGE_LOGGER).handlers]
     assert names.count(HOOK_HANDLER_NAME) == 1

@@ -338,9 +338,7 @@ def capture_message(
             ):
                 result.claims_recorded += 1
         except Exception as e:
-            result.errors.append(
-                CaptureFailure(url=canonical, code="claim_link", message=str(e))
-            )
+            result.errors.append(CaptureFailure(url=canonical, code="claim_link", message=str(e)))
 
     today_iso = today.isoformat()
     seen_tag = f"seen:{today_iso}"
@@ -467,10 +465,7 @@ def capture_message(
                             CaptureFailure(
                                 url=url,
                                 code="claim_lost",
-                                message=(
-                                    f"item {key} exists in Zotero but no index "
-                                    f"row claims it"
-                                ),
+                                message=(f"item {key} exists in Zotero but no index row claims it"),
                             )
                         )
                     # Another session may have queued its own sighting against
@@ -528,14 +523,10 @@ def capture_message(
             # a deletion that capture is designed to undo.
             logger.warning("item for %s is gone (%s); dropping the stale row", url, e)
             drop_row(db_path, url)
-            result.errors.append(
-                CaptureFailure(url=url, code="item_gone", message=str(e))
-            )
+            result.errors.append(CaptureFailure(url=url, code="item_gone", message=str(e)))
         except ZoteroError as e:
             logger.error("Zotero API error for %s: %s", url, e)
-            result.errors.append(
-                CaptureFailure(url=url, code="zotero_error", message=str(e))
-            )
+            result.errors.append(CaptureFailure(url=url, code="zotero_error", message=str(e)))
             # Queue it, because every other recovery path here needs the URL to
             # be cited AGAIN: an unissued claim is released so a later run can
             # retry, and an issued one is settled by _resolve_claim on the next
@@ -569,7 +560,5 @@ def capture_message(
                 )
         except Exception as e:
             logger.error("Unexpected error for %s: %s", url, e)
-            result.errors.append(
-                CaptureFailure(url=url, code="unexpected", message=str(e))
-            )
+            result.errors.append(CaptureFailure(url=url, code="unexpected", message=str(e)))
     return result

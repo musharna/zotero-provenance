@@ -57,8 +57,7 @@ def _read_rows(db_path: Path) -> list[dict]:
             # without these columns the planner cannot tell that apart from a
             # row that never had an item. It deleted both.
             for r in conn.execute(
-                "SELECT url_canonical, zotero_key, pending_key, claimed_at"
-                " FROM url_index"
+                "SELECT url_canonical, zotero_key, pending_key, claimed_at FROM url_index"
             )
         ]
 
@@ -112,9 +111,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.apply:
         print("\nDry run. Nothing was changed. Re-run with --apply to carry this out.")
-        print("Applied runs journal every removed row to "
-              f"{journal_path(db_path).name} first: Zotero's trash restores the item, "
-              "not the sighting history.")
+        print(
+            "Applied runs journal every removed row to "
+            f"{journal_path(db_path).name} first: Zotero's trash restores the item, "
+            "not the sighting history."
+        )
         return 0
 
     # Verify -- never adopt -- before anything is destroyed. Zotero item keys

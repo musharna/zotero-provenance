@@ -47,15 +47,22 @@ def _rows(db: Path) -> list[dict]:
     conn = sqlite3.connect(db)
     conn.row_factory = sqlite3.Row
     with conn:
-        return [dict(r) for r in conn.execute(
-            "SELECT url_canonical, last_outcome, last_attempt_at, final_url FROM url_index ORDER BY 1"
-        )]
+        return [
+            dict(r)
+            for r in conn.execute(
+                "SELECT url_canonical, last_outcome, last_attempt_at, final_url FROM url_index ORDER BY 1"
+            )
+        ]
 
 
 def _run(db: Path, monkeypatch, clock):
-    monkeypatch.setattr(corroborate_github, "repo_visibility", lambda slug, **kw: corroborate_github.VISIBLE)
+    monkeypatch.setattr(
+        corroborate_github, "repo_visibility", lambda slug, **kw: corroborate_github.VISIBLE
+    )
     monkeypatch.setattr(corroborate_github, "read_token", lambda: "t")
-    monkeypatch.setattr(corroborate_github, "build_fetch_client", lambda **kw: contextlib.nullcontext(object()))
+    monkeypatch.setattr(
+        corroborate_github, "build_fetch_client", lambda **kw: contextlib.nullcontext(object())
+    )
     return corroborate_github.main(["--apply", "--db-path", str(db), "--sleep", "0"], clock=clock)
 
 

@@ -103,7 +103,8 @@ def test_size_is_no_longer_an_outcome_at_all() -> None:
     sized = [
         n
         for n in dir(snap)
-        if n.isupper() and isinstance(getattr(snap, n), str)
+        if n.isupper()
+        and isinstance(getattr(snap, n), str)
         and getattr(snap, n) in ("too_large", "oversized")
     ]
     assert sized == [], f"a size outcome survived: {sized}"
@@ -154,7 +155,12 @@ def test_a_success_is_recorded_too(db: Path) -> None:
     empty last_outcome would be ambiguous between success and never-tried."""
     insert_url(db, "https://fixturehost.org/a", "KEY1", date(2026, 5, 5))
 
-    _run(db, lambda url, max_bytes=0: PageRead(digest=DIGEST, final_url=url, covers_bytes=64, complete=True))
+    _run(
+        db,
+        lambda url, max_bytes=0: PageRead(
+            digest=DIGEST, final_url=url, covers_bytes=64, complete=True
+        ),
+    )
 
     row = row_for_url(db, "https://fixturehost.org/a")
     assert row["last_outcome"] == OK
@@ -183,9 +189,7 @@ def test_a_row_never_attempted_is_still_selected(db: Path) -> None:
 
     snapshot(db, zotero=_Stamper(), hasher=hasher, clock=lambda: "NOW", limit=1)
 
-    assert [r["url_canonical"] for r in rows_needing_hash(db)] == [
-        "https://fixturehost.org/fresh"
-    ]
+    assert [r["url_canonical"] for r in rows_needing_hash(db)] == ["https://fixturehost.org/fresh"]
 
 
 def test_retry_failed_reaches_them_again(db: Path) -> None:
@@ -199,7 +203,12 @@ def test_retry_failed_reaches_them_again(db: Path) -> None:
 def test_a_hashed_row_is_never_selected_either_way(db: Path) -> None:
     """A retry pass must not re-read pages that already have their evidence."""
     insert_url(db, "https://fixturehost.org/a", "KEY1", date(2026, 5, 5))
-    _run(db, lambda url, max_bytes=0: PageRead(digest=DIGEST, final_url=url, covers_bytes=64, complete=True))
+    _run(
+        db,
+        lambda url, max_bytes=0: PageRead(
+            digest=DIGEST, final_url=url, covers_bytes=64, complete=True
+        ),
+    )
 
     assert rows_needing_hash(db) == []
     assert rows_needing_hash(db, include_failed=True) == []
@@ -349,12 +358,8 @@ def test_only_host_composes_with_only_outcome(db: Path) -> None:
     from zotero_capture.sqlite_cache import set_fetch_outcome
 
     _host_corpus(db)
-    set_fetch_outcome(
-        db, "https://en.wikipedia.org/wiki/B", outcome=BLOCKED, at="T", final_url=""
-    )
-    set_fetch_outcome(
-        db, "https://notwikipedia.org/wiki/E", outcome=BLOCKED, at="T", final_url=""
-    )
-    assert _urls(
-        rows_needing_hash(db, only_host="wikipedia.org", only_outcome=BLOCKED)
-    ) == {"https://en.wikipedia.org/wiki/B"}
+    set_fetch_outcome(db, "https://en.wikipedia.org/wiki/B", outcome=BLOCKED, at="T", final_url="")
+    set_fetch_outcome(db, "https://notwikipedia.org/wiki/E", outcome=BLOCKED, at="T", final_url="")
+    assert _urls(rows_needing_hash(db, only_host="wikipedia.org", only_outcome=BLOCKED)) == {
+        "https://en.wikipedia.org/wiki/B"
+    }

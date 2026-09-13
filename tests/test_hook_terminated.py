@@ -100,9 +100,7 @@ def test_a_post_cut_off_by_the_timeout_is_queued(tmp_path) -> None:
 
     assert retry_queue_depth(db) == 1
     # Positive control: the claim was NOT released -- the POST went out.
-    row = sqlite3.connect(db).execute(
-        "SELECT zotero_key, pending_key FROM url_index"
-    ).fetchone()
+    row = sqlite3.connect(db).execute("SELECT zotero_key, pending_key FROM url_index").fetchone()
     assert row is not None and row[0] == "" and row[1], row
 
 

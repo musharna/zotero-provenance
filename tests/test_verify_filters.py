@@ -48,7 +48,8 @@ def _seed(db, urls, outcome=""):
             hashed_at=f"T{i}",
             covers_bytes=64,
             complete=True,
-            sketch="", sketch_algo="",
+            sketch="",
+            sketch_algo="",
         )
         if outcome:
             set_verify_outcome(db, url, outcome=outcome, at="EARLIER")
@@ -81,9 +82,7 @@ def test_verify_honours_only_host_on_a_boundary(tmp_path) -> None:
         ],
     )
     seen: list[str] = []
-    verify(
-        db, hasher=_recording_hasher(seen), clock=lambda: "NOW", only_host="github.com"
-    )
+    verify(db, hasher=_recording_hasher(seen), clock=lambda: "NOW", only_host="github.com")
     assert sorted(seen) == [
         "https://gist.github.com/a/b",
         "https://github.com/a/b",
@@ -91,14 +90,10 @@ def test_verify_honours_only_host_on_a_boundary(tmp_path) -> None:
 
 
 def test_verify_honours_only_outcome(tmp_path) -> None:
-    db = _seed(
-        tmp_path / "i.db", ["https://a.test/1", "https://b.test/1"], outcome="unstable"
-    )
+    db = _seed(tmp_path / "i.db", ["https://a.test/1", "https://b.test/1"], outcome="unstable")
     _seed(db, ["https://c.test/1"], outcome="unchanged")
     seen: list[str] = []
-    verify(
-        db, hasher=_recording_hasher(seen), clock=lambda: "NOW", only_outcome="unstable"
-    )
+    verify(db, hasher=_recording_hasher(seen), clock=lambda: "NOW", only_outcome="unstable")
     assert sorted(seen) == ["https://a.test/1", "https://b.test/1"]
 
 
@@ -259,8 +254,15 @@ def _two_of_each(tmp_path):
     insert_url(db, "https://c.test/1", "K8", datetime.date(2026, 5, 5))
     insert_url(db, "https://d.test/1", "K9", datetime.date(2026, 5, 5))
     for i in range(2):
-        enqueue_retry(db, url_canonical=f"https://q.test/{i}", project="home", context=None,
-                      seen_date="2026-05-05", error="e", now="2026-05-05T00:00:00+00:00")
+        enqueue_retry(
+            db,
+            url_canonical=f"https://q.test/{i}",
+            project="home",
+            context=None,
+            seen_date="2026-05-05",
+            error="e",
+            now="2026-05-05T00:00:00+00:00",
+        )
     return db
 
 
@@ -284,7 +286,10 @@ def test_a_negative_limit_is_refused_at_the_cli(tmp_path) -> None:
     for flags in (["--limit", "-1"], ["--verify", "--limit", "-1"]):
         done = subprocess.run(
             [sys.executable, str(CLI), *flags],
-            capture_output=True, text=True, timeout=60, env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=env,
         )
         assert done.returncode != 0, flags
         assert "limit" in done.stderr, done.stderr

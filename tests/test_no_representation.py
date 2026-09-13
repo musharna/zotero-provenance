@@ -164,10 +164,14 @@ def test_a_row_re_read_as_202_is_no_longer_reported_unchanged(tmp_path) -> None:
     init_db(db)
     insert_url(db, PAGE, "K1", SEEN)
     set_content_hash(
-        db, PAGE,
+        db,
+        PAGE,
         content_hash=hashlib.sha256(b"").hexdigest(),
-        hashed_at="2026-08-29T00:00:00", covers_bytes=0, complete=True,
-        sketch="", sketch_algo="",
+        hashed_at="2026-08-29T00:00:00",
+        covers_bytes=0,
+        complete=True,
+        sketch="",
+        sketch_algo="",
     )
 
     def hasher(url: str, max_bytes: int) -> object:
@@ -192,8 +196,14 @@ def test_the_stored_hash_survives_a_no_representation_re_read(tmp_path) -> None:
     insert_url(db, PAGE, "K1", SEEN)
     original = hashlib.sha256(b"").hexdigest()
     set_content_hash(
-        db, PAGE, content_hash=original, hashed_at="2026-08-29T00:00:00",
-        covers_bytes=0, complete=True, sketch="", sketch_algo="",
+        db,
+        PAGE,
+        content_hash=original,
+        hashed_at="2026-08-29T00:00:00",
+        covers_bytes=0,
+        complete=True,
+        sketch="",
+        sketch_algo="",
     )
 
     def hasher(url: str, max_bytes: int) -> object:
