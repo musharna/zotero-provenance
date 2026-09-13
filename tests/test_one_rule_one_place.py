@@ -67,7 +67,11 @@ def test_the_shell_state_dir_matches_the_python_one(tmp_path: Path, env: dict) -
     full = {"HOME": str(tmp_path), "PATH": os.environ["PATH"], **env}
     shell = subprocess.run(
         ["bash", "-c", f'source "{HOOKS}/lib.sh"; zp_log_path'],
-        env=full, capture_output=True, text=True, timeout=30, check=True,
+        env=full,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
     ).stdout.strip()
     assert shell == str(_state_dir(full) / "capture.log")
 

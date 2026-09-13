@@ -76,15 +76,11 @@ def _chain(*, status: int, body: bytes = BODY) -> httpx.Client:
             return httpx.Response(302, headers={"Location": PUBLISHER})
         return httpx.Response(status, content=body)
 
-    return httpx.Client(
-        transport=httpx.MockTransport(handler), follow_redirects=True
-    )
+    return httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True)
 
 
 def _hasher(http: httpx.Client):
-    return lambda url, max_bytes=HASH_MAX_BYTES: hash_page(
-        url, client=http, max_bytes=max_bytes
-    )
+    return lambda url, max_bytes=HASH_MAX_BYTES: hash_page(url, client=http, max_bytes=max_bytes)
 
 
 # --- reading the address off a failure ---------------------------------------
@@ -170,9 +166,7 @@ def test_a_hashed_row_records_which_url_was_actually_hashed(db: Path) -> None:
     insert_url(db, RESOLVER, "KEY1", SEEN)
 
     with _chain(status=200) as http:
-        result = snapshot(
-            db, zotero=_Stamper(), hasher=_hasher(http), clock=lambda: "NOW"
-        )
+        result = snapshot(db, zotero=_Stamper(), hasher=_hasher(http), clock=lambda: "NOW")
 
     assert result.hashed == 1
     row = row_for_url(db, RESOLVER)
@@ -264,7 +258,10 @@ def test_a_dead_link_is_not_counted_as_a_refusal(db: Path) -> None:
 
     with _chain(status=404) as http:
         result = snapshot(
-            db, zotero=_Stamper(), hasher=_hasher(http), clock=lambda: "NOW",
+            db,
+            zotero=_Stamper(),
+            hasher=_hasher(http),
+            clock=lambda: "NOW",
             # Says out loud that this absence WAS corroborated. Without it the
             # row is `not_visible`, which is correct and is a different test.
             visible=lambda u: True,
@@ -280,9 +277,7 @@ def test_a_refusal_is_not_counted_as_a_dead_link(db: Path) -> None:
     insert_url(db, RESOLVER, "KEY1", SEEN)
 
     with _chain(status=403) as http:
-        result = snapshot(
-            db, zotero=_Stamper(), hasher=_hasher(http), clock=lambda: "NOW"
-        )
+        result = snapshot(db, zotero=_Stamper(), hasher=_hasher(http), clock=lambda: "NOW")
 
     assert result.refused_by == {"publisher.invalid": 1}
     assert result.gone_at == {}
@@ -308,7 +303,10 @@ def test_an_oversized_page_is_charged_to_neither_host_tally(db: Path) -> None:
 
     with _chain(status=200, body=b"x" * (SMALL_CAP + 1)) as http:
         result = snapshot(
-            db, zotero=_Stamper(), hasher=_hasher(http), clock=lambda: "NOW",
+            db,
+            zotero=_Stamper(),
+            hasher=_hasher(http),
+            clock=lambda: "NOW",
             max_bytes=SMALL_CAP,
         )
 

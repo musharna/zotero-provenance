@@ -71,15 +71,7 @@ def _disagreeing_clone(base: Path, version: str) -> Path:
     It is the trap: if a future change goes back to consulting the clone, these
     tests do not merely stop covering the case, they go red.
     """
-    path = (
-        base
-        / ".claude"
-        / "plugins"
-        / "marketplaces"
-        / MARKET
-        / ".claude-plugin"
-        / "plugin.json"
-    )
+    path = base / ".claude" / "plugins" / "marketplaces" / MARKET / ".claude-plugin" / "plugin.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"version": version}), encoding="utf-8")
     return path
@@ -141,9 +133,7 @@ def test_a_superseded_root_still_refuses(tmp_path, monkeypatch) -> None:
     assert "0.3.0" in reason and "0.48.0" in reason
 
 
-def test_unresolvable_is_unknown_and_resolvable_still_refuses(
-    tmp_path, monkeypatch
-) -> None:
+def test_unresolvable_is_unknown_and_resolvable_still_refuses(tmp_path, monkeypatch) -> None:
     """Both directions, in one test, because either alone is satisfiable wrongly.
 
     `registry.resolve_pinned` documents None as "do not guess", never "nothing
@@ -175,14 +165,10 @@ def test_an_ambiguous_registry_is_unknown(tmp_path, monkeypatch) -> None:
     assert st.stale_reason("0.1.0", st.installed_version()) == ""
 
 
-def test_a_pinned_root_with_no_readable_manifest_is_unknown(
-    tmp_path, monkeypatch
-) -> None:
+def test_a_pinned_root_with_no_readable_manifest_is_unknown(tmp_path, monkeypatch) -> None:
     """The registry can name a root whose manifest is gone or corrupt."""
     pinned = _plugin_root(tmp_path, "0.5.0")
-    (pinned / ".claude-plugin" / "plugin.json").write_text(
-        "{not json", encoding="utf-8"
-    )
+    (pinned / ".claude-plugin" / "plugin.json").write_text("{not json", encoding="utf-8")
     _disagreeing_clone(tmp_path, "0.6.0")
     _point_at(monkeypatch, _registry(tmp_path, pinned), pinned)
 
@@ -216,9 +202,7 @@ def test_there_is_one_way_to_ask(tmp_path) -> None:
 def _docstring_nodes(tree: ast.AST) -> set[int]:
     out: set[int] = set()
     for node in ast.walk(tree):
-        if isinstance(
-            node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
-        ):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
             body = getattr(node, "body", None)
             if (
                 body

@@ -26,17 +26,26 @@ def _run(state: Path, *args: str, home: Path | None = None):
         env["HOME"] = str(home)
     return subprocess.run(
         [sys.executable, str(CHECKER), *args],
-        env=env, capture_output=True, text=True, timeout=60,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
 
 
 def _record(ts: str, root: str, incident_id: str) -> str:
     return json.dumps(
         {
-            "ts": ts, "version": "0.3.0", "root": root,
-            "pinned_root": "/c/0.19.0", "project": "p",
-            "urls_seen": 1, "urls_new": 1, "urls_recurring": 0,
-            "errors": [], "incident_id": incident_id,
+            "ts": ts,
+            "version": "0.3.0",
+            "root": root,
+            "pinned_root": "/c/0.19.0",
+            "project": "p",
+            "urls_seen": 1,
+            "urls_new": 1,
+            "urls_recurring": 0,
+            "errors": [],
+            "incident_id": incident_id,
         }
     )
 
@@ -58,8 +67,12 @@ def _seed(state: Path, *ids: str) -> None:
     state.mkdir(parents=True, exist_ok=True)
     for i in ids:
         open_incident(
-            state / "health.db", incident_id=i, url="https://fixturehost.org/x",
-            root="/c/0.3.0", pinned_root="/c/0.19.0", kind="stale",
+            state / "health.db",
+            incident_id=i,
+            url="https://fixturehost.org/x",
+            root="/c/0.3.0",
+            pinned_root="/c/0.19.0",
+            kind="stale",
             ts="2026-08-25T11:40:00-04:00",
         )
 
@@ -116,8 +129,10 @@ def test_ack_by_id_silences_only_that_incident(tmp_path: Path) -> None:
     state = tmp_path / "state"
     state.mkdir(parents=True, exist_ok=True)
     (state / "capture.log").write_text(
-        _record("2026-08-25T11:40:00-0400", "/c/0.3.0", "aaa") + "\n"
-        + _record("2026-08-25T11:41:00-0400", "/c/0.9.0", "bbb") + "\n"
+        _record("2026-08-25T11:40:00-0400", "/c/0.3.0", "aaa")
+        + "\n"
+        + _record("2026-08-25T11:41:00-0400", "/c/0.9.0", "bbb")
+        + "\n"
     )
     _seed(state, "aaa", "bbb")
 

@@ -137,7 +137,8 @@ def test_a_probe_that_cannot_connect_is_not_evidence_of_anything() -> None:
 
 def _four_oh_four(url: str, max_bytes: int = 0):
     raise httpx.HTTPStatusError(
-        "404", request=httpx.Request("GET", url),
+        "404",
+        request=httpx.Request("GET", url),
         response=httpx.Response(404, request=httpx.Request("GET", url)),
     )
 
@@ -148,7 +149,10 @@ def test_a_private_page_is_not_recorded_as_gone(db: Path) -> None:
     insert_url(db, LEAF, "KEY1", SEEN)
 
     snapshot(
-        db, zotero=_Stamper(), hasher=_four_oh_four, clock=lambda: "NOW",
+        db,
+        zotero=_Stamper(),
+        hasher=_four_oh_four,
+        clock=lambda: "NOW",
         visible=lambda u: False,
     )
 
@@ -162,7 +166,10 @@ def test_a_genuinely_dead_page_is_still_recorded_as_gone(db: Path) -> None:
     insert_url(db, LEAF, "KEY1", SEEN)
 
     snapshot(
-        db, zotero=_Stamper(), hasher=_four_oh_four, clock=lambda: "NOW",
+        db,
+        zotero=_Stamper(),
+        hasher=_four_oh_four,
+        clock=lambda: "NOW",
         visible=lambda u: True,
     )
 
@@ -184,7 +191,10 @@ def test_not_visible_is_not_listed_among_the_dead_links(db: Path) -> None:
     insert_url(db, LEAF, "KEY1", SEEN)
 
     result = snapshot(
-        db, zotero=_Stamper(), hasher=_four_oh_four, clock=lambda: "NOW",
+        db,
+        zotero=_Stamper(),
+        hasher=_four_oh_four,
+        clock=lambda: "NOW",
         visible=lambda u: False,
     )
 

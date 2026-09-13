@@ -49,17 +49,13 @@ KEPT = [
 ]
 
 
-@pytest.mark.parametrize(
-    "rule,url", EXCLUDED_BY_CAPTURE, ids=[r for r, _ in EXCLUDED_BY_CAPTURE]
-)
+@pytest.mark.parametrize("rule,url", EXCLUDED_BY_CAPTURE, ids=[r for r, _ in EXCLUDED_BY_CAPTURE])
 def test_capture_refuses_it(rule: str, url: str) -> None:
     """Precondition. If this fails the fixture is wrong, not the property."""
     assert is_excluded(url) is True, f"fixture for {rule!r} is not actually excluded"
 
 
-@pytest.mark.parametrize(
-    "rule,url", EXCLUDED_BY_CAPTURE, ids=[r for r, _ in EXCLUDED_BY_CAPTURE]
-)
+@pytest.mark.parametrize("rule,url", EXCLUDED_BY_CAPTURE, ids=[r for r, _ in EXCLUDED_BY_CAPTURE])
 def test_maintenance_can_name_it(rule: str, url: str) -> None:
     """THE property. A row capture would refuse must not be invisible to the
     tools that exist to clear it: unreachable is how six rows stayed put while

@@ -119,7 +119,10 @@ def main(argv: list[str] | None = None, *, clock=None) -> int:
             # and downgrading the outcome must not erase the host that
             # answered. Until 0.61.0 this wrote '' over a recorded address.
             if set_fetch_outcome(
-                db, r["url_canonical"], outcome=NOT_VISIBLE, at=clock(),
+                db,
+                r["url_canonical"],
+                outcome=NOT_VISIBLE,
+                at=clock(),
                 final_url=r["final_url"] or "",
             ):
                 J.outcome(seq, "done")

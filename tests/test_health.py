@@ -30,7 +30,11 @@ DEFAULT_SILENCE = timedelta(hours=24)
 
 
 def _capture(
-    ts: str, *, root: str = PINNED, errors=None, urls_new: int = 1,
+    ts: str,
+    *,
+    root: str = PINNED,
+    errors=None,
+    urls_new: int = 1,
     pinned: str | None = PINNED,
 ) -> str:
     """A capture record. Carries `pinned_root` by default: without pin evidence
@@ -103,7 +107,6 @@ def test_reports_a_capture_written_from_an_unpinned_root() -> None:
     assert "0.3.0" in warnings[0], warnings
 
 
-
 def test_a_later_good_capture_does_not_hide_an_earlier_stale_one() -> None:
     """The defect the 2026-08-25 Codex audit ranked first.
 
@@ -169,7 +172,6 @@ def test_reports_recent_refusals() -> None:
     assert "stale-root-refused" in warnings[0], warnings
 
 
-
 def test_a_long_quiet_stretch_alone_is_not_reported() -> None:
     """Wall-clock silence is not evidence of a fault.
 
@@ -179,9 +181,6 @@ def test_a_long_quiet_stretch_alone_is_not_reported() -> None:
     that is precisely the chatter that gets a check ignored.
     """
     assert _check([_capture("2026-08-20T11:00:00-04:00")]) == []
-
-
-
 
 
 def test_reports_capture_errors_from_the_most_recent_run() -> None:
@@ -329,7 +328,11 @@ def test_a_stale_write_with_an_id_is_still_reported_when_the_ledger_is_gone(
     open_incident(
         state / "health.db",
         incident_id=mutation_id(record["incident_id"], "https://x.test/a"),
-        url="https://x.test/a", root=stale, pinned_root=PINNED, kind="stale", ts=old,
+        url="https://x.test/a",
+        root=stale,
+        pinned_root=PINNED,
+        kind="stale",
+        ts=old,
     )
     proc = _run_hook(state)
     assert "1 open integrity incident" in proc.stdout, proc.stdout
@@ -392,8 +395,6 @@ def test_the_warning_does_not_claim_a_session_is_live() -> None:
     assert "ran from plugin" in warnings[0], warnings
 
 
-
-
 def test_a_self_describing_record_is_read_without_the_registry() -> None:
     """The record already proves it: gating on a readable registry threw that away."""
     line = json.dumps(
@@ -424,8 +425,10 @@ def test_refusals_are_reported_with_no_successful_capture_at_all() -> None:
 
 
 def test_a_huge_refusal_count_is_capped_in_the_message() -> None:
-    lines = [_event(f"2026-08-25T11:{m // 60:02d}:{m % 60:02d}:00-04:00", "stale-root-refused")
-             for m in range(0, 50)]
+    lines = [
+        _event(f"2026-08-25T11:{m // 60:02d}:{m % 60:02d}:00-04:00", "stale-root-refused")
+        for m in range(0, 50)
+    ]
     warnings = _check(lines)
 
     assert warnings
@@ -452,7 +455,6 @@ def test_a_stale_incident_repeats_while_it_is_still_current() -> None:
     second = _classify(lines, installed_at=installed)
 
     assert first and second == first, (first, second)
-
 
 
 def test_a_capture_that_could_not_verify_its_pin_is_its_own_warning() -> None:
@@ -521,8 +523,11 @@ def test_the_hook_env_reads_nothing_from_this_machine(tmp_path: Path) -> None:
     healthy-log test admitted it: "root must match whatever is really
     installed, or this is a false alarm"). Its meaning varied per machine."""
     env = _hook_env(tmp_path)
-    leaked = sorted(k for k in env if k.startswith("ZOTERO_") and k not in
-                    ("ZOTERO_CAPTURE_STATE_DIR", "ZOTERO_SECRETS_FILE"))
+    leaked = sorted(
+        k
+        for k in env
+        if k.startswith("ZOTERO_") and k not in ("ZOTERO_CAPTURE_STATE_DIR", "ZOTERO_SECRETS_FILE")
+    )
     assert leaked == [], leaked
     assert env["HOME"].startswith(str(tmp_path)), env["HOME"]
     assert not Path(env["ZOTERO_SECRETS_FILE"]).exists()
@@ -530,7 +535,9 @@ def test_the_hook_env_reads_nothing_from_this_machine(tmp_path: Path) -> None:
     assert env["ZOTERO_CAPTURE_STATE_DIR"] == str(tmp_path)
 
 
-@pytest.mark.parametrize("raw", ["2026-09-06T12:00:00+0000", "2026-09-06T08:00:00-0400", "2026-09-06T12:00:00+00:00"])
+@pytest.mark.parametrize(
+    "raw", ["2026-09-06T12:00:00+0000", "2026-09-06T08:00:00-0400", "2026-09-06T12:00:00+00:00"]
+)
 def test_a_log_timestamp_is_readable_on_every_supported_python(raw: str) -> None:
     """The hooks and the capture CLI write `%z`, which is `+0000` with no
     colon. `_parse_ts`'s docstring promised both forms; on Python 3.10

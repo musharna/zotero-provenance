@@ -32,8 +32,7 @@ class _Recording:
     def __init__(self) -> None:
         self.posted: list[str] = []
 
-    def post_webpage_item(self, *, url_canonical, title, access_date, tags,
-                          item_key=None, **kw):
+    def post_webpage_item(self, *, url_canonical, title, access_date, tags, item_key=None, **kw):
         self.posted.append(url_canonical)
         return item_key or "KEY"
 
@@ -67,13 +66,11 @@ def test_every_url_in_a_stale_capture_gets_its_own_incident(tmp_path: Path) -> N
     zotero = _capture(tmp_path / "i.db", ledger, pinned="/c/NEW", root="/c/OLD")
 
     assert len(zotero.posted) == 3, (
-        "positive control: all three writes should have been attempted, "
-        f"got {zotero.posted}"
+        f"positive control: all three writes should have been attempted, got {zotero.posted}"
     )
     found = open_incidents(ledger)
     assert {i["url"] for i in found} == set(URLS), (
-        f"{len(found)} incident(s) recorded for 3 stale writes: "
-        f"{[i['url'] for i in found]}"
+        f"{len(found)} incident(s) recorded for 3 stale writes: {[i['url'] for i in found]}"
     )
     assert len({i["incident_id"] for i in found}) == 3, "ids collided"
 

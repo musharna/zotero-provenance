@@ -16,11 +16,7 @@ def _make_item(key: str, url: str, title: str, tags: list[str]):
 
 
 def test_bucket_new_url_only_today():
-    items = [
-        _make_item(
-            "A", "https://x.com/new", "New", ["context:lit-review", "seen:2026-05-05"]
-        )
-    ]
+    items = [_make_item("A", "https://x.com/new", "New", ["context:lit-review", "seen:2026-05-05"])]
     buckets = bucket_items(items, run_started=date(2026, 5, 5))
     assert [i["key"] for i in buckets["new"]] == ["A"]
     assert buckets["persisting"] == []
@@ -82,20 +78,14 @@ def test_bucket_recurring_triaged_takes_priority():
 
 
 def test_bucket_dropped_prior_no_today():
-    items = [
-        _make_item(
-            "A", "https://x.com/d", "D", ["context:lit-review", "seen:2026-04-29"]
-        )
-    ]
+    items = [_make_item("A", "https://x.com/d", "D", ["context:lit-review", "seen:2026-04-29"])]
     buckets = bucket_items(items, run_started=date(2026, 5, 5))
     assert [i["key"] for i in buckets["dropped"]] == ["A"]
 
 
 def test_emit_markdown_contains_all_sections():
     items = [
-        _make_item(
-            "N", "https://x.com/new", "New", ["context:lit-review", "seen:2026-05-05"]
-        ),
+        _make_item("N", "https://x.com/new", "New", ["context:lit-review", "seen:2026-05-05"]),
         _make_item(
             "R",
             "https://x.com/recur",

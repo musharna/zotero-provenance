@@ -40,9 +40,7 @@ def main() -> int:
     p = argparse.ArgumentParser(prog="verify-dois")
     p.add_argument("--dry-run", action="store_true", help="count, do not check")
     p.add_argument("--limit", type=int, default=None, help="only the first N DOIs")
-    p.add_argument(
-        "--max-rps", type=float, default=2.0, help="cap outbound requests per second"
-    )
+    p.add_argument("--max-rps", type=float, default=2.0, help="cap outbound requests per second")
     args = p.parse_args()
 
     db_path = load_config().db_path

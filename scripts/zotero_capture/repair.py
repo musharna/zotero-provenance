@@ -172,17 +172,13 @@ def plan_repair(rows: list[dict]) -> list[RepairStep]:
         url = row["url_canonical"]
         key = row["zotero_key"]
         if _is_not_a_url(url):
-            steps.append(
-                RepairStep(url, key, "skip", reason="not a URL (regex or wildcard)")
-            )
+            steps.append(RepairStep(url, key, "skip", reason="not a URL (regex or wildcard)"))
             continue
         corrected = repaired_url(url)
         if not corrected:
             continue
         if not key:
-            steps.append(
-                RepairStep(url, key, "skip", corrected, "claim never completed")
-            )
+            steps.append(RepairStep(url, key, "skip", corrected, "claim never completed"))
             continue
         action: Action = "merge" if corrected in known else "rewrite"
         steps.append(RepairStep(url, key, action, corrected))
@@ -291,9 +287,7 @@ def _apply_repair(
                 # permanently, because title_is_unresolved() trusts the tag over
                 # the title it can see.
                 tags = [
-                    t
-                    for t in zotero.get_item_tags(step.zotero_key)
-                    if t != UNRESOLVED_TITLE_TAG
+                    t for t in zotero.get_item_tags(step.zotero_key) if t != UNRESOLVED_TITLE_TAG
                 ]
                 # The duplicate's row is about to be deleted, so anything still
                 # queued against it has nowhere to go. Apply it to the survivor
@@ -307,8 +301,7 @@ def _apply_repair(
                         )
                     ]
                     dup = conn.execute(
-                        "SELECT first_seen, last_seen FROM url_index"
-                        " WHERE url_canonical = ?",
+                        "SELECT first_seen, last_seen FROM url_index WHERE url_canonical = ?",
                         (step.url,),
                     ).fetchone()
                 tags = sorted(set(tags) | set(queued))
@@ -317,8 +310,7 @@ def _apply_repair(
                 # refused -- half a merge, with the duplicate still live.
                 if not zotero.trash_item(step.zotero_key, expect_url=step.url):
                     logger.warning(
-                        "skipping merge of %s: it is no longer the item that was "
-                        "planned",
+                        "skipping merge of %s: it is no longer the item that was planned",
                         step.url,
                     )
                     journal.outcome(seq, "refused", "no longer the planned item")
@@ -328,8 +320,7 @@ def _apply_repair(
                     zotero.add_tags(survivor_key, tags)
                 with connect(db_path) as conn:
                     merged = conn.execute(
-                        "DELETE FROM url_index"
-                        " WHERE url_canonical = ? AND zotero_key = ?",
+                        "DELETE FROM url_index WHERE url_canonical = ? AND zotero_key = ?",
                         (step.url, step.zotero_key),
                     ).rowcount
                     if merged:
@@ -351,8 +342,7 @@ def _apply_repair(
                             )
                 if not merged:
                     logger.warning(
-                        "merged item %s but its index row was replaced; "
-                        "leaving the new row alone",
+                        "merged item %s but its index row was replaced; leaving the new row alone",
                         step.zotero_key,
                     )
                 journal.outcome(seq, "done" if merged else "refused")

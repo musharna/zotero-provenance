@@ -28,9 +28,7 @@ def _cache(home: Path) -> Path:
     return home / ".claude" / "plugins" / "cache"
 
 
-def _root(
-    home: Path, version: str, *, market: str = MARKET, plugin: str = PLUGIN
-) -> Path:
+def _root(home: Path, version: str, *, market: str = MARKET, plugin: str = PLUGIN) -> Path:
     path = _cache(home) / market / plugin / version
     (path / "hooks").mkdir(parents=True, exist_ok=True)
     return path
@@ -52,9 +50,7 @@ def test_a_different_marketplace_is_not_followed(tmp_path: Path) -> None:
     reg = _registry(
         home,
         {
-            f"{PLUGIN}@other-marketplace": [
-                {"scope": "project", "installPath": str(other)}
-            ],
+            f"{PLUGIN}@other-marketplace": [{"scope": "project", "installPath": str(other)}],
             f"{PLUGIN}@{MARKET}": [{"scope": "user", "installPath": str(correct)}],
         },
     )
@@ -121,9 +117,7 @@ def test_a_target_outside_the_cache_subtree_is_refused(tmp_path: Path) -> None:
     mine = _root(home, "0.9.0")
     outside = tmp_path / "elsewhere"
     (outside / "hooks").mkdir(parents=True)
-    reg = _registry(
-        home, {f"{PLUGIN}@{MARKET}": [{"scope": "user", "installPath": str(outside)}]}
-    )
+    reg = _registry(home, {f"{PLUGIN}@{MARKET}": [{"scope": "user", "installPath": str(outside)}]})
 
     resolved, _ = resolve_pinned(own_root=mine, registry_path=reg)
 
@@ -178,9 +172,7 @@ def test_a_checkout_outside_the_cache_still_resolves_a_single_entry(
     """Health runs from a checkout too; one unambiguous entry is still usable."""
     home = tmp_path / "home"
     target = _root(home, "0.15.0")
-    reg = _registry(
-        home, {f"{PLUGIN}@{MARKET}": [{"scope": "user", "installPath": str(target)}]}
-    )
+    reg = _registry(home, {f"{PLUGIN}@{MARKET}": [{"scope": "user", "installPath": str(target)}]})
 
     resolved, _ = resolve_pinned(own_root=tmp_path / "checkout", registry_path=reg)
 
@@ -252,10 +244,12 @@ def test_a_non_string_install_path_refuses(tmp_path: Path) -> None:
     good = _root(home, "1.0.0")
     reg = _registry(
         home,
-        {f"{PLUGIN}@{MARKET}": [
-            {"scope": "user", "installPath": str(good)},
-            {"scope": "project", "installPath": 7},
-        ]},
+        {
+            f"{PLUGIN}@{MARKET}": [
+                {"scope": "user", "installPath": str(good)},
+                {"scope": "project", "installPath": 7},
+            ]
+        },
     )
 
     assert resolve_pinned(own_root=mine, registry_path=reg) == (None, None)

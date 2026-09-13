@@ -49,9 +49,7 @@ def test_a_template_is_retired(url):
 
 def test_a_control_byte_with_nothing_in_front_of_it_is_retired():
     """Cutting at the escape leaves "https://" — no host, nothing to repair."""
-    assert retire_reason("https://\x1b[0m") == (
-        "control character, from pasted terminal output"
-    )
+    assert retire_reason("https://\x1b[0m") == ("control character, from pasted terminal output")
 
 
 def test_a_control_byte_after_a_real_address_goes_to_repair_instead():
@@ -264,11 +262,11 @@ def test_every_removed_row_is_journalled_before_it_is_destroyed(tmp_path):
         def trash_item(self, key, *, expect_url=None):
             self.trashed.append(key)
             return True
+
     apply_retire(plan_retire(rows), db_path=db, zotero=_Zotero(), connect=connect)
 
     entries = [
-        json.loads(line)
-        for line in journal_path(db).read_text(encoding="utf-8").splitlines()
+        json.loads(line) for line in journal_path(db).read_text(encoding="utf-8").splitlines()
     ]
     assert len(entries) == 1
     row = entries[0]["row"]

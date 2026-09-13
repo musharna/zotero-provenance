@@ -129,8 +129,7 @@ def claims_for_url(db_path: Path, url_canonical: str) -> list[sqlite3.Row]:
     with closing(_connect(db_path)) as conn:
         return list(
             conn.execute(
-                "SELECT * FROM claim_link WHERE url_canonical = ?"
-                " ORDER BY last_seen DESC",
+                "SELECT * FROM claim_link WHERE url_canonical = ? ORDER BY last_seen DESC",
                 (url_canonical,),
             )
         )
@@ -153,9 +152,7 @@ def claim_counts(db_path: Path) -> tuple[int, int]:
     """(claim links, URLs carrying at least one) -- what coverage looks like."""
     with closing(_connect(db_path)) as conn:
         (links,) = conn.execute("SELECT COUNT(*) FROM claim_link").fetchone()
-        (urls,) = conn.execute(
-            "SELECT COUNT(DISTINCT url_canonical) FROM claim_link"
-        ).fetchone()
+        (urls,) = conn.execute("SELECT COUNT(DISTINCT url_canonical) FROM claim_link").fetchone()
     return links, urls
 
 

@@ -60,9 +60,7 @@ def test_completing_a_claim_applies_tags_another_session_queued(db, zotero):
         title_fetcher=lambda u: "T",
     )
     posted = zotero.post_webpage_item.call_args.kwargs["tags"]
-    applied = posted + (
-        list(zotero.add_tags.call_args.args[1]) if zotero.add_tags.called else []
-    )
+    applied = posted + (list(zotero.add_tags.call_args.args[1]) if zotero.add_tags.called else [])
     assert "context:from-B" in applied and "project:B" in applied, (
         f"the other session's provenance was never applied: {applied}"
     )

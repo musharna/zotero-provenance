@@ -55,9 +55,7 @@ def _tool_result() -> str:
 
 
 def _user(text: str = "do the thing") -> str:
-    return json.dumps(
-        {"type": "user", "message": {"content": [{"type": "text", "text": text}]}}
-    )
+    return json.dumps({"type": "user", "message": {"content": [{"type": "text", "text": text}]}})
 
 
 def test_a_tool_result_is_not_a_turn_boundary() -> None:
@@ -111,8 +109,7 @@ def test_tool_calls_do_not_split_a_turn(tmp_path: Path) -> None:
 def test_a_real_user_message_does_split_two_turns(tmp_path: Path) -> None:
     transcript = tmp_path / "t.jsonl"
     transcript.write_text(
-        "\n".join([_user(), _assistant("one"), _user("again"), _assistant("two")])
-        + "\n"
+        "\n".join([_user(), _assistant("one"), _user("again"), _assistant("two")]) + "\n"
     )
 
     assert len(list(_turns(transcript))) == 2
@@ -124,9 +121,7 @@ def test_sidechain_records_are_ignored(tmp_path: Path) -> None:
     side = json.loads(_assistant("sub https://example.org/sub"))
     side["isSidechain"] = True
     transcript = tmp_path / "t.jsonl"
-    transcript.write_text(
-        "\n".join([_user(), json.dumps(side), _assistant("main")]) + "\n"
-    )
+    transcript.write_text("\n".join([_user(), json.dumps(side), _assistant("main")]) + "\n")
 
     turns = list(_turns(transcript))
 

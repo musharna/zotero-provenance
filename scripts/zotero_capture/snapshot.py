@@ -117,9 +117,7 @@ class StableRead(NamedTuple):
 # a table that depended on an interpreter's random implementation would re-cut
 # every document on an upgrade and report every source in the library as having
 # changed. It must never be edited for the same reason -- see STABLE_ALGO.
-_GEAR = tuple(
-    int.from_bytes(hashlib.sha256(bytes([b])).digest()[:8], "big") for b in range(256)
-)
+_GEAR = tuple(int.from_bytes(hashlib.sha256(bytes([b])).digest()[:8], "big") for b in range(256))
 _MASK64 = (1 << 64) - 1
 
 # Where a document is cut into units. A boundary falls wherever the rolling
@@ -311,9 +309,7 @@ def stable_digest(first: PageRead, second: PageRead) -> StableRead | None:
     kept = sum(x.nbytes for x in agreed)
     if total <= 0 or kept / total < MIN_STABLE_COVERAGE:
         return None
-    return StableRead(
-        digest=sketch_of(unit.digest for unit in agreed), covers_bytes=kept
-    )
+    return StableRead(digest=sketch_of(unit.digest for unit in agreed), covers_bytes=kept)
 
 
 SKETCH_SIZE = 128
@@ -544,9 +540,7 @@ class NoRepresentation(Exception):
         self.final_url = final_url
 
 
-def hash_page(
-    url: str, *, client: httpx.Client, max_bytes: int = HASH_MAX_BYTES
-) -> PageRead:
+def hash_page(url: str, *, client: httpx.Client, max_bytes: int = HASH_MAX_BYTES) -> PageRead:
     """sha256 of the response body up to `max_bytes`, with the span it covers.
 
     Streamed, so an enormous document is stopped at the cap instead of being read
@@ -622,20 +616,20 @@ def hash_page(
 # What the last read of a page ended as. Stored per row, because "could not
 # read it" was one word covering two findings that mean opposite things.
 OK = "ok"
-GONE = "gone"                    # 404/410 -- the citation no longer resolves
-BLOCKED = "blocked"              # 401/403 -- refused; the page may be perfectly fine
-RATE_LIMITED = "rate_limited"    # 429 -- back off, conclude nothing
+GONE = "gone"  # 404/410 -- the citation no longer resolves
+BLOCKED = "blocked"  # 401/403 -- refused; the page may be perfectly fine
+RATE_LIMITED = "rate_limited"  # 429 -- back off, conclude nothing
 # Ceiling on a single host's self-imposed delay. Unbounded backoff over 818
 # rows from one host is indistinguishable from a hang.
 MAX_PENALTY_S = 120.0
-SERVER_ERROR = "server_error"    # 5xx -- their fault, probably transient
+SERVER_ERROR = "server_error"  # 5xx -- their fault, probably transient
 TIMEOUT = "timeout"
-UNREACHABLE = "unreachable"      # DNS, connection, and anything unrecognised
+UNREACHABLE = "unreachable"  # DNS, connection, and anything unrecognised
 # A 404 we are NOT entitled to read as absence. See `absence_is_corroborated`.
-NOT_VISIBLE = "not_visible"      # 404/410 whose whole container is also hidden
+NOT_VISIBLE = "not_visible"  # 404/410 whose whole container is also hidden
 # A failure on an address we ourselves damaged. The 404 is a fact about the
 # string we stored, not about the source -- see tests/test_truncated_urls.py.
-MALFORMED = "malformed"          # our record is a prefix of the cited address
+MALFORMED = "malformed"  # our record is a prefix of the cited address
 # A response that carried no document at all: 202/204/205. NOT `blocked` (a 204
 # refused nothing) and NOT `unreachable` (we reached it; it answered). Nothing
 # is claimed about the source, which is the whole point -- the alternative was
@@ -646,18 +640,18 @@ NO_CONTENT = "no_content"
 # outcomes above on purpose: both vocabularies land in `verify_outcome`, and a
 # row that says "blocked" and a row that says "changed" are answering the same
 # question -- what happened the last time we looked at this page.
-UNCHANGED = "unchanged"          # complete digest, identical
+UNCHANGED = "unchanged"  # complete digest, identical
 PREFIX_AGREED = "prefix_agreed"  # agreed over a prefix; the tail was never compared
-INCOMPARABLE = "incomparable"    # stored whole, re-read short, digests differ: nothing compared
-CHANGED = "changed"              # differed, and said so twice
-UNSTABLE = "unstable"            # did not agree with ITSELF; says nothing about drift
+INCOMPARABLE = "incomparable"  # stored whole, re-read short, digests differ: nothing compared
+CHANGED = "changed"  # differed, and said so twice
+UNSTABLE = "unstable"  # did not agree with ITSELF; says nothing about drift
 # A page whose per-request bytes move but whose document does not. Deliberately
 # NOT folded into the words above: "unchanged" is a claim about the whole
 # response and these are claims about the document inside it, and one word
 # covering both is how "unreachable" came to mean gone AND blocked.
-STABLE_BASELINE = "stable_baseline"    # first stable digest recorded; nothing compared
+STABLE_BASELINE = "stable_baseline"  # first stable digest recorded; nothing compared
 STABLE_UNCHANGED = "stable_unchanged"  # volatile bytes moved, the document did not
-STABLE_CHANGED = "stable_changed"      # the document itself differs from the recorded one
+STABLE_CHANGED = "stable_changed"  # the document itself differs from the recorded one
 # The stored digest was cut by an older method, so nothing about the source can
 # be concluded from it and a fresh baseline replaces it. A fact about US, kept
 # apart from `stable_baseline` (which means the page had never been
@@ -799,8 +793,8 @@ class SnapshotResult:
     # for opposite actions (ask for access vs. repair or retire the citation).
     # An oversized document appears in NEITHER, and no longer appears anywhere
     # as a failure: the host served it correctly and we record what we read.
-    refused_by: dict[str, int] = field(default_factory=dict)   # 401/403, 429
-    gone_at: dict[str, int] = field(default_factory=dict)      # 404/410
+    refused_by: dict[str, int] = field(default_factory=dict)  # 401/403, 429
+    gone_at: dict[str, int] = field(default_factory=dict)  # 404/410
     # Split by outcome, per the lesson prune paid for.
     hashed_urls: list[str] = field(default_factory=list)
     unreachable_urls: list[str] = field(default_factory=list)
@@ -1040,8 +1034,11 @@ def snapshot(
     result = SnapshotResult()
     pacer = _HostPacer(sleep_s, sleeper=sleeper, monotonic=monotonic)
     for row in rows_needing_hash(
-        db_path, limit=limit, include_failed=include_failed,
-        only_outcome=only_outcome, only_host=only_host,
+        db_path,
+        limit=limit,
+        include_failed=include_failed,
+        only_outcome=only_outcome,
+        only_host=only_host,
     ):
         url = row["url_canonical"]
         result.examined += 1
@@ -1123,16 +1120,12 @@ def snapshot(
             # The ATTEMPT is stamped even though the read is not. `hashed_at`
             # stays empty because nothing was read; `last_attempt_at` records
             # that we tried, which is what stops the next pass repeating it.
-            set_fetch_outcome(
-                db_path, url, outcome=outcome, at=clock(), final_url=answered_by
-            )
+            set_fetch_outcome(db_path, url, outcome=outcome, at=clock(), final_url=answered_by)
             continue
 
         digest = read.digest
         result.by_outcome[OK] = result.by_outcome.get(OK, 0) + 1
-        set_fetch_outcome(
-            db_path, url, outcome=OK, at=read_at, final_url=read.final_url
-        )
+        set_fetch_outcome(db_path, url, outcome=OK, at=read_at, final_url=read.final_url)
 
         # The index is written only after the item is stamped. Reversed, a
         # refused stamp would leave the index claiming a hash that appears
@@ -1154,10 +1147,7 @@ def snapshot(
             hashed_at=read_at,
             covers_bytes=read.covers_bytes,
             complete=read.complete,
-            sketch=(
-                "" if read.units is None
-                else sketch_of(unit.digest for unit in read.units)
-            ),
+            sketch=("" if read.units is None else sketch_of(unit.digest for unit in read.units)),
             sketch_algo="" if read.units is None else CONTENT_SKETCH_ALGO,
         )
         result.hashed += 1
@@ -1187,9 +1177,7 @@ def _characterise(row: dict, read: PageRead) -> float | None:
         return None
     if not row.get("content_sketch") or read.units is None:
         return None
-    return stable_similarity(
-        row["content_sketch"], sketch_of(unit.digest for unit in read.units)
-    )
+    return stable_similarity(row["content_sketch"], sketch_of(unit.digest for unit in read.units))
 
 
 def verify(
@@ -1253,9 +1241,7 @@ def verify(
         """Stamp what this look concluded. Never called for one of OUR faults."""
         set_verify_outcome(db_path, url, outcome=outcome, at=clock())
 
-    for row in rows_with_hash(
-        db_path, limit=limit, only_outcome=only_outcome, only_host=only_host
-    ):
+    for row in rows_with_hash(db_path, limit=limit, only_outcome=only_outcome, only_host=only_host):
         url = row["url_canonical"]
         result.examined += 1
         # A truncated row is re-read over exactly the span it recorded. A row
@@ -1372,8 +1358,11 @@ def verify(
                 continue
             if not row["stable_digest"]:
                 set_stable_digest(
-                    db_path, url, digest=stable.digest,
-                    covers_bytes=stable.covers_bytes, algo=STABLE_ALGO,
+                    db_path,
+                    url,
+                    digest=stable.digest,
+                    covers_bytes=stable.covers_bytes,
+                    algo=STABLE_ALGO,
                 )
                 result.stable_baseline += 1
                 conclude(url, STABLE_BASELINE)
@@ -1395,8 +1384,11 @@ def verify(
                 # The order matters and is asserted: a row with no digest at all
                 # also has no tag, and that is a first baseline, not a re-cut.
                 set_stable_digest(
-                    db_path, url, digest=stable.digest,
-                    covers_bytes=stable.covers_bytes, algo=STABLE_ALGO,
+                    db_path,
+                    url,
+                    digest=stable.digest,
+                    covers_bytes=stable.covers_bytes,
+                    algo=STABLE_ALGO,
                 )
                 result.stable_rebaselined += 1
                 conclude(url, STABLE_REBASELINED)
@@ -1463,9 +1455,7 @@ def format_snapshot_report(result: SnapshotResult, *, dry_run: bool) -> list[str
         f"  partial: {url}  (hashed to the cap; the tail is not covered)"
         for url in result.partial_urls
     ]
-    lines += [
-        f"  stamp refused: {url}  (item moved)" for url in result.stamp_refused_urls
-    ]
+    lines += [f"  stamp refused: {url}  (item moved)" for url in result.stamp_refused_urls]
     lines.append(f"examined      : {result.examined}")
     lines.append(f"hashed        : {result.hashed}")
     lines.append(f"unreachable   : {result.unreachable}")
@@ -1530,8 +1520,7 @@ def format_verify_report(result: VerifyResult) -> list[str]:
         for url in result.changed_urls
     ]
     lines += [
-        f"  prefix agreed: {url}  (only the first bytes are covered; "
-        f"this is not 'unchanged')"
+        f"  prefix agreed: {url}  (only the first bytes are covered; this is not 'unchanged')"
         for url in result.partial_match_urls
     ]
     lines += [
@@ -1553,9 +1542,7 @@ def format_verify_report(result: VerifyResult) -> list[str]:
     lines.append(f"incomparable  : {result.incomparable}  (spans differ; nothing compared)")
     lines.append(f"CHANGED       : {result.changed}")
     lines.append(f"unreachable   : {result.unreachable}")
-    lines.append(
-        f"unstable      : {result.unstable}  (no usable alignment; nothing concluded)"
-    )
+    lines.append(f"unstable      : {result.unstable}  (no usable alignment; nothing concluded)")
     lines.append(f"stable baseline  : {result.stable_baseline}  (first look; recorded)")
     if result.stable_rebaselined:
         lines.append(

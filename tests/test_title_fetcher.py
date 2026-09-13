@@ -8,7 +8,6 @@ import pytest
 from zotero_capture.title_fetcher import MAX_BYTES, build_fetch_client, fetch_title
 
 
-
 # A document with a <title> and no body at all is not a page any host serves;
 # it is a convenience of these fixtures, which exist to exercise TITLE PARSING
 # (chunk splits, case, a closing tag inside a script) and never cared what came
@@ -120,9 +119,7 @@ def test_fetch_title_truncates_large_body():
         )
     )
     with httpx.Client(transport=transport) as client:
-        assert (
-            fetch_title("https://fixturehost.org/", client=client) == "https://fixturehost.org/"
-        )
+        assert fetch_title("https://fixturehost.org/", client=client) == "https://fixturehost.org/"
 
 
 def test_fetch_title_returns_url_on_4xx():
@@ -215,9 +212,7 @@ def live_client():
 @pytest.mark.live
 def test_live_real_doi_resolves_to_its_article_title(live_client):
     """Real-execution check: the plugin's own User-Agent against the real DOI resolver."""
-    title = fetch_title(
-        "https://doi.org/10.1371/journal.pcbi.1009935", client=live_client
-    )
+    title = fetch_title("https://doi.org/10.1371/journal.pcbi.1009935", client=live_client)
     assert "functional enrichment analysis" in title.lower(), title
 
 
@@ -361,18 +356,14 @@ def test_github_repo_is_resolved_by_the_api():
         "description": "Records sources",
     }
     with _json_client(payload) as client:
-        got = fetch_title(
-            "https://github.com/musharna/zotero-provenance", client=client
-        )
+        got = fetch_title("https://github.com/musharna/zotero-provenance", client=client)
     assert got == "musharna/zotero-provenance: Records sources"
 
 
 def test_github_repo_without_a_description_falls_back_to_its_name():
     payload = {"full_name": "musharna/zotero-provenance", "description": None}
     with _json_client(payload) as client:
-        got = fetch_title(
-            "https://github.com/musharna/zotero-provenance", client=client
-        )
+        got = fetch_title("https://github.com/musharna/zotero-provenance", client=client)
     assert got == "musharna/zotero-provenance"
 
 
@@ -462,9 +453,7 @@ def test_live_wikipedia_resolves_to_the_article_title(live_client):
     The mocked UA test above asserts the header we send; only a live request can
     catch Wikimedia tightening what it accepts. Pre-fix this returned the URL.
     """
-    title = fetch_title(
-        "https://en.wikipedia.org/wiki/Thismia_americana", client=live_client
-    )
+    title = fetch_title("https://en.wikipedia.org/wiki/Thismia_americana", client=live_client)
     assert "Thismia americana" in title, title
 
 
@@ -536,9 +525,7 @@ def test_a_title_past_the_old_32k_cap_is_still_found():
     padding = b"<script>" + b"x" * 200_000 + b"</script>"
     body = b"<html><head>" + padding + b"<title>Late Title</title></head></html>"
     transport = httpx.MockTransport(
-        lambda req: httpx.Response(
-            200, headers={"content-type": "text/html"}, content=body
-        )
+        lambda req: httpx.Response(200, headers={"content-type": "text/html"}, content=body)
     )
     with httpx.Client(transport=transport) as client:
         assert fetch_title("https://fixturehost.org/late", client=client) == "Late Title"
@@ -547,13 +534,10 @@ def test_a_title_past_the_old_32k_cap_is_still_found():
 def test_a_title_beyond_even_the_new_cap_gives_up_cleanly():
     """The cap still exists; it is larger, not gone."""
     body = (
-        b"<html><head><script>" + b"x" * 400_000 + b"</script>"
-        b"<title>Too Late</title></head></html>"
+        b"<html><head><script>" + b"x" * 400_000 + b"</script><title>Too Late</title></head></html>"
     )
     transport = httpx.MockTransport(
-        lambda req: httpx.Response(
-            200, headers={"content-type": "text/html"}, content=body
-        )
+        lambda req: httpx.Response(200, headers={"content-type": "text/html"}, content=body)
     )
     with httpx.Client(transport=transport) as client:
         assert (
@@ -566,9 +550,7 @@ def test_an_ordinary_page_is_unaffected_by_the_larger_cap():
     """Control: the common case must not start reading more than it needs."""
     body = b"<html><head><title>Small</title></head><body>" + b"y" * 500_000 + b"</body></html>"
     transport = httpx.MockTransport(
-        lambda req: httpx.Response(
-            200, headers={"content-type": "text/html"}, content=body
-        )
+        lambda req: httpx.Response(200, headers={"content-type": "text/html"}, content=body)
     )
     with httpx.Client(transport=transport) as client:
         assert fetch_title("https://fixturehost.org/small", client=client) == "Small"

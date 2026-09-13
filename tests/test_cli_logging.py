@@ -33,9 +33,7 @@ EXEMPT = {
 
 def _defines_main(path: Path) -> bool:
     tree = ast.parse(path.read_text(encoding="utf-8"))
-    return any(
-        isinstance(node, ast.FunctionDef) and node.name == "main" for node in tree.body
-    )
+    return any(isinstance(node, ast.FunctionDef) and node.name == "main" for node in tree.body)
 
 
 def _entry_points() -> list[Path]:

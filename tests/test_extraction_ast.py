@@ -47,9 +47,7 @@ def test_an_asterisk_that_is_url_data_survives():
 
     This is why the fix cannot be `TRAILING_PUNCT += "*_"`.
     """
-    assert extract_urls("<https://fixturehost.org/s?q=**>") == [
-        "https://fixturehost.org/s?q=**"
-    ]
+    assert extract_urls("<https://fixturehost.org/s?q=**>") == ["https://fixturehost.org/s?q=**"]
 
 
 def test_an_underscore_that_is_url_data_survives():
@@ -81,9 +79,7 @@ def test_a_blockquote_fence_closes_at_the_container_boundary():
 
 
 def test_a_stray_backtick_cannot_mask_a_later_citation():
-    text = (
-        "Before ` stray\n```\ncode\n```\nCited https://fixturehost.org/real ` later\n"
-    )
+    text = "Before ` stray\n```\ncode\n```\nCited https://fixturehost.org/real ` later\n"
     assert extract_urls(text) == ["https://fixturehost.org/real"]
 
 

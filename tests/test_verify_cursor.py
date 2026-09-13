@@ -61,9 +61,14 @@ def _seed_hashed(db, urls):
     for i, url in enumerate(urls):
         insert_url(db, url, f"K{i}", datetime.date(2026, 5, 5))
         set_content_hash(
-            db, url, content_hash="OLD", hashed_at=f"T{i}",
-            covers_bytes=64, complete=True,
-            sketch="", sketch_algo="",
+            db,
+            url,
+            content_hash="OLD",
+            hashed_at=f"T{i}",
+            covers_bytes=64,
+            complete=True,
+            sketch="",
+            sketch_algo="",
         )
     return db
 
@@ -139,9 +144,7 @@ def test_a_chunked_sweep_covers_every_row_exactly_once(tmp_db) -> None:
     assert sorted(seen[:7]) == sorted(urls), (
         f"a chunked sweep must read each row once; got {sorted(seen[:7])}"
     )
-    assert seen[7] == seen[0], (
-        "with the corpus swept, the next read must wrap to the stalest row"
-    )
+    assert seen[7] == seen[0], "with the corpus swept, the next read must wrap to the stalest row"
 
 
 # --- the derived guard --------------------------------------------------------
@@ -217,7 +220,8 @@ def test_a_row_we_could_not_re_read_is_still_marked(tmp_db) -> None:
 
     def refuse(url: str, max_bytes: int = 0):
         raise httpx.HTTPStatusError(
-            "403", request=httpx.Request("GET", url),
+            "403",
+            request=httpx.Request("GET", url),
             response=httpx.Response(403, request=httpx.Request("GET", url)),
         )
 
@@ -283,8 +287,8 @@ def test_a_second_sweep_re_reads_the_least_recently_verified_first(tmp_db) -> No
     """A verify pass is not one-shot: a corpus fully swept once must become
     sweepable again, oldest first, with no flag and no reset."""
     db = _seed_hashed(tmp_db, ["https://a.test/1", "https://b.test/2"])
-    verify(db, hasher=_ok, limit=1, clock=lambda: "T1")   # a.test
-    verify(db, hasher=_ok, limit=1, clock=lambda: "T2")   # b.test
+    verify(db, hasher=_ok, limit=1, clock=lambda: "T1")  # a.test
+    verify(db, hasher=_ok, limit=1, clock=lambda: "T2")  # b.test
 
     seen: list[str] = []
 
@@ -294,8 +298,7 @@ def test_a_second_sweep_re_reads_the_least_recently_verified_first(tmp_db) -> No
 
     verify(db, hasher=watch, limit=1, clock=lambda: "T3")
     assert seen == ["https://a.test/1"], (
-        "a second sweep must start with the stalest row, not the head of the "
-        "table"
+        "a second sweep must start with the stalest row, not the head of the table"
     )
 
 
@@ -307,10 +310,7 @@ def test_the_clock_is_read_per_row_not_per_run(tmp_db) -> None:
     ticks = iter(["T1", "T2"])
     verify(db, hasher=_ok, clock=lambda: next(ticks))
 
-    stamps = {
-        row_for_url(db, u)["verified_at"]
-        for u in ("https://a.test/1", "https://b.test/2")
-    }
+    stamps = {row_for_url(db, u)["verified_at"] for u in ("https://a.test/1", "https://b.test/2")}
     assert stamps == {"T1", "T2"}, f"one timestamp for the whole run: {stamps}"
 
 

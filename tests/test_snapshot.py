@@ -84,13 +84,13 @@ class _Stamper:
 # --- hashing ----------------------------------------------------------------
 
 
-
 def _reads(digest: str = None, *, final_url: str | None = None):
     """A hasher stub returning what a real fetch returns: a digest AND an address.
 
     `final_url` defaults to the URL that was asked for -- the no-redirect case --
     so only the tests that are ABOUT redirects have to mention it.
     """
+
     def _hasher(url: str, max_bytes: int = 0) -> PageRead:
         return PageRead(
             digest=DIGEST if digest is None else digest,
@@ -98,6 +98,7 @@ def _reads(digest: str = None, *, final_url: str | None = None):
             covers_bytes=len(BODY),
             complete=True,
         )
+
     return _hasher
 
 
@@ -187,9 +188,7 @@ def test_an_oversized_page_records_a_partial_hash(db: Path) -> None:
     insert_url(db, URL, "KEY1", date(2026, 5, 5))
 
     def too_big(url: str, max_bytes: int) -> PageRead:
-        return PageRead(
-            digest="prefix", final_url=url, covers_bytes=max_bytes, complete=False
-        )
+        return PageRead(digest="prefix", final_url=url, covers_bytes=max_bytes, complete=False)
 
     result = snapshot(db, zotero=_Stamper(), hasher=too_big, clock=lambda: "NOW")
 
@@ -209,9 +208,7 @@ def test_an_in_flight_row_is_not_hashed(db: Path) -> None:
     # Positive control: a COMPLETED row on the same index IS offered, so the
     # emptiness above is the reservation filter and not an empty query.
     insert_url(db, "https://fixturehost.org/done", "KEY9", date(2026, 5, 5))
-    assert [r["url_canonical"] for r in rows_needing_hash(db)] == [
-        "https://fixturehost.org/done"
-    ]
+    assert [r["url_canonical"] for r in rows_needing_hash(db)] == ["https://fixturehost.org/done"]
 
 
 def test_a_dry_run_fetches_nothing(db: Path) -> None:
@@ -236,9 +233,14 @@ def test_a_changed_page_is_reported(db: Path) -> None:
 
     insert_url(db, URL, "KEY1", date(2026, 5, 5))
     set_content_hash(
-        db, URL, content_hash=DIGEST, hashed_at="THEN",
-        covers_bytes=len(BODY), complete=True,
-        sketch="", sketch_algo="",
+        db,
+        URL,
+        content_hash=DIGEST,
+        hashed_at="THEN",
+        covers_bytes=len(BODY),
+        complete=True,
+        sketch="",
+        sketch_algo="",
     )
 
     result = verify(db, clock=lambda: "NOW", hasher=_reads("a-different-digest"))
@@ -253,9 +255,14 @@ def test_an_unchanged_page_is_not_reported(db: Path) -> None:
 
     insert_url(db, URL, "KEY1", date(2026, 5, 5))
     set_content_hash(
-        db, URL, content_hash=DIGEST, hashed_at="THEN",
-        covers_bytes=len(BODY), complete=True,
-        sketch="", sketch_algo="",
+        db,
+        URL,
+        content_hash=DIGEST,
+        hashed_at="THEN",
+        covers_bytes=len(BODY),
+        complete=True,
+        sketch="",
+        sketch_algo="",
     )
 
     result = verify(db, clock=lambda: "NOW", hasher=_reads())
@@ -270,9 +277,14 @@ def test_verify_does_not_overwrite_the_stored_hash(db: Path) -> None:
 
     insert_url(db, URL, "KEY1", date(2026, 5, 5))
     set_content_hash(
-        db, URL, content_hash=DIGEST, hashed_at="THEN",
-        covers_bytes=len(BODY), complete=True,
-        sketch="", sketch_algo="",
+        db,
+        URL,
+        content_hash=DIGEST,
+        hashed_at="THEN",
+        covers_bytes=len(BODY),
+        complete=True,
+        sketch="",
+        sketch_algo="",
     )
 
     verify(db, clock=lambda: "NOW", hasher=_reads("a-different-digest"))
@@ -286,9 +298,7 @@ def test_verify_does_not_overwrite_the_stored_hash(db: Path) -> None:
 def _stamping_client(item: dict, calls: list) -> ZoteroClient:
     def handler(req: httpx.Request) -> httpx.Response:
         if req.method == "GET":
-            return httpx.Response(
-                200, headers={"Last-Modified-Version": "7"}, json=item
-            )
+            return httpx.Response(200, headers={"Last-Modified-Version": "7"}, json=item)
         calls.append(json.loads(req.content))
         return httpx.Response(204)
 
@@ -341,9 +351,7 @@ def test_stamping_refuses_an_item_that_moved_underneath_us() -> None:
     }
     calls: list = []
 
-    assert not _stamping_client(item, calls).record_content_hash(
-        "KEY1", DIGEST, expect_url=URL
-    )
+    assert not _stamping_client(item, calls).record_content_hash("KEY1", DIGEST, expect_url=URL)
     assert calls == [], "it wrote to an item it had not selected"
 
 
@@ -352,9 +360,7 @@ def test_stamping_still_writes_when_the_url_matches() -> None:
     item = {"key": "KEY1", "version": 7, "data": {"key": "KEY1", "url": URL}}
     calls: list = []
 
-    assert _stamping_client(item, calls).record_content_hash(
-        "KEY1", DIGEST, expect_url=URL
-    )
+    assert _stamping_client(item, calls).record_content_hash("KEY1", DIGEST, expect_url=URL)
     assert len(calls) == 1
 
 
@@ -368,9 +374,7 @@ def test_delete_item_reports_whether_the_item_was_there() -> None:
 
     def present(req: httpx.Request) -> httpx.Response:
         if req.method == "GET":
-            return httpx.Response(
-                200, headers={"Last-Modified-Version": "7"}, json={"version": 7}
-            )
+            return httpx.Response(200, headers={"Last-Modified-Version": "7"}, json={"version": 7})
         return httpx.Response(204)
 
     client = ZoteroClient(
@@ -593,12 +597,8 @@ def test_an_oversized_page_also_counts_as_having_touched_the_host(db: Path) -> N
 
     def hasher(url: str, max_bytes: int) -> PageRead:
         if url.endswith("/huge"):
-            return PageRead(
-                digest="prefix", final_url=url, covers_bytes=max_bytes, complete=False
-            )
-        return PageRead(
-            digest=DIGEST, final_url=url, covers_bytes=len(BODY), complete=True
-        )
+            return PageRead(digest="prefix", final_url=url, covers_bytes=max_bytes, complete=False)
+        return PageRead(digest=DIGEST, final_url=url, covers_bytes=len(BODY), complete=True)
 
     result = snapshot(
         db,
@@ -620,8 +620,14 @@ def test_politeness_is_off_by_default(db: Path) -> None:
     clock = _FakeClock()
     _rows(db, [f"https://fixturehost.org/{i}" for i in range(3)])
 
-    snapshot(db, zotero=_Stamper(), hasher=_reads(), clock=lambda: "NOW",
-             sleeper=clock.sleep, monotonic=clock.monotonic)
+    snapshot(
+        db,
+        zotero=_Stamper(),
+        hasher=_reads(),
+        clock=lambda: "NOW",
+        sleeper=clock.sleep,
+        monotonic=clock.monotonic,
+    )
 
     assert clock.slept == []
 

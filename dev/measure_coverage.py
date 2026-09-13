@@ -77,10 +77,7 @@ def _is_real_user_message(line: str) -> bool:
     content = (record.get("message") or {}).get("content")
     if isinstance(content, str):
         return bool(content.strip())
-    return any(
-        isinstance(block, dict) and block.get("type") == "text"
-        for block in content or []
-    )
+    return any(isinstance(block, dict) and block.get("type") == "text" for block in content or [])
 
 
 def _turns(path: pathlib.Path):
@@ -94,10 +91,7 @@ def _turns(path: pathlib.Path):
     try:
         with path.open(encoding="utf-8", errors="replace") as fh:
             for line in fh:
-                if (
-                    '"type":"assistant"' not in line
-                    and '"type": "assistant"' not in line
-                ):
+                if '"type":"assistant"' not in line and '"type": "assistant"' not in line:
                     if '"type":"user"' in line or '"type": "user"' in line:
                         if turn and _is_real_user_message(line):
                             yield turn

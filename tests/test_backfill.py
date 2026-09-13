@@ -22,9 +22,7 @@ def _collection_client(items: list[dict], patches: list) -> ZoteroClient:
             return httpx.Response(200, json=page)
         key = path.rsplit("/", 1)[-1]
         if req.method == "GET":
-            return httpx.Response(
-                200, headers={"Last-Modified-Version": "1"}, json=by_key[key]
-            )
+            return httpx.Response(200, headers={"Last-Modified-Version": "1"}, json=by_key[key])
         if req.method == "PATCH":
             patches.append((key, json.loads(req.content)))
             return httpx.Response(204)
@@ -81,9 +79,7 @@ def test_backfill_counts_items_that_stay_unresolved():
 
 
 def test_backfill_respects_a_limit():
-    items = [
-        _item(f"K{i}", f"https://a.test/{i}", f"https://a.test/{i}") for i in range(5)
-    ]
+    items = [_item(f"K{i}", f"https://a.test/{i}", f"https://a.test/{i}") for i in range(5)]
     patches: list = []
     client = _collection_client(items, patches)
     result = backfill(client, lambda url: "Recovered", limit=2, sleep_s=0)

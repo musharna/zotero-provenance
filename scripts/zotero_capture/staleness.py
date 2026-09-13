@@ -133,8 +133,7 @@ def stale_reason(running: str, installed: str) -> str:
         # plugin's refuse-on-doubt rule is inverted, and the inversion is the
         # whole reason it is written down here.
         logger.warning(
-            "cannot compare plugin versions (running %r, installed %r); "
-            "capturing anyway",
+            "cannot compare plugin versions (running %r, installed %r); capturing anyway",
             running,
             installed,
         )

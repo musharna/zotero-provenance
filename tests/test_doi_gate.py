@@ -105,9 +105,7 @@ def test_an_ordinary_url_yields_nothing() -> None:
 
 def _runner(payload: dict, *, returncode: int = 0):
     def run(cmd, **kwargs):
-        return subprocess.CompletedProcess(
-            cmd, returncode, stdout=json.dumps(payload), stderr=""
-        )
+        return subprocess.CompletedProcess(cmd, returncode, stdout=json.dumps(payload), stderr="")
 
     return run
 

@@ -69,12 +69,15 @@ def test_a_rewrite_carries_the_queued_sightings_with_it(tmp_path: Path) -> None:
 
     apply_repair(
         [RepairStep(url=BROKEN, corrected=FIXED, zotero_key="K1", action="rewrite")],
-        db_path=db, zotero=_Zotero(), connect=_connect,
+        db_path=db,
+        zotero=_Zotero(),
+        connect=_connect,
     )
 
     assert peek_pending_tags(db, BROKEN) == [], "the sighting was stranded"
     assert sorted(peek_pending_tags(db, FIXED)) == [
-        "context:user-shared", "project:x",
+        "context:user-shared",
+        "project:x",
     ]
 
 
@@ -82,15 +85,16 @@ def test_a_merge_applies_the_queued_sightings_to_the_survivor(tmp_path: Path) ->
     """The duplicate's row is deleted, so its queue has nowhere left to go."""
     db = _index(
         tmp_path,
-        [(BROKEN, "K1", "2026-01-01", "2026-01-02"),
-         (FIXED, "K2", "2026-02-01", "2026-02-02")],
+        [(BROKEN, "K1", "2026-01-01", "2026-01-02"), (FIXED, "K2", "2026-02-01", "2026-02-02")],
     )
     queue_pending_tags(db, BROKEN, ["project:x"])
 
     zotero = _Zotero()
     apply_repair(
         [RepairStep(url=BROKEN, corrected=FIXED, zotero_key="K1", action="merge")],
-        db_path=db, zotero=zotero, connect=_connect,
+        db_path=db,
+        zotero=zotero,
+        connect=_connect,
     )
 
     assert zotero.trashed == ["K1"], "positive control: the duplicate was merged"
@@ -103,13 +107,14 @@ def test_a_merge_keeps_the_earlier_first_seen(tmp_path: Path) -> None:
     """Two rows for one source: the source was first seen on the earlier date."""
     db = _index(
         tmp_path,
-        [(BROKEN, "K1", "2026-01-01", "2026-01-02"),
-         (FIXED, "K2", "2026-02-01", "2026-02-02")],
+        [(BROKEN, "K1", "2026-01-01", "2026-01-02"), (FIXED, "K2", "2026-02-01", "2026-02-02")],
     )
 
     apply_repair(
         [RepairStep(url=BROKEN, corrected=FIXED, zotero_key="K1", action="merge")],
-        db_path=db, zotero=_Zotero(), connect=_connect,
+        db_path=db,
+        zotero=_Zotero(),
+        connect=_connect,
     )
 
     with closing(_connect(db)) as conn:

@@ -54,9 +54,7 @@ def list_groups(api_key: str, user_id: str) -> list[dict]:
     return resp.json()
 
 
-def find_or_create_collection(
-    api_key: str, library_type: str, library_id: str, name: str
-) -> str:
+def find_or_create_collection(api_key: str, library_type: str, library_id: str, name: str) -> str:
     base = f"{API_BASE}/{library_type}s/{library_id}"
     resp = httpx.get(
         f"{base}/collections",
@@ -139,7 +137,9 @@ def choose_library(api_key: str, info: dict, requested: str | None) -> tuple[str
         raise SystemExit(
             "Multiple libraries are available; re-run with --library <id> "
             "(non-interactive mode cannot prompt).\nAvailable: "
-            + "; ".join(f"{i} = {label} [{lib_id}]" for i, (_t, lib_id, label) in enumerate(options, 1))
+            + "; ".join(
+                f"{i} = {label} [{lib_id}]" for i, (_t, lib_id, label) in enumerate(options, 1)
+            )
         )
 
     print("\nWhich library should captured sources go into?")
@@ -174,10 +174,10 @@ def main() -> int:
 
     info = key_info(api_key)
     library_type, library_id = choose_library(api_key, info, args.library)
-    collection_key = find_or_create_collection(
-        api_key, library_type, library_id, args.collection
+    collection_key = find_or_create_collection(api_key, library_type, library_id, args.collection)
+    print(
+        f"Using {library_type} library {library_id}, collection {args.collection} [{collection_key}]"
     )
-    print(f"Using {library_type} library {library_id}, collection {args.collection} [{collection_key}]")
 
     if not args.no_verify:
         print("Verifying with a live create/read/delete round-trip...")

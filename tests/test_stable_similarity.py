@@ -41,9 +41,7 @@ def test_a_page_whose_volatile_bytes_moved_is_not_called_changed() -> None:
     document between them was byte-identical bar a CSRF token."""
     shared = _digests(0, 3429)
     first = shared + _digests(9_000_000, 46)
-    similarity = snap.stable_similarity(
-        snap.sketch_of(first), snap.sketch_of(shared)
-    )
+    similarity = snap.stable_similarity(snap.sketch_of(first), snap.sketch_of(shared))
     assert similarity >= snap.MIN_STABLE_SIMILARITY
 
 

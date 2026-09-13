@@ -217,8 +217,16 @@ def apply_retire(
     clock = clock or (lambda: datetime.now(timezone.utc).isoformat())
     journal = journal_path(db_path)
     with OperationJournal(db_path, "retire") as ops:
-        _retire_steps(steps, db_path=db_path, zotero=zotero, connect=connect,
-                      clock=clock, journal=journal, ops=ops, counts=counts)
+        _retire_steps(
+            steps,
+            db_path=db_path,
+            zotero=zotero,
+            connect=connect,
+            clock=clock,
+            journal=journal,
+            ops=ops,
+            counts=counts,
+        )
     return counts
 
 
@@ -275,8 +283,7 @@ def _retire_steps(steps, *, db_path, zotero, connect, clock, journal, ops, count
             # indexing it.
             with connect(db_path) as conn:
                 dropped = conn.execute(
-                    "DELETE FROM url_index"
-                    " WHERE url_canonical = ? AND zotero_key = ?",
+                    "DELETE FROM url_index WHERE url_canonical = ? AND zotero_key = ?",
                     (step.url, step.zotero_key),
                 ).rowcount
                 if dropped:
@@ -288,8 +295,7 @@ def _retire_steps(steps, *, db_path, zotero, connect, clock, journal, ops, count
                     )
             if not dropped:
                 logger.warning(
-                    "trashed item %s but its index row was replaced; leaving the "
-                    "new row alone",
+                    "trashed item %s but its index row was replaced; leaving the new row alone",
                     step.zotero_key or "(none)",
                 )
             ops.outcome(seq, "done" if dropped else "refused", "" if dropped else "row replaced")

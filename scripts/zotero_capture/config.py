@@ -47,7 +47,11 @@ def _state_dir(env: Mapping[str, str]) -> Path:
     if explicit:
         return Path(explicit).expanduser()
     xdg = env.get("XDG_STATE_HOME")
-    base = Path(xdg).expanduser() if xdg else Path(env.get("HOME", "~")).expanduser() / ".local" / "state"
+    base = (
+        Path(xdg).expanduser()
+        if xdg
+        else Path(env.get("HOME", "~")).expanduser() / ".local" / "state"
+    )
     return base / "zotero-provenance"
 
 
@@ -64,9 +68,7 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         )
     library_type = env.get("ZOTERO_LIBRARY_TYPE", "user")
     if library_type not in ("user", "group"):
-        raise ConfigError(
-            f"ZOTERO_LIBRARY_TYPE must be 'user' or 'group', got {library_type!r}"
-        )
+        raise ConfigError(f"ZOTERO_LIBRARY_TYPE must be 'user' or 'group', got {library_type!r}")
     return Config(
         api_key=env["ZOTERO_API_KEY"],
         library_id=env["ZOTERO_LIBRARY_ID"],

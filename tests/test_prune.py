@@ -25,9 +25,7 @@ def _client(items: list[dict], calls: list) -> ZoteroClient:
             return httpx.Response(200, json=items[start : start + 100])
         key = path.rsplit("/", 1)[-1]
         if req.method == "GET":
-            return httpx.Response(
-                200, headers={"Last-Modified-Version": "7"}, json=by_key[key]
-            )
+            return httpx.Response(200, headers={"Last-Modified-Version": "7"}, json=by_key[key])
         if req.method == "PATCH":
             calls.append((key, json.loads(req.content), dict(req.headers)))
             return httpx.Response(204)
@@ -125,9 +123,7 @@ def _live_client(items: list[dict], calls: list) -> ZoteroClient:
             return httpx.Response(200, json=live[start : start + limit])
         key = path.rsplit("/", 1)[-1]
         if req.method == "GET":
-            return httpx.Response(
-                200, headers={"Last-Modified-Version": "7"}, json=by_key[key]
-            )
+            return httpx.Response(200, headers={"Last-Modified-Version": "7"}, json=by_key[key])
         if req.method == "PATCH":
             calls.append(key)
             body = json.loads(req.content)

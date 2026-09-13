@@ -83,16 +83,12 @@ def _bare_urls_from(pattern: re.Pattern[str]):
     """
 
     def _bare(text: str) -> list[str]:
-        return [
-            up._trim_prose_url(m.group(0)) for m in pattern.finditer(up.strip_ansi(text))
-        ]
+        return [up._trim_prose_url(m.group(0)) for m in pattern.finditer(up.strip_ansi(text))]
 
     return _bare
 
 
-def extract_all(
-    messages: list[str], tokenizer: re.Pattern[str] | None
-) -> list[list[str]]:
+def extract_all(messages: list[str], tokenizer: re.Pattern[str] | None) -> list[list[str]]:
     """Extract with `tokenizer` for prose, or with the shipped code if None."""
     if tokenizer is None:
         return [up.extract_urls(m) for m in messages]
@@ -183,12 +179,16 @@ def main() -> int:
         f"\ncorpus: {len(messages)} assistant messages, "
         f"{sum(len(u) for u in baseline)} URLs under the 0.11.0 blacklist"
     )
-    print(f"{label}: {result['messages_changed']} messages differ "
-          f"(shortened {result['shortened']}, lost {result['lost']}, gained {result['gained']})")
+    print(
+        f"{label}: {result['messages_changed']} messages differ "
+        f"(shortened {result['shortened']}, lost {result['lost']}, gained {result['gained']})"
+    )
 
     if args.control and result["messages_changed"] == 0:
-        print("\nthe control showed no damage: the harness cannot fail, so trust nothing it reports",
-              file=sys.stderr)
+        print(
+            "\nthe control showed no damage: the harness cannot fail, so trust nothing it reports",
+            file=sys.stderr,
+        )
         return 1
     return 0
 

@@ -101,9 +101,7 @@ def test_the_journal_records_what_is_about_to_be_destroyed(tmp_path: Path) -> No
     """`before` is what makes this a journal rather than a log."""
     db = tmp_path / "index.db"
     with OperationJournal(db, "repair") as journal:
-        journal.step(
-            target="K1", action="rewrite", before={"url": EXCLUDED, "corrected": "x"}
-        )
+        journal.step(target="K1", action="rewrite", before={"url": EXCLUDED, "corrected": "x"})
 
     step = [e for e in read_events(db) if e["event"] == "step"][0]
     assert step["before"]["url"] == EXCLUDED

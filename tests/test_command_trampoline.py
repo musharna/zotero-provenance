@@ -40,36 +40,53 @@ def _build(tmp_path: Path, *, mine: str, pinned: str) -> dict:
     if pinned_root != mine_root:
         (pinned_root / "hooks").mkdir(parents=True, exist_ok=True)
         stub = pinned_root / "hooks" / "run-python.sh"
-        stub.write_text(
-            f'#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "{record}"\nexit 0\n'
-        )
+        stub.write_text(f'#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "{record}"\nexit 0\n')
         stub.chmod(0o755)
         (pinned_root / "scripts").mkdir(exist_ok=True)
         (pinned_root / "scripts" / "zotero_capture_main.py").write_text("# new\n")
 
     reg = home / ".claude" / "plugins" / "installed_plugins.json"
     reg.parent.mkdir(parents=True, exist_ok=True)
-    reg.write_text(json.dumps({
-        "version": 2,
-        "plugins": {"zotero-provenance@zotero-provenance": [
-            {"scope": "user", "installPath": str(pinned_root), "version": pinned}
-        ]},
-    }))
+    reg.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "plugins": {
+                    "zotero-provenance@zotero-provenance": [
+                        {"scope": "user", "installPath": str(pinned_root), "version": pinned}
+                    ]
+                },
+            }
+        )
+    )
     return {"home": home, "mine": mine_root, "pinned": pinned_root, "record": record}
 
 
 def _run(setup: dict, tmp_path: Path) -> subprocess.CompletedProcess:
     env = os.environ.copy()
-    for var in ("ZOTERO_API_KEY", "ZOTERO_LIBRARY_ID", "ZOTERO_LIBRARY_TYPE",
-                "ZOTERO_WEBSOURCES_COLLECTION_KEY", "ZP_FORWARDED_FROM"):
+    for var in (
+        "ZOTERO_API_KEY",
+        "ZOTERO_LIBRARY_ID",
+        "ZOTERO_LIBRARY_TYPE",
+        "ZOTERO_WEBSOURCES_COLLECTION_KEY",
+        "ZP_FORWARDED_FROM",
+    ):
         env.pop(var, None)
     env["HOME"] = str(setup["home"])
     env["ZOTERO_CAPTURE_STATE_DIR"] = str(tmp_path / "state")
     env["ZOTERO_SECRETS_FILE"] = str(tmp_path / "absent.env")
     return subprocess.run(
-        ["bash", str(setup["mine"] / "hooks" / "run-python.sh"),
-         str(setup["mine"] / "scripts" / "zotero_capture_main.py"), "--triage", "u"],
-        env=env, capture_output=True, text=True, timeout=60,
+        [
+            "bash",
+            str(setup["mine"] / "hooks" / "run-python.sh"),
+            str(setup["mine"] / "scripts" / "zotero_capture_main.py"),
+            "--triage",
+            "u",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
 
 

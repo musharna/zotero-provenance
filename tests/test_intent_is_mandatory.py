@@ -72,16 +72,14 @@ def test_the_same_write_succeeds_when_the_incident_can_be_recorded(
     assert zotero.posted == ["https://fixturehost.org/one"]
 
 
-def test_a_healthy_write_is_unaffected_by_a_broken_ledger(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_a_healthy_write_is_unaffected_by_a_broken_ledger(tmp_path: Path, monkeypatch) -> None:
     """A healthy capture opens no incident, so it must not depend on the ledger."""
+
     def _boom(*a, **k):
         raise OSError("read-only file system")
 
     monkeypatch.setattr(cap, "open_incident", _boom)
 
-    zotero = _run(tmp_path, tmp_path / "health.db", monkeypatch,
-                  root="/c/SAME", pinned="/c/SAME")
+    zotero = _run(tmp_path, tmp_path / "health.db", monkeypatch, root="/c/SAME", pinned="/c/SAME")
 
     assert zotero.posted == ["https://fixturehost.org/one"]

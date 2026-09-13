@@ -101,8 +101,7 @@ def main() -> int:
     if args.verify:
         unusable = [
             flag
-            for flag, given in (("--dry-run", args.dry_run),
-                                ("--retry-failed", args.retry_failed))
+            for flag, given in (("--dry-run", args.dry_run), ("--retry-failed", args.retry_failed))
             if given
         ]
         if unusable:
@@ -115,6 +114,7 @@ def main() -> int:
 
     config = load_config()
     db_path = config.db_path
+
     # Read per page inside the loop: `hashed_at` is when THAT page was read,
     # and a run over the whole corpus takes hours.
     def clock() -> str:

@@ -8,9 +8,7 @@ __version__ = "0.62.4"
 # One User-Agent for every outbound request. Wikimedia's policy rejects a UA that
 # carries no way to reach the operator, so the project URL is the contact point —
 # deliberately not a personal email.
-USER_AGENT = (
-    f"zotero-provenance/{__version__} (+https://github.com/musharna/zotero-provenance)"
-)
+USER_AGENT = f"zotero-provenance/{__version__} (+https://github.com/musharna/zotero-provenance)"
 
 # A library must not print unless its application asked it to. Without this,
 # WARNING and ERROR fall through to `logging.lastResort`, which is how the hook

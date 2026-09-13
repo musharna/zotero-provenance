@@ -91,9 +91,7 @@ def test_a_title_a_human_fixed_is_not_overwritten():
         return httpx.Response(204)
 
     client = _client(handler)
-    client.add_tags(
-        "ITEM1234", ["seen:2026-05-05"], title_resolver=lambda _url: "Fetched Title"
-    )
+    client.add_tags("ITEM1234", ["seen:2026-05-05"], title_resolver=lambda _url: "Fetched Title")
     assert "title" not in patched["body"], (
         f"overwrote a human's title: {patched['body'].get('title')!r}"
     )
@@ -124,9 +122,7 @@ def test_a_genuinely_unresolved_title_is_still_filled_in():
         return httpx.Response(204)
 
     client = _client(handler)
-    client.add_tags(
-        "ITEM1234", ["seen:2026-05-05"], title_resolver=lambda _url: "Real Title"
-    )
+    client.add_tags("ITEM1234", ["seen:2026-05-05"], title_resolver=lambda _url: "Real Title")
     assert patched["body"]["title"] == "Real Title"
 
 

@@ -90,9 +90,7 @@ def _methods_that_patch_an_item() -> list[str]:
     """
     tree = ast.parse(Path(zc.__file__).read_text())
     cls = next(
-        n
-        for n in ast.walk(tree)
-        if isinstance(n, ast.ClassDef) and n.name == "ZoteroClient"
+        n for n in ast.walk(tree) if isinstance(n, ast.ClassDef) and n.name == "ZoteroClient"
     )
     out = []
     for fn in cls.body:
@@ -117,9 +115,7 @@ def test_every_item_writer_routes_through_the_shared_gate() -> None:
     """
     tree = ast.parse(Path(zc.__file__).read_text())
     cls = next(
-        n
-        for n in ast.walk(tree)
-        if isinstance(n, ast.ClassDef) and n.name == "ZoteroClient"
+        n for n in ast.walk(tree) if isinstance(n, ast.ClassDef) and n.name == "ZoteroClient"
     )
     writers = set(_methods_that_patch_an_item())
     assert writers, "derivation found no item writers; the guard would be vacuous"
@@ -280,18 +276,14 @@ def test_the_client_exposes_no_public_way_to_write_a_url() -> None:
     """
     tree = ast.parse(Path(zc.__file__).read_text())
     cls = next(
-        n
-        for n in ast.walk(tree)
-        if isinstance(n, ast.ClassDef) and n.name == "ZoteroClient"
+        n for n in ast.walk(tree) if isinstance(n, ast.ClassDef) and n.name == "ZoteroClient"
     )
     offenders = []
     for fn in cls.body:
         if not isinstance(fn, ast.FunctionDef) or fn.name.startswith("_"):
             continue
         patches = any(
-            isinstance(n, ast.Call)
-            and isinstance(n.func, ast.Attribute)
-            and n.func.attr == "patch"
+            isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "patch"
             for n in ast.walk(fn)
         )
         if not patches:
@@ -300,9 +292,7 @@ def test_the_client_exposes_no_public_way_to_write_a_url() -> None:
             keys: list = []
             if isinstance(node, ast.Dict):
                 keys = [k.value for k in node.keys if isinstance(k, ast.Constant)]
-            elif isinstance(node, ast.Subscript) and isinstance(
-                node.slice, ast.Constant
-            ):
+            elif isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant):
                 keys = [node.slice.value]
             if "url" in keys:
                 offenders.append(fn.name)
@@ -358,9 +348,7 @@ def test_move_url_writes_both_stores(db: Path, connect) -> None:
     assert row_for_url(db, OLD) is None, "the old index row survived"
 
 
-def test_move_url_leaves_the_index_alone_when_the_item_is_gone(
-    db: Path, connect
-) -> None:
+def test_move_url_leaves_the_index_alone_when_the_item_is_gone(db: Path, connect) -> None:
     """The half-write, in the direction the original defect did NOT go -- and
     the one that would leave the index claiming a URL with nothing behind it."""
 
@@ -374,9 +362,7 @@ def test_move_url_leaves_the_index_alone_when_the_item_is_gone(
     assert row_for_url(db, NEW) is None
 
 
-def test_move_url_refuses_when_the_item_is_no_longer_the_one_selected(
-    db: Path, connect
-) -> None:
+def test_move_url_refuses_when_the_item_is_no_longer_the_one_selected(db: Path, connect) -> None:
     """expect_url is carried through the paired operation, not left to callers."""
     patched: list = []
 
@@ -522,8 +508,7 @@ def test_a_pip_requirement_url_is_not_recorded_as_gone(db: Path) -> None:
             response=httpx.Response(404, request=httpx.Request("GET", url)),
         )
 
-    snapshot(db, zotero=_Stamp(), hasher=_404,
-             clock=lambda: "NOW", visible=lambda u: True)
+    snapshot(db, zotero=_Stamp(), hasher=_404, clock=lambda: "NOW", visible=lambda u: True)
 
     assert row_for_url(db, url)["last_outcome"] == MALFORMED
 
@@ -548,7 +533,7 @@ def test_a_dot_git_url_without_a_ref_is_still_an_ordinary_address() -> None:
 
 
 def test_verify_says_how_old_an_unfinished_claim_is() -> None:
-    """"claims still in flight" covered a 12-second claim and a six-day one
+    """ "claims still in flight" covered a 12-second claim and a six-day one
     with the same words. Two live rows sat for five and six days under that
     heading (2026-09-06). The age is what tells a reader which it is, and
     past STALE_CLAIM_S the note names the tool that settles it."""

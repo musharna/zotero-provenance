@@ -79,9 +79,7 @@ def test_the_capture_record_carries_the_surface(tmp_path: Path, monkeypatch) -> 
     assert record["surface"] == "bridged"
 
 
-def test_the_surface_is_local_without_the_bridge_variable(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_the_surface_is_local_without_the_bridge_variable(tmp_path: Path, monkeypatch) -> None:
     """Positive control for the test above: if the field were hardcoded to
     "bridged", or the env were ignored, that test would pass anyway."""
     monkeypatch.delenv(BRIDGE, raising=False)

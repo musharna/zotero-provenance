@@ -76,14 +76,10 @@ def _make_root(
     pkg.mkdir(parents=True, exist_ok=True)
     (pkg / "__init__.py").write_text("")
     if python_honours:
-        shutil.copy(
-            PLUGIN_ROOT / "scripts" / "zotero_capture" / "config.py", pkg / "config.py"
-        )
+        shutil.copy(PLUGIN_ROOT / "scripts" / "zotero_capture" / "config.py", pkg / "config.py")
     else:
         (pkg / "config.py").write_text(
-            "from pathlib import Path\n"
-            "def _state_dir(env):\n"
-            "    return Path('/tmp/hardcoded-zp')\n"
+            "from pathlib import Path\ndef _state_dir(env):\n    return Path('/tmp/hardcoded-zp')\n"
         )
     return root
 
@@ -260,13 +256,9 @@ def test_apply_installs_the_pinned_copy_and_keeps_the_original(tmp_path: Path) -
     assert installed == (pinned / "hooks" / "run-python.sh").read_text()
     assert os.access(stale / "hooks" / "run-python.sh", os.X_OK)
 
-    backups = list(
-        (home / ".local" / "state" / "zotero-provenance" / "backports").glob("*/*")
-    )
+    backups = list((home / ".local" / "state" / "zotero-provenance" / "backports").glob("*/*"))
     saved = [p for p in backups if p.name != "manifest.txt"]
-    assert saved, (
-        "the only copy of what a live process runs was overwritten with no backup"
-    )
+    assert saved, "the only copy of what a live process runs was overwritten with no backup"
     assert any(p.read_text() == original for p in saved)
 
 

@@ -29,13 +29,25 @@ PINNED = "/c/0.18.0"
 WINDOW = timedelta(hours=24)
 
 
-def _cap(ts: str, *, root: str = PINNED, pinned: str | None = PINNED, errors=None,
-         incident_id: str | None = None) -> str:
+def _cap(
+    ts: str,
+    *,
+    root: str = PINNED,
+    pinned: str | None = PINNED,
+    errors=None,
+    incident_id: str | None = None,
+) -> str:
     """A capture record. Carries an `incident_id` by default — without one a
     record cannot be acknowledged individually, so it is not classified."""
     obj = {
-        "ts": ts, "version": "x", "root": root, "project": "p",
-        "urls_seen": 1, "urls_new": 1, "urls_recurring": 0, "errors": errors or [],
+        "ts": ts,
+        "version": "x",
+        "root": root,
+        "project": "p",
+        "urls_seen": 1,
+        "urls_new": 1,
+        "urls_recurring": 0,
+        "errors": errors or [],
         "incident_id": incident_id or f"{ts}:{root}",
     }
     if pinned is not None:
@@ -48,9 +60,7 @@ def _ev(ts: str, name: str) -> str:
 
 
 def _check(lines, *, acknowledged=frozenset(), now=NOW):
-    return evaluate(
-        lines, pinned_root=PINNED, now=now, window=WINDOW, acknowledged=acknowledged
-    )
+    return evaluate(lines, pinned_root=PINNED, now=now, window=WINDOW, acknowledged=acknowledged)
 
 
 def test_a_good_capture_does_not_clear_another_sessions_refusal() -> None:
@@ -118,7 +128,7 @@ def test_a_recent_refusal_is_reported_with_no_capture_anywhere() -> None:
 
 
 def test_capture_errors_are_read_from_every_recent_record_not_just_the_last() -> None:
-    """"The LAST capture's errors" was itself cross-record inference."""
+    """ "The LAST capture's errors" was itself cross-record inference."""
     lines = [
         _cap("2026-08-25T11:00:00-04:00", errors=[{"code": "http", "message": "403", "url": "u"}]),
         _cap("2026-08-25T11:30:00-04:00"),
@@ -144,9 +154,13 @@ def test_a_record_with_no_pin_evidence_is_not_classified() -> None:
     """
     legacy = json.dumps(
         {
-            "ts": "2026-08-25T08:00:00-04:00", "version": "0.14.1",
-            "root": "/c/0.14.1", "project": "p",
-            "urls_seen": 1, "urls_new": 1, "errors": [],
+            "ts": "2026-08-25T08:00:00-04:00",
+            "version": "0.14.1",
+            "root": "/c/0.14.1",
+            "project": "p",
+            "urls_seen": 1,
+            "urls_new": 1,
+            "errors": [],
         }
     )
 
@@ -175,14 +189,19 @@ def test_reporting_is_bounded_no_matter_how_many_incidents_exist(tmp_path) -> No
 
     ledger = tmp_path / "health.db"
     for i in range(5_000):
-        open_incident(ledger, incident_id=f"i{i}", url="u", root="/c/OLD",
-                      pinned_root=PINNED, kind="stale",
-                      ts="2026-08-25T11:00:00-04:00")
+        open_incident(
+            ledger,
+            incident_id=f"i{i}",
+            url="u",
+            root="/c/OLD",
+            pinned_root=PINNED,
+            kind="stale",
+            ts="2026-08-25T11:00:00-04:00",
+        )
 
     tracemalloc.start()
     try:
-        warnings = evaluate([], pinned_root=PINNED, now=NOW, window=WINDOW,
-                            ledger_path=ledger)
+        warnings = evaluate([], pinned_root=PINNED, now=NOW, window=WINDOW, ledger_path=ledger)
         peak = tracemalloc.get_traced_memory()[1]
     finally:
         tracemalloc.stop()
@@ -190,7 +209,6 @@ def test_reporting_is_bounded_no_matter_how_many_incidents_exist(tmp_path) -> No
     assert warnings, "positive control: 5000 open incidents should be reported"
     assert "5000" in warnings[0], warnings
     assert peak < 1024 * 1024, f"held {peak / 1024:.0f} KB to report 5000 incidents"
-
 
 
 # --- 0.20.0: integrity moved from log-replay to the ledger --------------------

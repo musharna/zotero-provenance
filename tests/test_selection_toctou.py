@@ -37,9 +37,11 @@ def _serving(current_url: str, seen: list[str]):
             return httpx.Response(
                 200,
                 headers={"Last-Modified-Version": "9"},
-                json={"key": "ITEM1234", "version": 9,
-                      "data": {"key": "ITEM1234", "version": 9,
-                               "url": current_url, "title": "t"}},
+                json={
+                    "key": "ITEM1234",
+                    "version": 9,
+                    "data": {"key": "ITEM1234", "version": 9, "url": current_url, "title": "t"},
+                },
             )
         return httpx.Response(204)
 
@@ -79,8 +81,7 @@ def test_update_url_refuses_an_item_that_moved_under_it() -> None:
     seen: list[str] = []
     client = _client(_serving(LEGITIMATE, seen))
 
-    moved = client._patch_item_url("ITEM1234", "https://example.org/fixed",
-                              expect_url=EXCLUDED)
+    moved = client._patch_item_url("ITEM1234", "https://example.org/fixed", expect_url=EXCLUDED)
 
     assert moved is False
     assert not any(s.startswith("PATCH") for s in seen), seen
@@ -91,8 +92,9 @@ def test_update_url_still_rewrites_the_item_it_selected() -> None:
     seen: list[str] = []
     client = _client(_serving(EXCLUDED, seen))
 
-    assert client._patch_item_url("ITEM1234", "https://example.org/fixed",
-                             expect_url=EXCLUDED) is True
+    assert (
+        client._patch_item_url("ITEM1234", "https://example.org/fixed", expect_url=EXCLUDED) is True
+    )
     assert any(s.startswith("PATCH") for s in seen), seen
 
 
@@ -168,7 +170,9 @@ def test_retire_passes_the_url_it_planned_on() -> None:
 
     counts = apply_retire(
         [RetireStep(url, "K1", "junk", "hard")],
-        db_path=db, zotero=_Zotero(), connect=_connect,
+        db_path=db,
+        zotero=_Zotero(),
+        connect=_connect,
     )
 
     assert asked == [("K1", url)], f"retire destroyed blind: {asked}"
@@ -196,9 +200,17 @@ def test_the_title_resolver_is_asked_about_the_item_it_is_writing_to() -> None:
             return httpx.Response(
                 200,
                 headers={"Last-Modified-Version": "9"},
-                json={"key": "ITEM1234", "version": 9,
-                      "data": {"key": "ITEM1234", "version": 9,
-                               "url": LEGITIMATE, "title": LEGITIMATE, "tags": []}},
+                json={
+                    "key": "ITEM1234",
+                    "version": 9,
+                    "data": {
+                        "key": "ITEM1234",
+                        "version": 9,
+                        "url": LEGITIMATE,
+                        "title": LEGITIMATE,
+                        "tags": [],
+                    },
+                },
             )
         return httpx.Response(204)
 
@@ -208,6 +220,4 @@ def test_the_title_resolver_is_asked_about_the_item_it_is_writing_to() -> None:
 
     _client(handler).add_tags("ITEM1234", [], title_resolver=resolver)
 
-    assert asked == [LEGITIMATE], (
-        f"the resolver was asked about the wrong item's url: {asked}"
-    )
+    assert asked == [LEGITIMATE], f"the resolver was asked about the wrong item's url: {asked}"

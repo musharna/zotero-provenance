@@ -411,9 +411,7 @@ def lookup_url(db_path: Path, url_canonical: str) -> URLCacheRow | None:
     return cast(URLCacheRow, dict(row)) if row else None
 
 
-def insert_url(
-    db_path: Path, url_canonical: str, zotero_key: str, first_seen: date
-) -> None:
+def insert_url(db_path: Path, url_canonical: str, zotero_key: str, first_seen: date) -> None:
     iso = first_seen.isoformat()
     with closing(_connect(db_path)) as conn:
         conn.execute(
@@ -539,9 +537,7 @@ def set_zotero_key(
     return cursor.rowcount == 1
 
 
-def release_url(
-    db_path: Path, url_canonical: str, *, pending_key: str | None = None
-) -> bool:
+def release_url(db_path: Path, url_canonical: str, *, pending_key: str | None = None) -> bool:
     """Drop an unfulfilled reservation so a later run can retry. True if it did.
 
     Only removes a row that never got a key. A completed row belongs to a real
@@ -573,9 +569,7 @@ def drop_row(db_path: Path, url_canonical: str) -> None:
     """
     with closing(_connect(db_path)) as conn:
         conn.execute("DELETE FROM url_index WHERE url_canonical = ?", (url_canonical,))
-        conn.execute(
-            "DELETE FROM pending_tags WHERE url_canonical = ?", (url_canonical,)
-        )
+        conn.execute("DELETE FROM pending_tags WHERE url_canonical = ?", (url_canonical,))
 
 
 def update_last_seen(db_path: Path, url_canonical: str, seen: date) -> None:
@@ -648,9 +642,7 @@ def retry_queue_depth(db_path: Path) -> int:
         return 0
     with closing(_connect(db_path)) as conn:
         try:
-            return int(
-                conn.execute("SELECT COUNT(*) AS n FROM retry_queue").fetchone()["n"]
-            )
+            return int(conn.execute("SELECT COUNT(*) AS n FROM retry_queue").fetchone()["n"])
         except sqlite3.OperationalError:
             # An index predating the table. Not an error: nothing is queued.
             return 0
@@ -683,9 +675,7 @@ def retry_queue_entries(db_path: Path, *, limit: int | None = None) -> list[Retr
 def dequeue_retry(db_path: Path, url_canonical: str) -> bool:
     """Drop an entry. True if it was there, so a caller can tell a no-op apart."""
     with closing(_connect(db_path)) as conn:
-        cursor = conn.execute(
-            "DELETE FROM retry_queue WHERE url_canonical = ?", (url_canonical,)
-        )
+        cursor = conn.execute("DELETE FROM retry_queue WHERE url_canonical = ?", (url_canonical,))
     return cursor.rowcount == 1
 
 
@@ -870,9 +860,7 @@ def rows_needing_hash(
         return [dict(row) for row in conn.execute(sql, params)]
 
 
-def set_verify_outcome(
-    db_path: Path, url_canonical: str, *, outcome: str, at: str
-) -> bool:
+def set_verify_outcome(db_path: Path, url_canonical: str, *, outcome: str, at: str) -> bool:
     """Record THAT this row was re-read, and how it ended.
 
     Deliberately not a hash write. `verify` still never touches `content_hash`
@@ -887,8 +875,7 @@ def set_verify_outcome(
     """
     with closing(_connect(db_path)) as conn:
         cursor = conn.execute(
-            "UPDATE url_index SET verify_outcome = ?, verified_at = ?"
-            " WHERE url_canonical = ?",
+            "UPDATE url_index SET verify_outcome = ?, verified_at = ? WHERE url_canonical = ?",
             (outcome, at, url_canonical),
         )
     return cursor.rowcount == 1
@@ -955,8 +942,7 @@ def unverified_count(db_path: Path) -> int:
     """
     with closing(_connect(db_path)) as conn:
         return conn.execute(
-            "SELECT count(*) FROM url_index"
-            " WHERE content_hash != '' AND verified_at = ''"
+            "SELECT count(*) FROM url_index WHERE content_hash != '' AND verified_at = ''"
         ).fetchone()[0]
 
 

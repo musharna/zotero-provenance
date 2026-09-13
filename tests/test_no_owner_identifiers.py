@@ -6,6 +6,7 @@ private repositories are identity leaks: harmless as credentials, loud on
 first view. The rule is mechanical so a new fixture cannot reintroduce one.
 The only place the handle may appear is the plugin's own repository URL.
 """
+
 from __future__ import annotations
 
 import re
@@ -26,9 +27,24 @@ _LIBRARY_ID = re.compile(r"\b6532713\b")
 
 def _tracked_text_files() -> list[Path]:
     out = subprocess.run(
-        ["git", "ls-files", "-z", "--", "scripts", "tests", "hooks", "commands",
-         "README.md", "SECURITY.md", "CONTRIBUTING.md", "pyproject.toml", ".claude-plugin"],
-        cwd=ROOT, check=True, capture_output=True,
+        [
+            "git",
+            "ls-files",
+            "-z",
+            "--",
+            "scripts",
+            "tests",
+            "hooks",
+            "commands",
+            "README.md",
+            "SECURITY.md",
+            "CONTRIBUTING.md",
+            "pyproject.toml",
+            ".claude-plugin",
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
     ).stdout
     files = [ROOT / p for p in out.decode().split("\0") if p]
     return [f for f in files if f.suffix != ".gz" and f.name != Path(__file__).name]
@@ -57,8 +73,11 @@ def test_no_tailnet_address_is_used_as_a_fixture():
 
 def test_the_owner_handle_appears_only_in_the_plugin_repo_url():
     # Author metadata in the manifests is the handle by design; fixtures are not.
-    shipped = [f for f in _tracked_text_files()
-               if f.relative_to(ROOT).parts[0] in {"scripts", "tests", "hooks", "commands"}]
+    shipped = [
+        f
+        for f in _tracked_text_files()
+        if f.relative_to(ROOT).parts[0] in {"scripts", "tests", "hooks", "commands"}
+    ]
     assert _hits(_HANDLE, files=shipped) == []
 
 
