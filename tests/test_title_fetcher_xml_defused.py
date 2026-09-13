@@ -7,6 +7,7 @@ same test: a plain document still parses, so a broken parser cannot read as "blo
 import pytest
 
 from zotero_capture import title_fetcher
+from defusedxml import DefusedXmlException
 
 BOMB = (
     '<?xml version="1.0"?><!DOCTYPE a [<!ENTITY x "xxxxxxxxxx">'
@@ -16,5 +17,5 @@ BOMB = (
 
 def test_atom_parser_rejects_entities_and_parses_plain():
     assert title_fetcher.ElementTree.fromstring("<a><b>1</b></a>").find("b").text == "1"
-    with pytest.raises(Exception, match=r"(?i)entit"):
+    with pytest.raises(DefusedXmlException, match=r"(?i)entit"):
         title_fetcher.ElementTree.fromstring(BOMB)
