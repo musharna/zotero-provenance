@@ -112,11 +112,15 @@ The weekly property fuzz (issue #14) found three crashes, all reproduced on the
   ValueError, not OSError, on an embedded NUL. It now returns None, and the host
   is excluded as not a real name.
 - **`sketch_of` leaked "invalid literal for int()"** on a value that was not a
-  sha256 digest. No caller can reach this today; it now refuses by name, and does
-  not return None, because a sketch built from non-digests must not exist.
+  sha256 digest, and silently ACCEPTED a 15- or 65-character or uppercase value,
+  because it parsed only the first 16 characters. No caller can reach this today;
+  it now refuses by name, and does not return None, because a sketch built from
+  non-digests must not exist.
 
-Each fix has a test that was run against the unfixed code and failed for the
-stated reason, with a positive control in the same test.
+Every assertion was run against the unfixed code on its own, not only each test
+as a whole: a test stops at its first failure, and the PR review caught that one
+assertion (a NUL in the working directory) had never been seen to fail. It passes
+on the old code too, so it is kept and labelled as a non-regression check.
 
 Also first released here (merged after 0.62.4): arXiv Atom feeds are parsed with
 `defusedxml`, with a test proving entity expansion is rejected (#4); the tree

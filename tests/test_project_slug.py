@@ -57,11 +57,15 @@ def test_empty_cwd_falls_back():
 
 def test_a_path_the_filesystem_cannot_hold_is_not_a_crash(tmp_path):
     """Issue #14: `Path.exists()` re-raises every errno but four, so probing for
-    `.git` under a component longer than NAME_MAX raised ENAMETOOLONG, and a NUL
-    raised ValueError, out of the hook. A path that cannot exist has no `.git`
-    beneath it; the answer is "not a repository here", not an exception."""
+    `.git` under a component longer than NAME_MAX raised ENAMETOOLONG out of the
+    hook. A path that cannot exist has no `.git` beneath it; the answer is "not a
+    repository here", not an exception."""
     too_long = "/" + "a" * 300 + "/project"
     assert derive_slug(too_long, env=HOME_ENV) == "project"
+
+    # Not a regression test: a NUL never raised here (`Path.exists` already
+    # returned False for it on 3.10 and 3.13, checked). Kept so the swap to
+    # `os.path.exists` is held to the same answer.
     assert derive_slug("/srv/a\x00b", env=HOME_ENV) == "a\x00b"
 
     # Positive control: the probe still finds a real repository.

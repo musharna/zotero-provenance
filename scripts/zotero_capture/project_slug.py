@@ -17,8 +17,8 @@ def _git_root(start: Path) -> Path | None:
     """Nearest ancestor containing `.git` (directory for a repo, file for a worktree).
 
     `os.path.exists`, not `Path.exists`: the pathlib one re-raises every errno but
-    four, so a component longer than NAME_MAX (ENAMETOOLONG) or a NUL (ValueError)
-    escaped as an exception. A path the filesystem cannot hold has no `.git`.
+    four, so a component longer than NAME_MAX escaped as ENAMETOOLONG. A path the
+    filesystem cannot hold has no `.git`.
     """
     for candidate in (start, *start.parents):
         if os.path.exists(candidate / ".git"):
