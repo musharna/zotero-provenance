@@ -53,3 +53,18 @@ def test_unrecognised_path_uses_basename():
 def test_empty_cwd_falls_back():
     assert derive_slug("", env=HOME_ENV) == "home"
     assert derive_slug(None, env=HOME_ENV) == "home"
+
+
+def test_a_path_the_filesystem_cannot_hold_is_not_a_crash(tmp_path):
+    """Issue #14: `Path.exists()` re-raises every errno but four, so probing for
+    `.git` under a component longer than NAME_MAX raised ENAMETOOLONG, and a NUL
+    raised ValueError, out of the hook. A path that cannot exist has no `.git`
+    beneath it; the answer is "not a repository here", not an exception."""
+    too_long = "/" + "a" * 300 + "/project"
+    assert derive_slug(too_long, env=HOME_ENV) == "project"
+    assert derive_slug("/srv/a\x00b", env=HOME_ENV) == "a\x00b"
+
+    # Positive control: the probe still finds a real repository.
+    (tmp_path / "repo" / ".git").mkdir(parents=True)
+    (tmp_path / "repo" / "sub").mkdir()
+    assert derive_slug(tmp_path / "repo" / "sub", env=HOME_ENV) == "repo"

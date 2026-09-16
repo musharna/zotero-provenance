@@ -332,6 +332,8 @@ SKETCH_SIZE = 128
 # becoming substantially different, not a sentence changing.
 MIN_STABLE_SIMILARITY = 0.80
 
+_HEX_DIGITS = frozenset("0123456789abcdef")
+
 
 def sketch_of(unit_digests: Iterable[str]) -> str:
     """A bounded, order-free fingerprint of a SET of chunk digests.
@@ -351,8 +353,17 @@ def sketch_of(unit_digests: Iterable[str]) -> str:
     sample the two sets at different points and estimate nothing.
 
     The leading 64 bits are taken because sha256 hex is uniform there.
+
+    Every caller passes `hexdigest()`, so anything else is a caller bug and is
+    refused by name: a sketch built from values that are not digests must not
+    exist, and "invalid literal for int()" does not say which contract broke.
     """
-    values = sorted({int(d[:16], 16) for d in unit_digests})
+    unique: set[int] = set()
+    for d in unit_digests:
+        if len(d) != 64 or not set(d) <= _HEX_DIGITS:
+            raise ValueError(f"sketch_of expects sha256 hex digests, got {d[:80]!r}")
+        unique.add(int(d[:16], 16))
+    values = sorted(unique)
     return ",".join(f"{v:016x}" for v in values[:SKETCH_SIZE])
 
 

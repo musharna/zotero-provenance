@@ -686,7 +686,10 @@ def parse_ip_literal(host: str) -> IPAddress | None:
         pass
     try:
         return ipaddress.IPv4Address(socket.inet_aton(host))
-    except (OSError, ipaddress.AddressValueError):
+    except (OSError, ValueError):
+        # OSError: not an address. ValueError: an embedded NUL, which `inet_aton`
+        # refuses before parsing -- also not an address. AddressValueError is a
+        # ValueError, so it is covered.
         return None
 
 

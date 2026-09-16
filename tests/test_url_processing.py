@@ -515,3 +515,20 @@ def test_obfuscated_private_forms_are_excluded(host: str):
 def test_public_addresses_and_names_survive(url: str):
     """Negative control: the boundary must not swallow the legitimate case."""
     assert not is_excluded(canonicalize(url))
+
+
+def test_a_nul_in_the_host_is_excluded_not_raised():
+    """Issue #14: `inet_aton` raises ValueError, not OSError, on an embedded NUL,
+    so `parse_ip_literal` -- documented as "an IP, else None" -- leaked it, and a
+    synced item whose url held U+0000 aborted a whole prune/retire sweep, which
+    call `is_excluded` on stored urls with no tokenizer in front."""
+    from zotero_capture.url_processing import parse_ip_literal
+
+    assert parse_ip_literal("ho\x00st") is None
+    assert parse_ip_literal("127.0.0.1\x00") is None
+    assert is_excluded("http://ho\x00st.fixturehost.org/") is True
+    assert is_excluded("http://127.0.0.1\x00/") is True
+
+    # Positive controls: a lenient spelling still parses, a real source is kept.
+    assert str(parse_ip_literal("127.1")) == "127.0.0.1"
+    assert not is_excluded("https://fixturehost.org/x")
