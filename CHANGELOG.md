@@ -93,6 +93,17 @@ Read the index for *what changed*; read the entry for *why*.
 
 ---
 
+## Unreleased
+
+**The "mocked" User-Agent test needed the internet.** `build_fetch_client(transport=MockTransport)`
+still resolved `en.wikipedia.org` with the real `socket.getaddrinfo`, because the
+SSRF guard resolves before any transport sees the request. Found by running the
+suite in an empty network namespace (new CI step `Tests with no network`): the
+guard refused the host, `fetch_title` returned the URL, and the test failed with
+"no request was made". `build_fetch_client` now takes the guard's `resolve` seam;
+the UA test injects a public answer, and a new test proves the guard uses the
+injected resolver and still refuses a private one through the same seam.
+
 ## 0.63.0 — 2026-09-16
 
 ### Three inputs the fuzzer found leaked stdlib exceptions instead of an answer
