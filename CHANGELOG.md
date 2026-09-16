@@ -8,6 +8,7 @@ Read the index for *what changed*; read the entry for *why*.
 
 | version | date | headline |
 |---|---|---|
+| 0.63.0 | 2026-09-16 | Three inputs the fuzzer found leaked stdlib exceptions instead of an answer |
 | 0.62.4 | 2026-09-06 | The README is a front door, not a design journal |
 | 0.62.3 | 2026-09-06 | The maintainer's identity was fixture data in a tree about to go public |
 | 0.62.2 | 2026-09-06 | On Python 3.10 the health check could not read a single record |
@@ -91,6 +92,36 @@ Read the index for *what changed*; read the entry for *why*.
 | 0.1.0 | 2026-08-20 | Initial release: capture hook, commands, end-to-end tests, README. |
 
 ---
+
+## 0.63.0 — 2026-09-16
+
+### Three inputs the fuzzer found leaked stdlib exceptions instead of an answer
+
+The weekly property fuzz (issue #14) found three crashes, all reproduced on the
+0.62.4 code before anything was changed.
+
+- **The capture hook could crash on a long working directory.** `derive_slug`
+  probed each ancestor for `.git` with `Path.exists()`, which re-raises every
+  errno but four; a component over NAME_MAX raised ENAMETOOLONG. Worse, the slug
+  was computed *before* `main()`'s `try`, the one guard that exists so a broken
+  plugin cannot block a turn. Both fixed: `os.path.exists` answers the probe,
+  and the slug is derived inside the guard, so any future failure there is a
+  `capture-bootstrap-error` event rather than a traceback.
+- **One stored URL with a NUL aborted a whole prune or retire sweep.**
+  `parse_ip_literal` promises "an IP, else None", but `inet_aton` raises
+  ValueError, not OSError, on an embedded NUL. It now returns None, and the host
+  is excluded as not a real name.
+- **`sketch_of` leaked "invalid literal for int()"** on a value that was not a
+  sha256 digest. No caller can reach this today; it now refuses by name, and does
+  not return None, because a sketch built from non-digests must not exist.
+
+Each fix has a test that was run against the unfixed code and failed for the
+stated reason, with a positive control in the same test.
+
+Also first released here (merged after 0.62.4): arXiv Atom feeds are parsed with
+`defusedxml`, with a test proving entity expansion is rejected (#4); the tree
+was reformatted with `ruff format`; CI gained pre-commit, PR review, nightly
+mutation testing, and the weekly fuzz job that found the above.
 
 ## 0.62.4 — 2026-09-06
 
