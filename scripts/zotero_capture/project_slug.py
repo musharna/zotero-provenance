@@ -14,9 +14,14 @@ FALLBACK_SLUG = "home"
 
 
 def _git_root(start: Path) -> Path | None:
-    """Nearest ancestor containing `.git` (directory for a repo, file for a worktree)."""
+    """Nearest ancestor containing `.git` (directory for a repo, file for a worktree).
+
+    `os.path.exists`, not `Path.exists`: the pathlib one re-raises every errno but
+    four, so a component longer than NAME_MAX escaped as ENAMETOOLONG. A path the
+    filesystem cannot hold has no `.git`.
+    """
     for candidate in (start, *start.parents):
-        if (candidate / ".git").exists():
+        if os.path.exists(candidate / ".git"):
             return candidate
     return None
 

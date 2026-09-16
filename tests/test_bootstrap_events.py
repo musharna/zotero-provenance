@@ -99,3 +99,45 @@ def test_an_unexpected_failure_writes_a_bootstrap_event(tmp_path, monkeypatch) -
     events = [e for e in _events(tmp_path) if e.get("event") == "capture-bootstrap-error"]
     assert events, _events(tmp_path)
     assert "deliberate" in str(events[0].get("detail")), events[0]
+
+
+def test_a_failure_deriving_the_project_is_recorded_not_raised(tmp_path, monkeypatch) -> None:
+    """Issue #14: `derive_slug` ran BEFORE main's try block, so the one guard that
+    exists so "a misconfigured plugin must not block a turn" did not cover it,
+    and an over-long cwd took the hook down with a bare traceback."""
+    import zotero_capture.cli as cli
+
+    monkeypatch.setenv("ZOTERO_CAPTURE_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZOTERO_API_KEY", "k")
+    monkeypatch.setenv("ZOTERO_LIBRARY_ID", "1")
+    monkeypatch.setenv("ZOTERO_WEBSOURCES_COLLECTION_KEY", "C")
+    monkeypatch.setenv("ZOTERO_LIBRARY_TYPE", "user")
+    monkeypatch.delenv("ZOTERO_CAPTURE_DISABLE", raising=False)
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    seen: list[str] = []
+    monkeypatch.setattr(cli, "build_client", lambda config: _Client())
+    monkeypatch.setattr(cli, "run_capture", lambda **kw: seen.append(kw["project"]))
+
+    def _boom(*a, **k):
+        raise OSError(36, "File name too long")
+
+    monkeypatch.setattr(cli, "derive_slug", _boom)
+    rc = main(["--cwd", "/tmp", "--session", "s", "--message", "see https://x.test/a"])
+
+    assert rc == 0, "a failure deriving the slug must not block a turn"
+    events = [e for e in _events(tmp_path) if e.get("event") == "capture-bootstrap-error"]
+    assert events, _events(tmp_path)
+    assert "File name too long" in str(events[0].get("detail")), events[0]
+    assert seen == [], "capture ran without a project"
+
+    # Positive control: with a slug that derives, capture receives it.
+    monkeypatch.setattr(cli, "derive_slug", lambda cwd: "derived")
+    assert main(["--cwd", "/tmp", "--session", "s", "--message", "see https://x.test/a"]) == 0
+    assert seen == ["derived"]

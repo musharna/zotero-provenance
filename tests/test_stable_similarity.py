@@ -134,3 +134,18 @@ def test_an_empty_sketch_yields_no_opinion() -> None:
     """
     assert snap.stable_similarity("", snap.sketch_of(_digests(0, 10))) is None
     assert snap.stable_similarity(snap.sketch_of(_digests(0, 10)), "") is None
+
+
+def test_a_value_that_is_not_a_sha256_digest_is_refused_by_name() -> None:
+    """Issue #14: `int(d[:16], 16)` raised "invalid literal for int()" on anything
+    that was not hex. Every caller passes `hexdigest()`, so a non-digest here is a
+    caller bug, and the refusal must name the contract rather than leak a parse
+    error from inside it. Not None: a sketch built from garbage must not exist."""
+    import pytest
+
+    for bad in ("", "xyz", "0" * 15, "g" * 64, "A" * 64, "0" * 65):
+        with pytest.raises(ValueError, match="sha256 hex digest"):
+            snap.sketch_of([*_digests(0, 3), bad])
+
+    # Positive control: real digests still sketch.
+    assert len(snap.sketch_of(_digests(0, 3)).split(",")) == 3

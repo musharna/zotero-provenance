@@ -409,9 +409,11 @@ def main(argv: list[str] | None = None) -> int:
 
     db_path = Path(args.db_path) if args.db_path else config.db_path
     log_path = Path(args.log_path) if args.log_path else config.log_path
-    project = args.project or derive_slug(args.cwd)
 
     try:
+        # Inside the try: the slug reads the filesystem, and anything that can
+        # raise must reach the handler below rather than take the hook down.
+        project = args.project or derive_slug(args.cwd)
         with build_client(config) as zotero:
             if args.triage:
                 return run_triage(
