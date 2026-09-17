@@ -33,7 +33,7 @@ from zotero_capture.health_ledger import (  # noqa: E402
     count_open,
     open_incidents,
 )
-from zotero_capture_health import _migrate_legacy  # noqa: E402
+from zotero_capture.health_cli import _migrate_legacy  # noqa: E402
 
 PINNED = "/cache/zotero-provenance/zotero-provenance/0.24.0"
 SUPERSEDED = "/cache/zotero-provenance/zotero-provenance/0.16.0"

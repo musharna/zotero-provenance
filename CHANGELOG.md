@@ -8,6 +8,7 @@ Read the index for *what changed*; read the entry for *why*.
 
 | version | date | headline |
 |---|---|---|
+| 0.64.0 | 2026-09-17 | The wheel had no entry points: an installable package nobody could run |
 | 0.63.0 | 2026-09-16 | Three inputs the fuzzer found leaked stdlib exceptions instead of an answer |
 | 0.62.4 | 2026-09-06 | The README is a front door, not a design journal |
 | 0.62.3 | 2026-09-06 | The maintainer's identity was fixture data in a tree about to go public |
@@ -103,6 +104,37 @@ guard refused the host, `fetch_title` returned the URL, and the test failed with
 "no request was made". `build_fetch_client` now takes the guard's `resolve` seam;
 the UA test injects a public answer, and a new test proves the guard uses the
 injected resolver and still refuses a private one through the same seam.
+
+## 0.64.0 — 2026-09-17
+
+### The wheel had no entry points: an installable package nobody could run
+
+`pip install zotero-provenance` (or a `uv build` of this tree) produced a wheel
+with the `zotero_capture` package and nothing on PATH: no console scripts, no
+`__main__`, and the health check lived in `scripts/zotero_capture_health.py`,
+outside the package entirely. The 09-14 audit deferred the PyPI listing on
+exactly this: publishing it would have listed a package with no way to run it.
+
+- **Two console scripts**, `zotero-capture` and `zotero-capture-health`, plus
+  `python -m zotero_capture`. All three reach the same `main()` the hooks reach.
+- **The health check moved into the package** (`zotero_capture.health_cli`).
+  `scripts/zotero_capture_health.py` is now a shim like `zotero_capture_main.py`.
+  The two shims STAY: the hook trampoline re-roots those paths to the pinned
+  plugin root, and `tests/test_command_trampoline.py` pins that behaviour. The
+  package is the unit; the shims are how the pinned root reaches it.
+- Inside the package the health check can no longer assume it sits two levels
+  under a plugin root. `_own_root()` returns None from a wheel install, which
+  `resolve_pinned` already reads as "do not guess", not as a version mismatch.
+- **`release.yml`**: tag-driven, Trusted Publishing (OIDC), tests gate the
+  build, and the built wheel is installed into a clean venv and its three
+  entries executed before anything is uploaded. Publishing needs the PyPI
+  pending publisher and the `pypi` environment created by hand first; until
+  then the job fails at the OIDC exchange rather than uploading another way.
+
+Controls: the metadata test was run against the stale 0.63.0 editable install
+and failed on both names; the `-m` test was run with `__main__.py` moved aside
+and failed; the built wheel was installed into a fresh venv and all three
+entries ran. 1222 existing tests unchanged.
 
 ## 0.63.0 — 2026-09-16
 

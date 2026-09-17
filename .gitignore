@@ -7,3 +7,4 @@ venv/
 secrets.env
 .codex-consult/
 .ruff_cache/
+build/

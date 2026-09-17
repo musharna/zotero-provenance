@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "zotero-provenance"
-version = "0.63.0"
+version = "0.64.0"
 description = "Record the sources a Claude Code session cites into a Zotero collection"
 readme = "README.md"
 license = "MIT"
@@ -36,6 +36,13 @@ dependencies = [
     # arXiv Atom feeds are parsed from the network; stdlib ElementTree expands entities.
     "defusedxml>=0.7",
 ]
+
+[project.scripts]
+# The same two entries the hooks run through their shims under scripts/. An
+# installed wheel (pipx install zotero-provenance) gets them on PATH; the plugin
+# tree needs no install. `python -m zotero_capture` is the third spelling.
+zotero-capture = "zotero_capture.cli:main"
+zotero-capture-health = "zotero_capture.health_cli:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=7", "respx>=0.20"]
