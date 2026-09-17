@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ipaddress
+
 import httpx
 import pytest
 
@@ -412,6 +414,49 @@ def test_live_arxiv_pdf_link_resolves_via_the_api(live_client):
     assert "Attention Is All You Need" in title, title
 
 
+def _public(host: str) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    """A resolver that answers with a public address and never touches DNS."""
+    return [ipaddress.ip_address("93.184.216.34")]
+
+
+def test_build_fetch_client_passes_the_resolver_to_the_guard():
+    """The guard resolves the host BEFORE the request reaches the transport. A test
+    that injects a mock transport but not a resolver still does a live DNS lookup,
+    and offline the guard refuses the host before any request is made -- the
+    User-Agent test below was "mocked" for four weeks and needed the internet.
+    Positive control in the same test: a resolver answering with a private
+    address is still refused, so the seam does not bypass the guard."""
+    from zotero_capture.title_fetcher import UnsafeHostError
+
+    seen: list[str] = []
+
+    def record(req: httpx.Request) -> httpx.Response:
+        seen.append(req.url.host)
+        return httpx.Response(200, text="<title>fine</title>")
+
+    def failing_dns(host: str):
+        raise OSError(f"{host}: simulated offline")
+
+    with build_fetch_client(transport=httpx.MockTransport(record), resolve=failing_dns) as c:
+        with pytest.raises(UnsafeHostError, match="does not resolve"):
+            c.get("https://en.wikipedia.org/wiki/Thismia_americana")
+    assert seen == [], "a host that does not resolve must never reach the transport"
+
+    with build_fetch_client(transport=httpx.MockTransport(record), resolve=_public) as c:
+        assert c.get("https://en.wikipedia.org/wiki/Thismia_americana").status_code == 200
+    # The guard pins the connection to the address IT resolved (DNS-rebinding
+    # defence), so the transport sees that address as the host: the injected
+    # resolver's answer, not a real lookup's.
+    assert seen == ["93.184.216.34"], "the injected resolver was not the one the guard used"
+
+    def private(host: str):
+        return [ipaddress.ip_address("10.0.0.5")]
+
+    with build_fetch_client(transport=httpx.MockTransport(record), resolve=private) as c:
+        with pytest.raises(UnsafeHostError, match="not public"):
+            c.get("https://en.wikipedia.org/wiki/Thismia_americana")
+
+
 def test_fetch_title_sends_contactable_user_agent():
     """Wikimedia 403s any User-Agent without a contact URL — including a browser's.
 
@@ -437,7 +482,7 @@ def test_fetch_title_sends_contactable_user_agent():
             content=b"<html><head><title>Ok</title></head></html>",
         )
 
-    with build_fetch_client(transport=httpx.MockTransport(record)) as client:
+    with build_fetch_client(transport=httpx.MockTransport(record), resolve=_public) as client:
         fetch_title("https://en.wikipedia.org/wiki/Thismia_americana", client=client)
 
     assert seen, "no request was made"

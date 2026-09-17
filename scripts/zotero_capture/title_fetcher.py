@@ -134,6 +134,7 @@ def build_fetch_client(
     *,
     timeout: float = DEFAULT_TIMEOUT_S,
     transport: httpx.BaseTransport | None = None,
+    resolve: Callable[[str], Sequence[IPAddress]] = _resolve,
 ) -> httpx.Client:
     """The only outbound client this package makes: redirects on, addresses
     guarded, and identified.
@@ -160,11 +161,18 @@ def build_fetch_client(
     would have gone on passing while the real one lost its identity. It is
     wrapped in `GuardedTransport` like any other, so the address guard is
     exercised too rather than bypassed.
+
+    `resolve` is the guard's DNS seam, passed through for the same reason. The
+    guard resolves the host BEFORE the request reaches `transport`, with the
+    real `socket.getaddrinfo`; a test that injects a mock transport but not a
+    resolver still performs a live DNS lookup, and with no network the guard
+    refuses the host before any request is made -- which is how the User-Agent
+    test, "mocked" since 2026-08-21, turned out to need the internet.
     """
     return httpx.Client(
         timeout=timeout,
         follow_redirects=True,
-        transport=GuardedTransport(transport),
+        transport=GuardedTransport(transport, resolve=resolve),
         headers={"User-Agent": USER_AGENT},
     )
 
