@@ -57,10 +57,17 @@ def test_console_script_is_declared_and_resolves(name: str) -> None:
 def test_the_pyproject_table_matches_this_test() -> None:
     """Positive control on the mapping above: a renamed target in pyproject
     must fail here rather than let the metadata test compare stale strings."""
-    import tomllib
+    import configparser
 
-    table = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert table["project"]["scripts"] == CONSOLE_SCRIPTS
+    # No tomllib on 3.10 (still supported here). The [project.scripts] table is
+    # flat `name = "module:func"` lines, which configparser reads verbatim.
+    text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    start = text.index("[project.scripts]")
+    end = text.index("\n[", start + 1)
+    cp = configparser.ConfigParser(interpolation=None)
+    cp.read_string(text[start:end])
+    table = {k: v.strip('"') for k, v in cp["project.scripts"].items()}
+    assert table == CONSOLE_SCRIPTS
 
 
 def test_the_hook_shims_are_shims() -> None:
