@@ -38,6 +38,13 @@ python3 -m pip install httpx beautifulsoup4 idna linkify-it-py markdown-it-py
 sudo apt install jq        # macOS: brew install jq coreutils
 ```
 
+The CLIs are also on PyPI for use outside the plugin (the hooks themselves
+install through `/plugin`, not pip):
+
+```
+pipx install zotero-provenance     # -> zotero-capture, zotero-capture-health
+```
+
 Setup asks for a Zotero API key with **write** access
 (<https://www.zotero.org/settings/keys>), verifies it with a live round-trip,
 and stores it at `~/.config/zotero-provenance/secrets.env` (mode `0600`).

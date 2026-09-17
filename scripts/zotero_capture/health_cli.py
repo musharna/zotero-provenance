@@ -1,0 +1,284 @@
+"""Print capture-health warnings, or print nothing at all.
+
+Deliberately does NOT load credentials. Health is a question about the log and
+the plugin registry, and requiring a working config would make the check go
+quiet in some of the cases it exists to report.
+
+Exits 0 no matter what: this runs from a SessionStart hook, and a health check
+that can break a session start is a worse bug than the ones it looks for.
+"""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import os
+import sys
+from datetime import datetime, timedelta
+from pathlib import Path
+
+from zotero_capture.config import _state_dir
+from zotero_capture.health import evaluate, incidents
+from zotero_capture.health_ledger import (
+    acknowledge,
+    acknowledge_all,
+    count_open,
+    mutation_id,
+    open_incident,
+    open_incidents,
+    roots_recorded,
+)
+from zotero_capture.opjournal import unfinished_operations
+from zotero_capture.registry import resolve_pinned
+from zotero_capture.sqlite_cache import retry_queue_depth
+
+ACK_FILE = "health-acknowledged"
+DEFAULT_WINDOW_HOURS = 24.0
+
+
+def _own_root() -> Path | None:
+    """The plugin root this code runs from, or None when installed as a package.
+
+    From the plugin tree the module is <root>/scripts/zotero_capture/health_cli.py;
+    a wheel install has no plugin.json above it, and resolve_pinned treats None as
+    "do not guess", never as a mismatch.
+    """
+    root = Path(__file__).resolve().parents[2]
+    return root if (root / ".claude-plugin" / "plugin.json").is_file() else None
+
+
+def _installed() -> tuple[str | None, datetime | None]:
+    """Where the plugin manager points, and when it last pointed somewhere new.
+
+    Delegated to `registry.resolve_pinned`, which matches the qualified plugin
+    id exactly rather than the first key with the right prefix. None means "do
+    not guess": an unreadable or ambiguous registry must never be reported as a
+    version mismatch. Records that carry their own `pinned_root` no longer
+    depend on this at all — they were already proof.
+    """
+    root, when = resolve_pinned(own_root=_own_root())
+    return (str(root) if root else None), when
+
+
+def _window() -> timedelta:
+    raw = os.environ.get("ZOTERO_CAPTURE_HEALTH_WINDOW_HOURS")
+    try:
+        hours = float(raw) if raw else DEFAULT_WINDOW_HOURS
+    except ValueError:
+        hours = DEFAULT_WINDOW_HOURS
+    return timedelta(hours=max(hours, 0.0))
+
+
+def _acknowledged(state: Path) -> frozenset[str]:
+    try:
+        return frozenset(
+            line.strip() for line in (state / ACK_FILE).read_text().splitlines() if line.strip()
+        )
+    except FileNotFoundError:
+        return frozenset()
+
+
+@contextlib.contextmanager
+def _log_lines(state: Path):
+    """Stream the log. Only a MISSING log is healthy silence.
+
+    Every other OSError used to mean exit 0 and nothing printed, so a permission
+    error, a directory in place of the file, or a failing disk was
+    indistinguishable from a clean bill of health. And this used to call
+    `read().splitlines()`, which held the whole file before parsing began —
+    about 120 MB for half a million lines, defeating the streaming evaluator
+    behind it.
+    """
+    try:
+        handle = (state / "capture.log").open("r", errors="replace")
+    except FileNotFoundError:
+        yield iter(())
+        return
+    try:
+        yield handle
+    finally:
+        handle.close()
+
+
+def _parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="zotero_capture_health",
+        description="Report capture faults. Silent when there is nothing to say.",
+    )
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--list-incidents",
+        action="store_true",
+        help="show open integrity incidents and their ids",
+    )
+    mode.add_argument(
+        "--ack",
+        nargs="+",
+        metavar="ID",
+        help="resolve the named incident(s); see --list-incidents",
+    )
+    mode.add_argument(
+        "--ack-all",
+        action="store_true",
+        help="resolve EVERY open incident, including any not shown",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="how many incidents to list (the remainder is counted, not hidden)",
+    )
+    return parser.parse_args(argv)
+
+
+def _migrate_legacy(state: Path, ledger: Path, pinned: str | None) -> None:
+    """Import incidents proven by pre-0.19 records. Replayed on every start.
+
+    A 0.15-0.18 record with `root != pinned_root` and evidence of a write
+    already proves an integrity incident; only its acknowledgement identity was
+    missing. Rejecting it for having no id silently suppressed every open
+    incident at the moment of upgrade, which is not the same as rejecting a
+    record that cannot prove anything.
+
+    This used to run once, gated by a `health-migrated` marker file. The marker
+    was a second copy of a truth the ledger already holds, and the two could
+    disagree: deleting `health.db` left the marker behind, so the ledger never
+    rebuilt and any legacy incident in the log was invisible for good. On the
+    machine where that was found the marker read `0` against an absent ledger --
+    harmless only because the log genuinely held no legacy incidents, which was
+    measured rather than assumed.
+
+    Replaying is safe, and `open_incident` is where that is guaranteed rather
+    than here: `incident_id` is the PRIMARY KEY, the insert is ON CONFLICT DO
+    NOTHING, and acknowledgement UPDATEs the row instead of deleting it, so a
+    resolved incident stays resolved across any number of replays. Legacy ids
+    are derived from the record, not minted per run, which is what makes the
+    conflict fire. The marker was therefore not protecting the invariant it
+    appeared to protect -- deleting it removes state that could go stale rather
+    than adding a guard to keep it fresh.
+    """
+    try:
+        with _log_lines(state) as lines:
+            found = incidents(lines, pinned_root=pinned, require_id=False)
+        # A record carrying an incident_id journalled its own per-mutation rows
+        # when it ran, and importing it again under a capture-scoped key would
+        # add a second incident for one write (0.21.0 made row ids
+        # per-mutation, so ON CONFLICT no longer absorbs it). Until 0.60.0
+        # that was handled by importing ONLY `legacy:` records -- which meant
+        # that if health.db was lost, every post-0.19 stale write in the log
+        # became unreportable for good. The honest discriminator is whether
+        # the WRITER's journal survived: a root with any ledger row wrote its
+        # own; a root with none is imported from the log, under the same pure
+        # key the capture would have used, so a replay lands on the same row.
+        journalled = roots_recorded(ledger)
+        for item in found:
+            rid = str(item["id"])
+            if rid.startswith("legacy:"):
+                key = rid
+            elif item["root"] in journalled:
+                continue
+            else:
+                key = mutation_id(rid, None)
+            open_incident(
+                ledger,
+                incident_id=key,
+                url=item.get("url"),
+                root=item["root"],
+                pinned_root=pinned,
+                kind=item["kind"],
+                ts=item["ts"],
+            )
+    except OSError:
+        pass
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(sys.argv[1:] if argv is None else argv)
+    state = _state_dir(os.environ)
+    ledger = state / "health.db"
+    pinned, _installed_at = _installed()
+    _migrate_legacy(state, ledger, pinned)
+    stamp = datetime.now().astimezone().isoformat()
+
+    if args.list_incidents:
+        total = count_open(ledger)
+        if not total:
+            print("zotero-provenance: no open integrity incidents")
+            return 0
+        shown = open_incidents(ledger, limit=max(args.limit, 1))
+        for item in shown:
+            print(
+                f"{item['incident_id']}  {item['opened_at']}  "
+                f"{item['kind']:<10} {item['root']}  {item.get('url') or ''}"
+            )
+        if total > len(shown):
+            print(f"... {total - len(shown)} more (use --limit to show them)")
+        return 0
+
+    if args.ack_all:
+        n = acknowledge_all(ledger, now=stamp)
+        print(f"zotero-provenance: resolved {n} incident(s)")
+        return 0
+
+    if args.ack:
+        resolved = acknowledge(ledger, list(args.ack), now=stamp)
+        unknown = [i for i in args.ack if i not in resolved]
+        for i in resolved:
+            print(f"zotero-provenance: resolved {i}")
+        for i in unknown:
+            # An unknown id used to be appended to a file and reported as
+            # success, leaving the real incident open behind a typo.
+            print(f"zotero-provenance: no open incident with id {i}", file=sys.stderr)
+        return 0 if resolved and not unknown else 1
+
+    with _log_lines(state) as lines:
+        warnings = evaluate(
+            lines,
+            pinned_root=pinned,
+            now=datetime.now().astimezone(),
+            window=_window(),
+            ledger_path=ledger,
+        )
+    # A queue nothing drains grows forever, and the surest way to have one is to
+    # build a queue nobody is told about. This is the telling. It is actionable
+    # and it clears itself the moment the drain runs, which is what separates it
+    # from the health-check noise 0.15.0-0.18.0 kept having to suppress: those
+    # spoke about states the operator could not act on.
+    depth = retry_queue_depth(state / "url_index.db")
+    if depth:
+        warnings.append(
+            f"{depth} capture(s) failed and are queued for retry — "
+            f"run `python3 scripts/drain_queue.py --dry-run` to see them"
+        )
+
+    # A run that started and never ended could not run its handlers at all --
+    # SIGKILL, a power cut. A run whose body merely raised writes its end record
+    # with the exception named, so this reports the genuinely unexplained ones
+    # rather than every failure.
+    for op in unfinished_operations(state / "url_index.db"):
+        warnings.append(
+            f"a `{op['command']}` run started {op['started']} never finished "
+            f"({op['steps']} step(s); last touched {op['last_target']}) — "
+            f"see {state / 'url_index.db.operations.jsonl'}"
+        )
+
+    if not warnings:
+        return 0
+
+    print("zotero-provenance: capture faults were recorded")
+    for warning in warnings:
+        print(f"  - {warning}")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except Exception:
+        # A crashed monitor is UNHEALTHY and must not look like a quiet one.
+        import traceback
+
+        traceback.print_exc()
+        raise SystemExit(3) from None

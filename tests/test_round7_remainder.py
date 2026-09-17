@@ -271,7 +271,7 @@ def test_migration_does_not_re_import_a_record_that_journalled_itself(
     import sys
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-    from zotero_capture_health import _migrate_legacy
+    from zotero_capture.health_cli import _migrate_legacy
     from zotero_capture.health_ledger import count_open, mutation_id, open_incident
 
     state = tmp_path / "state"
@@ -310,7 +310,7 @@ def test_migration_still_imports_a_record_that_could_not_journal_itself(
     import sys
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-    from zotero_capture_health import _migrate_legacy
+    from zotero_capture.health_cli import _migrate_legacy
     from zotero_capture.health_ledger import count_open
 
     state = tmp_path / "state"

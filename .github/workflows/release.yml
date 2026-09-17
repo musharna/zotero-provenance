@@ -1,0 +1,82 @@
+name: release
+
+# Tag-driven: push `vX.Y.Z` and this tests, builds, publishes to PyPI via
+# Trusted Publishing (OIDC, no token stored) and cuts a GitHub release.
+#
+#   git tag v0.64.0 && git push origin v0.64.0
+#
+# One-time setup on PyPI: project `zotero-provenance` -> Publishing -> add a
+# GitHub Actions trusted publisher (owner=musharna, repo=zotero-provenance,
+# workflow=release.yml, environment=pypi); for a project that does not exist
+# yet, register it as a PENDING publisher first. Create the `pypi` environment
+# in this repo's Settings -> Environments. Until both exist the publish job
+# fails loud at the OIDC exchange; nothing is uploaded by another route.
+#
+# The plugin itself installs through /plugin, not PyPI. The wheel is for the
+# CLIs (`pipx install zotero-provenance` -> zotero-capture, zotero-capture-health)
+# and for anyone who wants the capture library without the hooks.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test gate (no publish on red)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - name: Tests (network-free suite)
+        run: uv run --extra dev pytest -q -p no:cacheprovider
+
+  build:
+    name: Build distributions
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - name: Tag matches pyproject, plugin.json and __version__
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VER=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          PLUG=$(python3 -c "import json; print(json.load(open('.claude-plugin/plugin.json'))['version'])")
+          INIT=$(python3 -c "import re; print(re.search(r'__version__ = \"([^\"]+)\"', open('scripts/zotero_capture/__init__.py').read()).group(1))")
+          for v in "$VER" "$PLUG" "$INIT"; do
+            if [ "$TAG" != "$v" ]; then echo "::error::tag $TAG != $v (pyproject=$VER plugin.json=$PLUG __init__=$INIT)"; exit 1; fi
+          done
+      - name: Build sdist + wheel
+        run: uv build
+      - name: The wheel has the console scripts it claims
+        run: |
+          uv venv /tmp/w && VIRTUAL_ENV=/tmp/w uv pip install dist/*.whl
+          /tmp/w/bin/zotero-capture --help >/dev/null
+          /tmp/w/bin/zotero-capture-health --help >/dev/null
+          /tmp/w/bin/python -m zotero_capture --help >/dev/null
+      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI (Trusted Publishing)
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+      contents: write
+    steps:
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@7f25271a4aa483500f742f9492b2ab5648d61011 # v1.12.4
+      - name: GitHub release with the artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
