@@ -8,6 +8,7 @@ Read the index for *what changed*; read the entry for *why*.
 
 | version | date | headline |
 |---|---|---|
+| 0.64.1 | 2026-09-17 | Every tag since 0.64.0 died at the OIDC exchange; the release now publishes with the account token |
 | 0.64.0 | 2026-09-17 | The wheel had no entry points: an installable package nobody could run |
 | 0.63.0 | 2026-09-16 | Three inputs the fuzzer found leaked stdlib exceptions instead of an answer |
 | 0.62.4 | 2026-09-06 | The README is a front door, not a design journal |
@@ -94,7 +95,19 @@ Read the index for *what changed*; read the entry for *why*.
 
 ---
 
-## Unreleased
+## 0.64.1 — 2026-09-17
+
+### Every tag since 0.64.0 died at the OIDC exchange; the release now publishes with the account token
+
+**`release.yml` never published anything.** Trusted Publishing needs a publisher
+registered on PyPI's web UI, which was never done, so the v0.64.0 tag (and a
+rerun on 2026-09-17) failed at the token exchange with `invalid-publisher`;
+0.64.0 reached PyPI by hand with `uv publish`. The publish step now uses the
+account API token stored as the `PYPI_API_TOKEN` repo secret, drops the
+`id-token` permission, and passes `skip-existing` so a rerun after a partial
+failure does not fail on the files already uploaded. The v0.64.1 tag is the
+proof: it is the first release this workflow uploads itself. The comment at
+the top of the workflow says how to go back to OIDC once a publisher exists.
 
 **The "mocked" User-Agent test needed the internet.** `build_fetch_client(transport=MockTransport)`
 still resolved `en.wikipedia.org` with the real `socket.getaddrinfo`, because the

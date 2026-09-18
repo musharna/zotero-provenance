@@ -1,16 +1,16 @@
 name: release
 
-# Tag-driven: push `vX.Y.Z` and this tests, builds, publishes to PyPI via
-# Trusted Publishing (OIDC, no token stored) and cuts a GitHub release.
+# Tag-driven: push `vX.Y.Z` and this tests, builds, publishes to PyPI with the
+# account API token stored as the `PYPI_API_TOKEN` repo secret, and cuts a
+# GitHub release.
 #
-#   git tag v0.64.0 && git push origin v0.64.0
+#   git tag v0.64.1 && git push origin v0.64.1
 #
-# One-time setup on PyPI: project `zotero-provenance` -> Publishing -> add a
-# GitHub Actions trusted publisher (owner=musharna, repo=zotero-provenance,
-# workflow=release.yml, environment=pypi); for a project that does not exist
-# yet, register it as a PENDING publisher first. Create the `pypi` environment
-# in this repo's Settings -> Environments. Until both exist the publish job
-# fails loud at the OIDC exchange; nothing is uploaded by another route.
+# Trusted Publishing (OIDC) was the original design; it needs a one-time
+# web-only registration on PyPI that has not been done, so every tag failed
+# at the OIDC exchange with `invalid-publisher`. The token path needs nothing
+# on PyPI's side. To switch back: register the publisher on PyPI, drop the
+# `password:` input below, and restore `id-token: write`.
 #
 # The plugin itself installs through /plugin, not PyPI. The wheel is for the
 # CLIs (`pipx install zotero-provenance` -> zotero-capture, zotero-capture-health)
@@ -63,12 +63,11 @@ jobs:
           path: dist/
 
   publish:
-    name: Publish to PyPI (Trusted Publishing)
+    name: Publish to PyPI (API token)
     needs: build
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
-      id-token: write
       contents: write
     steps:
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
@@ -76,6 +75,9 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true # a rerun after a partial failure must not fail on the files already up
       - name: GitHub release with the artifacts
         env:
           GH_TOKEN: ${{ github.token }}
