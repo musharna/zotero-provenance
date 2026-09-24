@@ -1,0 +1,11 @@
+version: 2
+updates:
+  - package-ecosystem: "github-actions pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      github-actions pip-minor-patch:
+        update-types: ["minor", "patch"]
+
