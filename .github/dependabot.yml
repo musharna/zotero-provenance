@@ -1,11 +1,23 @@
 version: 2
 updates:
-  - package-ecosystem: "github-actions pip"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    # Template-owned (repo-template): pins are bumped there and arrive by resync.
+    exclude-paths:
+      - ".github/workflows/guardrails.yml"
+      - ".github/workflows/nightly-guardrails.yml"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      github-actions-minor-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "pip"
     directory: "/"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
     groups:
-      github-actions pip-minor-patch:
+      pip-minor-patch:
         update-types: ["minor", "patch"]
-
