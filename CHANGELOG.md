@@ -8,6 +8,7 @@ Read the index for *what changed*; read the entry for *why*.
 
 | version | date | headline |
 |---|---|---|
+| 0.65.0 | 2026-10-02 | The hook's own 10 s budget killed every capture of five or more new URLs |
 | 0.64.1 | 2026-09-17 | Every tag since 0.64.0 died at the OIDC exchange; the release now publishes with the account token |
 | 0.64.0 | 2026-09-17 | The wheel had no entry points: an installable package nobody could run |
 | 0.63.0 | 2026-09-16 | Three inputs the fuzzer found leaked stdlib exceptions instead of an answer |
@@ -94,6 +95,38 @@ Read the index for *what changed*; read the entry for *why*.
 | 0.1.0 | 2026-08-20 | Initial release: capture hook, commands, end-to-end tests, README. |
 
 ---
+
+## 0.65.0 — 2026-10-02
+
+### The hook's own 10 s budget killed every capture of five or more new URLs
+
+**The capture ran inside the hook's lifetime, and its work grows with the message.**
+`capture-stop.sh` ran the capture inline under `zp_timeout 10` (`capture-prompt.sh`
+under 15), and each new URL is a title fetch then a Zotero write, about 1.2 s
+apiece. A message citing five or more new URLs ran into the budget: 58 kills from
+2026-09-20 to 10-02, 31 of them after a POST had gone out (recoverable through the
+retry queue; the rest released the URL and lost the citation until it was cited
+again). The first diagnosis (#43) blamed Claude Code cancelling hooks; the 10 s
+was the plugin's own. Every end-to-end test cited one URL against an instant fake
+Zotero, so none could reach the limit.
+
+**The hooks now hand the capture to a detached worker** (`--detach`). Python reads
+the message, double-forks a `setsid` worker with stdin and stdout on /dev/null, and
+the hook returns at once. The worker carries its own deadline (120 s,
+`ZOTERO_CAPTURE_WORKER_DEADLINE_S`) that ends in the same release-or-queue cleanup
+a hook timeout gets. If detaching fails, a `detach-failed` event is recorded (the
+health line reports it) and the capture runs inline under the hook's budget, as
+before. Two review rounds on PR #44 found that the fallback could run in a process
+other than the hook, unbounded and holding the hook's stdout: first on a failed
+second fork, then on a failed /dev/null redirect. Every step that can fail now runs
+in the intermediate child, which can only exit, so only the hook falls back.
+
+Controls: an end-to-end test cites four URLs against a fake Zotero whose POSTs take
+3 s; it fails on 0.64.1 with `hook-terminated` and saves all four here. A second
+drives a real hook into the worker deadline, with a default-deadline positive
+control. Fork-failure tests fork for real and fail one step at a time. Mutants
+(no worker alarm, never detach, each pre-review layout, the hook ignoring the
+intermediate child's exit) were all killed.
 
 ## 0.64.1 — 2026-09-17
 
