@@ -48,8 +48,12 @@ REFUSAL_EVENTS = (
     # and said nothing at all.
     "configuration-error",
     "capture-bootstrap-error",
-    # The hook's own `timeout` fired mid-capture (0.58.0). A fact about us.
+    # The hook's own `timeout` fired mid-capture (0.58.0), or since #43 the
+    # detached worker's deadline. A fact about us.
     "hook-terminated",
+    # The worker could not be forked, so capture ran inline under the hook's
+    # budget again (#43): the kill #43 removed is possible on this host.
+    "detach-failed",
 )
 
 MAX_KINDS_SHOWN = 3

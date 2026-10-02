@@ -55,6 +55,66 @@ def install_termination_handler() -> None:
     signal.signal(signal.SIGTERM, _on_terminate)
 
 
+# A detached worker has no hook `timeout` above it, so it brings its own bound. Ample
+# for the slowest message seen (14.3 s, 2026-09) and still finite: a hung title
+# fetch or API call must end in the same cleanup a hook timeout gets. The
+# environment override exists so the end-to-end test can drive the real hook into it.
+WORKER_DEADLINE_S = 120
+
+
+def _worker_deadline() -> int:
+    raw = os.environ.get("ZOTERO_CAPTURE_WORKER_DEADLINE_S", "")
+    return int(raw) if raw.isdigit() and int(raw) > 0 else WORKER_DEADLINE_S
+
+
+def _on_deadline(_signum: int, _frame: object) -> None:
+    raise HookTerminated(f"terminated by worker deadline {_worker_deadline()}s")
+
+
+def _detach() -> bool:
+    """Fork the capture away from the hook. True in the hook process, False in the worker.
+
+    #43: the hooks ran capture inline under `zp_timeout 10`, and the work is serial
+    per URL (title fetch, then a Zotero write), so a message with five or more new
+    URLs ran into the budget and was killed mid-run: 58 kills in 09-20..10-02, 31
+    of them after a POST had gone out. A bigger budget only moves that edge; the
+    work does not belong inside the hook's lifetime at all.
+
+    Double fork with setsid, so the worker is not in the process group `timeout`
+    signals and is reparented away from the hook. stdin and stdout go to /dev/null:
+    Claude Code reads the hook's stdout to EOF, and a worker holding it open would
+    hold the turn. stderr stays on the hook's capture.log redirect.
+
+    Only the hook process can raise out of here, and only it may fall back to an
+    inline capture: anywhere else that capture would run with no `timeout` watching
+    it (PR #44 review). So every step that can fail (setsid, the /dev/null redirect,
+    the second fork) runs in the intermediate child, which exits 1 on any failure,
+    and the hook raises on that. The worker inherits the redirect and only arms its
+    deadline.
+    """
+    pid = os.fork()
+    if pid:
+        # The intermediate child exits as soon as it has forked.
+        code = os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1])
+        if code != 0:
+            raise OSError(f"the intermediate child exited {code} without forking the worker")
+        return True
+    try:
+        os.setsid()
+        devnull = os.open(os.devnull, os.O_RDWR)
+        os.dup2(devnull, 0)
+        os.dup2(devnull, 1)
+        os.close(devnull)
+        if os.fork():
+            os._exit(0)
+    except BaseException as e:
+        sys.stderr.write(f"zotero-provenance: detach: {type(e).__name__}: {e}\n")
+        os._exit(1)
+    signal.signal(signal.SIGALRM, _on_deadline)
+    signal.alarm(_worker_deadline())
+    return False
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="zotero-capture")
     p.add_argument(
@@ -90,6 +150,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="URL",
         help="add the `triaged` tag to an already-captured URL",
+    )
+    p.add_argument(
+        "--detach",
+        action="store_true",
+        help="hooks only: return at once and run the capture in a detached worker",
     )
     p.add_argument("--db-path", default=None)
     p.add_argument("--log-path", default=None)
@@ -398,6 +463,20 @@ def main(argv: list[str] | None = None) -> int:
     install_termination_handler()
     args = build_parser().parse_args(argv)
 
+    if args.detach and args.triage is None:
+        # Read the message while the hook's stdin still holds it; the worker's
+        # stdin is /dev/null.
+        if args.message_from_stdin or args.message is None:
+            args.message = sys.stdin.read()
+            args.message_from_stdin = False
+        try:
+            if _detach():
+                return 0
+        except OSError as e:
+            # Recorded, then the capture runs inline under the hook's budget as it
+            # did before #43: a lost fork must not also lose the citation.
+            _emit_bootstrap_event("detach-failed", f"{type(e).__name__}: {e}")
+
     try:
         config = load_config()
     except ConfigError as e:
@@ -449,7 +528,8 @@ def main(argv: list[str] | None = None) -> int:
             )
         return 0
     except HookTerminated as e:
-        # The hook's own `timeout`. A BaseException on purpose so the per-URL
+        # The hook's own `timeout`, or a detached worker's deadline (#43),
+        # which ends here the same way. A BaseException on purpose so the per-URL
         # loop cannot swallow it, which means it arrives HERE and nowhere
         # else catches it: left alone it printed a traceback that health
         # counted as an unreadable log, and the next success erased. It is a

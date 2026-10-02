@@ -199,7 +199,10 @@ CONTEXT="$(printf '%s' "$ASSISTANT_TEXT" |
 	grep -oE '\[(SOURCE|AUDIT)-CONTEXT: *[A-Za-z0-9][A-Za-z0-9_-]*\]' |
 	tail -1 | sed -E 's/^\[(SOURCE|AUDIT)-CONTEXT: *//; s/\]$//')"
 
-ARGS=(--cwd "$CWD" --session "$SESSION_ID" --origin assistant --message-from-stdin)
+# --detach (#43): python reads the message, forks a worker that does the network
+# work under its own deadline, and returns. The `zp_timeout 10` below now bounds
+# only the read and the fork; inline, it killed multi-URL captures mid-POST.
+ARGS=(--cwd "$CWD" --session "$SESSION_ID" --origin assistant --message-from-stdin --detach)
 [[ -n "$CONTEXT" ]] && ARGS+=(--context "$CONTEXT")
 
 PY_BIN="$(zp_python)"

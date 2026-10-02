@@ -12,8 +12,10 @@ import json
 import os
 import shutil
 import subprocess
+import sqlite3
 import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import time
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -98,7 +100,15 @@ def fake_zotero():
     server.server_close()
 
 
-def _run_hook(tmp_path: Path, port: int, text: str, cwd: str) -> subprocess.CompletedProcess:
+def _run_hook(
+    tmp_path: Path,
+    port: int,
+    text: str,
+    cwd: str,
+    *,
+    wait: bool = True,
+    extra_env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess:
     transcript = tmp_path / "transcript.jsonl"
     transcript.write_text(
         json.dumps(
@@ -128,7 +138,9 @@ def _run_hook(tmp_path: Path, port: int, text: str, cwd: str) -> subprocess.Comp
     env["ZOTERO_PROVENANCE_INSTALLED_MANIFEST"] = str(
         PLUGIN_ROOT / ".claude-plugin" / "plugin.json"
     )
-    return subprocess.run(
+    env.update(extra_env or {})
+    before = _run_count(tmp_path / "state")
+    proc = subprocess.run(
         ["bash", str(STOP_HOOK)],
         input=json.dumps({"transcript_path": str(transcript), "session_id": "s1", "cwd": cwd}),
         env=env,
@@ -136,6 +148,11 @@ def _run_hook(tmp_path: Path, port: int, text: str, cwd: str) -> subprocess.Comp
         text=True,
         timeout=60,
     )
+    if wait:
+        # The hook detaches its worker (#43); the assertions are about what the
+        # worker did, so wait for its record before reading the fake server.
+        _wait_for_capture_record(tmp_path / "state", already=before)
+    return proc
 
 
 @requires_jq
@@ -275,7 +292,8 @@ def _run_hook_turns(
     }
     if last_message is not None:
         payload["last_assistant_message"] = last_message
-    return subprocess.run(
+    before = _run_count(tmp_path / "state")
+    proc = subprocess.run(
         ["bash", str(STOP_HOOK)],
         input=json.dumps(payload),
         env=env,
@@ -283,6 +301,8 @@ def _run_hook_turns(
         text=True,
         timeout=60,
     )
+    _wait_for_capture_record(tmp_path / "state", already=before)
+    return proc
 
 
 OLD_URL = "https://zp-e2e.fixturehost.org/old-turn"
@@ -353,3 +373,162 @@ def test_a_fence_opened_in_an_earlier_turn_does_not_leak(tmp_path: Path, fake_zo
 
     posted = {r[2][0]["url"] for r in handler.requests if r[0] == "POST"}
     assert posted == {NEW_URL}, "a stale fence must not suppress this turn's citation"
+
+
+class SlowFakeZotero(FakeZotero):
+    """Each item POST takes POST_DELAY_S, so N new URLs cost N * POST_DELAY_S of work.
+
+    `requests` records a POST only once it has been answered; `arrivals` records it
+    when it reaches the server, before the delay.
+    """
+
+    POST_DELAY_S = 3.0
+    arrivals: list[str] = []
+
+    def do_POST(self):
+        type(self).arrivals.append(self.path)
+        time.sleep(self.POST_DELAY_S)
+        super().do_POST()
+
+
+def _capture_records(state: Path) -> list[dict]:
+    log = state / "capture.log"
+    out = []
+    for line in log.read_text().splitlines() if log.exists() else []:
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            continue
+    return out
+
+
+def _run_count(state: Path) -> int:
+    """Run records (completion lines and events) in capture.log."""
+    return len([r for r in _capture_records(state) if "latency_ms" in r or r.get("event")])
+
+
+def _wait_for_capture_record(state: Path, already: int = 0, deadline_s: float = 60.0) -> list[dict]:
+    """capture.log once it holds more than `already` run records (completion or event)."""
+    end = time.monotonic() + deadline_s
+    while time.monotonic() < end:
+        if _run_count(state) > already:
+            return _capture_records(state)
+        time.sleep(0.2)
+    raise AssertionError(f"no new capture record in {state / 'capture.log'} after {deadline_s}s")
+
+
+@requires_jq
+def test_slow_zotero_does_not_cut_a_multi_url_capture_short(tmp_path: Path):
+    """#43: a message whose writes outlast the hook budget must still be captured whole.
+
+    Four new URLs at 3 s per POST is 12 s of work against the Stop hook's 10 s
+    budget. Run inline, `timeout` killed it mid-POST: a hook-terminated event, a
+    queued URL, and the rest never written. Detached, the hook returns before the
+    writes finish and the worker completes them.
+    """
+    SlowFakeZotero.items = {}
+    SlowFakeZotero.requests = []
+    server = HTTPServer(("127.0.0.1", 0), SlowFakeZotero)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        urls = [f"https://zp-e2e.fixturehost.org/slow{i}" for i in range(4)]
+        proc = _run_hook(
+            tmp_path,
+            server.server_address[1],
+            "see " + " and ".join(urls),
+            "/home/someone/my-thesis",
+            wait=False,
+        )
+        assert proc.returncode == 0, proc.stderr
+        # Ordering, not a stopwatch: when the hook has returned, the server cannot
+        # yet have taken all four writes, because each one takes 3 s server-side.
+        posted_at_return = len([r for r in SlowFakeZotero.requests if r[0] == "POST"])
+        assert posted_at_return < 4, "the hook waited for every write: capture is still inline"
+
+        recs = _wait_for_capture_record(tmp_path / "state")
+        events = [r for r in recs if r.get("event")]
+        assert not [e for e in events if e["event"] == "hook-terminated"], events
+        done = [r for r in recs if "latency_ms" in r]
+        assert done and done[-1]["urls_new"] == 4, recs
+
+        posts = [r for r in SlowFakeZotero.requests if r[0] == "POST"]
+        assert sorted(p[2][0]["url"] for p in posts) == sorted(urls)
+        db = sqlite3.connect(tmp_path / "state" / "url_index.db")
+        keyed = db.execute(
+            "select count(*) from url_index"
+            " where coalesce(zotero_key, '') != '' and url_canonical like ?",
+            ("https://zp-e2e.fixturehost.org/slow%",),
+        ).fetchone()[0]
+        queued = db.execute("select count(*) from retry_queue").fetchone()[0]
+        db.close()
+        # The positive and the negative in one assertion: all four indexed, none queued.
+        assert (keyed, queued) == (4, 0)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@requires_jq
+def test_the_worker_deadline_ends_in_the_hook_timeout_cleanup(tmp_path: Path):
+    """A detached worker has no hook `timeout` above it; its own deadline must bound it.
+
+    With the deadline at 4 s the worker is cut off and ends in the same cleanup a
+    hook timeout did: a hook-terminated record, and the URL either released (the
+    POST had not gone out) or queued for drain_queue (it had). Which branch runs
+    depends on how long the worker took to reach its POST, which is host load (1.8
+    to 4.4 s from hook start over six runs at load average 84), so the branch is
+    read from what the server saw rather than assumed: a POST that
+    reached the server must end queued. The POST takes 8 s, past the deadline, and
+    the 4 s deadline sits inside the client's 5 s timeout so the deadline fires
+    first. Positive control in the same test: under the default deadline a 3 s
+    POST completes and nothing new is queued. The server is threaded so the
+    abandoned request does not hold up the control's.
+    """
+
+    class VerySlowFakeZotero(SlowFakeZotero):
+        POST_DELAY_S = 8.0
+
+    VerySlowFakeZotero.items = {}
+    VerySlowFakeZotero.requests = []
+    VerySlowFakeZotero.arrivals = []
+    server = ThreadingHTTPServer(("127.0.0.1", 0), VerySlowFakeZotero)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    port = server.server_address[1]
+    state = tmp_path / "state"
+    try:
+        cut = "https://zp-e2e.fixturehost.org/deadline-cut"
+        _run_hook(
+            tmp_path,
+            port,
+            f"see {cut}",
+            "/home/someone/my-thesis",
+            extra_env={"ZOTERO_CAPTURE_WORKER_DEADLINE_S": "4"},
+        )
+        events = [r for r in _capture_records(state) if r.get("event") == "hook-terminated"]
+        assert events and "worker deadline 4s" in events[-1]["detail"], _capture_records(state)
+        db = sqlite3.connect(state / "url_index.db")
+        queued = [r[0] for r in db.execute("select url_canonical from retry_queue")]
+        indexed = [r[0] for r in db.execute("select url_canonical from url_index")]
+        db.close()
+        if VerySlowFakeZotero.arrivals:
+            assert queued == [cut], (queued, indexed)
+        else:
+            # Cut before the request: released, or queued if the cut landed between
+            # marking the POST issued and its bytes reaching the server.
+            assert (queued, indexed) in (([], []), ([cut], [cut])), (queued, indexed)
+
+        whole = "https://zp-e2e.fixturehost.org/deadline-default"
+        VerySlowFakeZotero.POST_DELAY_S = 3.0
+        _run_hook(tmp_path, port, f"see {whole}", "/home/someone/my-thesis")
+        done = [r for r in _capture_records(state) if "latency_ms" in r]
+        assert done and done[-1]["urls_new"] == 1, _capture_records(state)
+        db = sqlite3.connect(state / "url_index.db")
+        assert db.execute(
+            "select coalesce(zotero_key, '') != '' from url_index where url_canonical = ?",
+            (whole,),
+        ).fetchone() == (1,)
+        assert [r[0] for r in db.execute("select url_canonical from retry_queue")] == queued
+        db.close()
+    finally:
+        server.shutdown()
+        server.server_close()
