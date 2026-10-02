@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import os
-import signal
 from pathlib import Path
 
 import pytest
@@ -126,21 +125,40 @@ def test_a_failed_second_fork_falls_back_in_the_hook_not_the_child(configured, m
     assert len(failed) == 1 and "intermediate child exited 1" in json.dumps(failed[0]), failed
 
 
-def test_the_worker_arms_its_deadline_before_any_other_setup(monkeypatch) -> None:
-    """A worker whose /dev/null setup fails still runs bounded by its deadline."""
+def test_a_failed_devnull_redirect_falls_back_in_the_hook_not_the_worker(
+    configured, monkeypatch
+) -> None:
+    """PR #44 second review: the /dev/null redirect ran in the worker, after the hook
+    had returned. A failure there (EMFILE) fell back to an inline capture in the
+    worker, still holding the hook's stdout, for up to the worker deadline.
 
-    def _no_devnull(*a, **k):
-        raise OSError(24, "Too many open files")
+    Both forks are real; only a child's open of /dev/null fails.
+    """
+    real_open = os.open
+    hook_pid = os.getpid()
 
-    monkeypatch.setattr(cli.os, "fork", lambda: 0)  # in-process: we are the worker
-    monkeypatch.setattr(cli.os, "setsid", lambda: None)
-    monkeypatch.setattr(cli.os, "open", _no_devnull)
-    previous = signal.getsignal(signal.SIGALRM)
+    def _no_devnull_in_a_child(path, *a, **k):
+        if path == os.devnull and os.getpid() != hook_pid:
+            raise OSError(24, "Too many open files")
+        return real_open(path, *a, **k)
+
+    reached: list[int] = []
+
+    def _client(*a, **k):
+        reached.append(os.getpid())
+        raise cli.HookTerminated("terminated by signal 15")
+
+    monkeypatch.setattr(cli.os, "open", _no_devnull_in_a_child)
+    monkeypatch.setattr(cli, "build_client", _client)
     try:
-        with pytest.raises(OSError, match="Too many open files"):
-            cli._detach()
-        assert signal.getsignal(signal.SIGALRM) is cli._on_deadline
-        assert signal.alarm(0) > 0, "the worker deadline was not armed"
+        rc = main(
+            ["--cwd", "/tmp", "--session", "s", "--detach", "--message", "see https://x.test/a"]
+        )
     finally:
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, previous)
+        if os.getpid() != hook_pid:
+            os._exit(0)
+
+    assert rc == 0
+    assert reached == [hook_pid], reached
+    failed = [e for e in _events(configured) if e["event"] == "detach-failed"]
+    assert len(failed) == 1 and "intermediate child exited 1" in json.dumps(failed[0]), failed

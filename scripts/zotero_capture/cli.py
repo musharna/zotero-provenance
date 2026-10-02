@@ -85,11 +85,12 @@ def _detach() -> bool:
     Claude Code reads the hook's stdout to EOF, and a worker holding it open would
     hold the turn. stderr stays on the hook's capture.log redirect.
 
-    The intermediate child must never return from here. It is not the hook: had it
-    fallen back to an inline capture, that capture would run with no deadline and no
-    `timeout` watching it, holding the hook's stdout while the hook waited on it
-    (PR #44 review). It exits 1 instead, and the hook raises on that. The worker can
-    still raise, but only with its deadline already armed.
+    Only the hook process can raise out of here, and only it may fall back to an
+    inline capture: anywhere else that capture would run with no `timeout` watching
+    it (PR #44 review). So every step that can fail (setsid, the /dev/null redirect,
+    the second fork) runs in the intermediate child, which exits 1 on any failure,
+    and the hook raises on that. The worker inherits the redirect and only arms its
+    deadline.
     """
     pid = os.fork()
     if pid:
@@ -100,18 +101,17 @@ def _detach() -> bool:
         return True
     try:
         os.setsid()
+        devnull = os.open(os.devnull, os.O_RDWR)
+        os.dup2(devnull, 0)
+        os.dup2(devnull, 1)
+        os.close(devnull)
         if os.fork():
             os._exit(0)
     except BaseException as e:
         sys.stderr.write(f"zotero-provenance: detach: {type(e).__name__}: {e}\n")
         os._exit(1)
-    # The worker bounds itself first, so nothing after this can run unbounded.
     signal.signal(signal.SIGALRM, _on_deadline)
     signal.alarm(_worker_deadline())
-    devnull = os.open(os.devnull, os.O_RDWR)
-    os.dup2(devnull, 0)
-    os.dup2(devnull, 1)
-    os.close(devnull)
     return False
 
 
