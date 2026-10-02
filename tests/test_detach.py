@@ -8,6 +8,8 @@ breaking the host: the fork failing.
 from __future__ import annotations
 
 import json
+import os
+import signal
 from pathlib import Path
 
 import pytest
@@ -81,3 +83,64 @@ def test_without_detach_main_never_forks(configured, monkeypatch) -> None:
 
     assert main(["--cwd", "/tmp", "--session", "s", "--message", "see https://x.test/a"]) == 0
     assert "hook-terminated" in [e["event"] for e in _events(configured)]
+
+
+def test_a_failed_second_fork_falls_back_in_the_hook_not_the_child(configured, monkeypatch) -> None:
+    """PR #44 review: the second fork fails inside the intermediate child.
+
+    That child is not the hook. Falling back to an inline capture there ran it with
+    no deadline and no `timeout` above it, while the hook sat in waitpid on it. The
+    first fork here is real, so the child really is a separate process.
+    """
+    real_fork = os.fork
+    hook_pid = os.getpid()
+    forks: list[int] = []
+
+    def _second_fails() -> int:
+        forks.append(os.getpid())
+        if len(forks) == 1:
+            return real_fork()
+        raise OSError(11, "Resource temporarily unavailable")
+
+    reached: list[int] = []
+
+    def _client(*a, **k):
+        reached.append(os.getpid())
+        raise cli.HookTerminated("terminated by signal 15")
+
+    monkeypatch.setattr(cli.os, "fork", _second_fails)
+    monkeypatch.setattr(cli, "build_client", _client)
+    try:
+        rc = main(
+            ["--cwd", "/tmp", "--session", "s", "--detach", "--message", "see https://x.test/a"]
+        )
+    finally:
+        if os.getpid() != hook_pid:
+            # A child that returned into main() must not run on into pytest.
+            os._exit(0)
+
+    assert rc == 0
+    # The capture ran in the hook process, under the hook's own budget.
+    assert reached == [hook_pid], reached
+    failed = [e for e in _events(configured) if e["event"] == "detach-failed"]
+    assert len(failed) == 1 and "intermediate child exited 1" in json.dumps(failed[0]), failed
+
+
+def test_the_worker_arms_its_deadline_before_any_other_setup(monkeypatch) -> None:
+    """A worker whose /dev/null setup fails still runs bounded by its deadline."""
+
+    def _no_devnull(*a, **k):
+        raise OSError(24, "Too many open files")
+
+    monkeypatch.setattr(cli.os, "fork", lambda: 0)  # in-process: we are the worker
+    monkeypatch.setattr(cli.os, "setsid", lambda: None)
+    monkeypatch.setattr(cli.os, "open", _no_devnull)
+    previous = signal.getsignal(signal.SIGALRM)
+    try:
+        with pytest.raises(OSError, match="Too many open files"):
+            cli._detach()
+        assert signal.getsignal(signal.SIGALRM) is cli._on_deadline
+        assert signal.alarm(0) > 0, "the worker deadline was not armed"
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
