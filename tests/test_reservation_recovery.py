@@ -208,3 +208,130 @@ def test_a_generated_key_is_a_legal_zotero_key(bad):
     assert not ZOTERO_KEY_RE.fullmatch(bad)
     for _ in range(50):
         assert ZOTERO_KEY_RE.fullmatch(new_zotero_key())
+
+
+# --- the claim clock: a claim is stamped when it is taken, not when the run began ---
+
+
+URL_FIRST = "https://fixturehost.org/slow-title"
+URL_SECOND = "https://fixturehost.org/claimed-late"
+
+
+class _FakeClock:
+    """Wall time that only moves when the test says so."""
+
+    def __init__(self, start: datetime):
+        self.t = start
+
+    def advance(self, seconds: float) -> None:
+        self.t += timedelta(seconds=seconds)
+
+    def datetime_class(self):
+        clock = self
+
+        class _ClockedDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return clock.t if tz is not None else clock.t.replace(tzinfo=None)
+
+        return _ClockedDatetime
+
+
+class _UrlRecordingZotero(FakeZotero):
+    """One Zotero shared by two sessions, remembering which URL each POST was for."""
+
+    def __init__(self):
+        super().__init__()
+        self.posts_by_url: list[tuple[str, str]] = []
+
+    def post_webpage_item(self, *, url_canonical, title, access_date, tags, item_key):
+        self.posts_by_url.append((url_canonical, item_key))
+        return super().post_webpage_item(
+            url_canonical=url_canonical,
+            title=title,
+            access_date=access_date,
+            tags=tags,
+            item_key=item_key,
+        )
+
+
+def test_a_late_claim_is_not_judged_stale_by_a_concurrent_session(tmp_path, monkeypatch):
+    """The detached worker runs URLs one after another for up to its deadline.
+
+    Taking `now` once per message stamped every claim with the run's START, so a
+    URL reserved 70 s into the run was born 70 s old. A second session citing it
+    at that moment saw a stale claim, asked Zotero for a key that had not been
+    POSTed yet, released the claim, and POSTed its own item: one URL, two items,
+    and the first session's key lost to dedup. Driven through the production
+    path, which passes no `now`.
+    """
+    import zotero_capture.capture as capture_mod
+
+    clock = _FakeClock(_now())
+    monkeypatch.setattr(capture_mod, "datetime", clock.datetime_class())
+
+    db = tmp_path / "i.db"
+    init_db(db)
+    zotero = _UrlRecordingZotero()
+    seen: dict[str, object] = {}
+
+    def concurrent_session_cites_second_url() -> None:
+        row = lookup_url(db, URL_SECOND)
+        seen["claimed_at"] = row["claimed_at"] if row else None
+        seen["clock_at_reservation"] = clock.t
+        capture_message(
+            message=f"Also {URL_SECOND}",
+            project_slug="other",
+            context="c",
+            today=TODAY,
+            db_path=db,
+            zotero=zotero,
+            title_fetcher=lambda _u: "T-other",
+        )
+        seen["row_after_concurrent"] = lookup_url(db, URL_SECOND)
+
+    def title_fetcher(url: str) -> str:
+        if url == URL_FIRST:
+            clock.advance(70)  # a slow title fetch, well inside the 120 s deadline
+        elif url == URL_SECOND and "claimed_at" not in seen:
+            concurrent_session_cites_second_url()
+        return "T"
+
+    result = capture_message(
+        message=f"See {URL_FIRST} and {URL_SECOND}",
+        project_slug="p",
+        context="c",
+        today=TODAY,
+        db_path=db,
+        zotero=zotero,
+        title_fetcher=title_fetcher,
+    )
+
+    claimed_at = datetime.fromisoformat(seen["claimed_at"])
+    assert claimed_at >= seen["clock_at_reservation"], (
+        f"URL2 was claimed at {seen['clock_at_reservation']} but stamped "
+        f"{claimed_at}: the claim was born "
+        f"{(seen['clock_at_reservation'] - claimed_at).total_seconds():.0f} s old"
+    )
+    assert zotero.existence_checks == [], (
+        f"a claim taken moments ago was questioned as stale: {zotero.existence_checks}"
+    )
+    second_posts = [k for u, k in zotero.posts_by_url if u == URL_SECOND]
+    assert len(second_posts) == 1, f"URL2 was POSTed {len(second_posts)} times: {second_posts}"
+    assert [e.code for e in result.errors] == [], result.errors
+    # Positive control: the first session completed both URLs with its own keys.
+    assert result.urls_new == 2
+    assert lookup_url(db, URL_SECOND)["zotero_key"] == second_posts[0]
+    assert seen["row_after_concurrent"]["zotero_key"] == ""  # still A's, unfinished
+
+
+def test_a_live_claim_outlasts_the_workers_own_deadline():
+    """STALE_CLAIM_S must exceed the longest a live worker can hold a claim.
+
+    The comment once bounded it by the hook's 10 s timeout. Capture moved into a
+    detached worker bounded by WORKER_DEADLINE_S, and the 60 s window fell inside
+    it, so a claim could be judged abandoned while its owner was still running.
+    """
+    from zotero_capture.cli import WORKER_DEADLINE_S
+
+    assert STALE_CLAIM_S > WORKER_DEADLINE_S, (STALE_CLAIM_S, WORKER_DEADLINE_S)
