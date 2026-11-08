@@ -48,9 +48,11 @@ DEFAULT_CONTEXT = "general"
 MAX_REENRICH_PER_RUN = 3
 
 # How long a reservation must sit untouched before another run may question it.
-# Comfortably beyond the hook's own 10s timeout, so a POST that is merely slow is
-# never mistaken for one that was abandoned.
-STALE_CLAIM_S = 60.0
+# Capture runs in a detached worker that can live for cli.WORKER_DEADLINE_S
+# (120 s), so this must exceed that with a margin, or a POST that is merely slow
+# is mistaken for one that was abandoned. test_reservation_recovery holds the
+# invariant; the old bound, the hook's 10 s timeout, went away with the worker.
+STALE_CLAIM_S = 180.0
 
 
 @dataclass
@@ -144,7 +146,7 @@ def _resolve_claim(
     released so this run can retry.
 
     A claim younger than STALE_CLAIM_S is left strictly alone. That is another
-    session's POST still in flight, well inside the hook's own 10s budget, and
+    session's POST still in flight, inside the worker's own deadline, and
     questioning it is how two items get created for one URL.
     """
     claimed_at = row.get("claimed_at") or ""
@@ -296,7 +298,17 @@ def capture_message(
         except IndexIdentityMismatch as e:
             logger.error("%s", e)
             return _refuse(result, INDEX_IDENTITY_MISMATCH, str(e))
-    now = now or datetime.now(timezone.utc)
+    # Claims read the clock when they are taken and when they are judged, not
+    # once per message: URLs run one after another for up to the worker's
+    # deadline, and a claim stamped with the run's start was born that many
+    # seconds old -- stale to a concurrent session while its POST was still
+    # ahead of it. A caller-supplied `now` freezes the clock (tests, replays).
+    frozen_now = now
+
+    def clock() -> datetime:
+        return frozen_now or datetime.now(timezone.utc)
+
+    now = clock()
     if _is_generated_report(message, origin):
         return result
     raw_urls = extract_urls(message)
@@ -376,11 +388,11 @@ def capture_message(
             existing = lookup_url(db_path, url)
             if existing is not None and not existing["zotero_key"]:
                 existing = _resolve_claim(
-                    existing, url=url, db_path=db_path, zotero=zotero, now=now
+                    existing, url=url, db_path=db_path, zotero=zotero, now=clock()
                 )
             if existing is None:
                 pending_key = new_zotero_key()
-                if reserve_url(db_path, url, today, pending_key=pending_key, now=now):
+                if reserve_url(db_path, url, today, pending_key=pending_key, now=clock()):
                     # Claimed before the network call, so a second session cannot
                     # also decide this URL is new while the POST is in flight and
                     # create a duplicate item that dedup could never see again.
