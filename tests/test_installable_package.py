@@ -59,8 +59,8 @@ def test_the_pyproject_table_matches_this_test() -> None:
     must fail here rather than let the metadata test compare stale strings."""
     import configparser
 
-    # No tomllib on 3.10 (still supported here). The [project.scripts] table is
-    # flat `name = "module:func"` lines, which configparser reads verbatim.
+    # The [project.scripts] table is flat `name = "module:func"` lines, which
+    # configparser reads verbatim.
     text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     start = text.index("[project.scripts]")
     end = text.index("\n[", start + 1)

@@ -31,7 +31,7 @@ Inside Claude Code:
 /zotero-setup
 ```
 
-The hooks need `python3` 3.10+, five packages on that interpreter, and `jq`:
+The hooks need `python3` 3.11.5+, five packages on that interpreter, and `jq`:
 
 ```
 python3 -m pip install httpx beautifulsoup4 idna linkify-it-py markdown-it-py

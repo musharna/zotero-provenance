@@ -31,8 +31,7 @@ def _top_level_imports(path: Path) -> set[str]:
 
 
 def test_every_third_party_import_is_a_declared_dependency() -> None:
-    # No tomllib: it arrived in 3.11 and the manifest promises 3.10. CI's
-    # 3.10 jobs were the first thing to catch that, in this very test.
+    # The block is a flat list of quoted requirements, which a regex reads.
     block = re.search(
         r"^dependencies = \[(.*?)^\]", (ROOT / "pyproject.toml").read_text(), re.S | re.M
     )
