@@ -8,6 +8,7 @@ Read the index for *what changed*; read the entry for *why*.
 
 | version | date | headline |
 |---|---|---|
+| 0.66.0 | 2026-11-15 | The lock kept a soupsieve with four advisories for Pythons this project still claimed; the floor is now 3.11.5 |
 | 0.65.0 | 2026-10-02 | The hook's own 10 s budget killed every capture of five or more new URLs |
 | 0.64.1 | 2026-09-17 | Every tag since 0.64.0 died at the OIDC exchange; the release now publishes with the account token |
 | 0.64.0 | 2026-09-17 | The wheel had no entry points: an installable package nobody could run |
@@ -95,6 +96,39 @@ Read the index for *what changed*; read the entry for *why*.
 | 0.1.0 | 2026-08-20 | Initial release: capture hook, commands, end-to-end tests, README. |
 
 ---
+
+## 0.66.0 — 2026-11-15
+
+### The lock kept a soupsieve with four advisories for Pythons this project still claimed; the floor is now 3.11.5
+
+**Compatibility: Python 3.10 and 3.11.0 to 3.11.4 are no longer supported.**
+`uv.lock` held `soupsieve` 2.9.2, with four known advisories (two high), and
+Dependabot's fix had failed since 2026-11-13: every fixed release declares
+`Requires-Python >=3.11.5`, so a `>=3.10` floor forced the old one into the lock.
+A trial floor of `>=3.11` was refuted: the lock forked on
+`python_full_version < '3.11.5'` and kept 2.10, still inside three of the four
+advisory ranges. `requires-python` is now `>=3.11.5` and the lock holds only
+4.1.1. `bash scripts/lock_audit.sh` exits 1 (4 vulnerabilities) on the old lock
+and 0 on the new; all four alerts closed on merge. `uv sync --python 3.11.5`
+installs; `--python 3.11.4` is refused. The advisories are in CSS-selector code,
+which this repo never calls. The README's hook requirement, CI's matrix (3.11,
+3.13) and ruff's target state the same floor, and `tests/test_python_floor.py`
+holds the four together (six hand mutants killed). The hooks run on the user's
+own `python3` and do not check its version; on an older one they run as before,
+untested. Debian 12's system 3.11.2 is below the floor; 0.65.0 is the last
+release for it.
+
+**A late URL's claim was born stale, and a concurrent session posted a duplicate.**
+Since 0.65.0 the worker runs URLs one after another for up to 120 s, but
+`capture_message` read the clock once per message, and `STALE_CLAIM_S` was 60 s,
+still sized to the hook's 10 s. A URL reserved 70 s in looked abandoned to a second
+session, which released it and POSTed its own item: two items and a `claim_lost`.
+Claims now read the clock when taken and when judged, and `STALE_CLAIM_S` is 180 s.
+Controls: a test advancing a fake clock during the first title fetch (five defect
+assertions each seen failing on 0.65.0, two positive controls holding on both), a
+test holding `STALE_CLAIM_S > WORKER_DEADLINE_S`, and a two-process real-clock run:
+2 items for the URL on the old code at 70 s, 1 on the new at 70 s and at 190 s, the
+190 s run separating the clock fix from the constant.
 
 ## 0.65.0 — 2026-10-02
 
